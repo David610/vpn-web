@@ -6,6 +6,7 @@
 /out/
 /.wrangler/
 .env.local
+.dev.vars
 *.tsbuildinfo
 next-env.d.ts
 .DS_Store

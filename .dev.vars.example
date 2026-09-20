@@ -1,0 +1,13 @@
+# Copy to .dev.vars for local `wrangler pages dev` runs (gitignored — never
+# commit real values). Task 1 (the webhook handler) never makes a real
+# network call to Stripe, so STRIPE_API_KEY here can be any syntactically
+# plausible placeholder for local testing. STRIPE_SIGNING_SECRET, however,
+# MUST match whatever secret your local test script signs synthetic events
+# with (see Task 1 Step 8) — they are the same shared secret on both sides
+# of a real integration, just simulated locally here.
+SUPABASE_URL=http://127.0.0.1:54321
+SUPABASE_SERVICE_ROLE_KEY=<paste the SERVICE_ROLE_KEY your local `npx supabase start` prints>
+STRIPE_API_KEY=sk_test_placeholder_not_a_real_key
+STRIPE_SIGNING_SECRET=whsec_test_local_secret_for_synthetic_events_only
+STRIPE_PRICE_ID=price_placeholder_not_real
+SITE_URL=http://127.0.0.1:8788
