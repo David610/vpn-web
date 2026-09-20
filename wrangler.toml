@@ -1,0 +1,8 @@
+# Cloudflare Pages configuration — no Workers-only settings here.
+name = "arcana-web"
+pages_build_output_dir = "out"
+compatibility_date = "2026-09-20"
+# Both @supabase/supabase-js and stripe assume some Node built-ins
+# (e.g. Buffer, process.env-shaped access patterns internally) that the
+# Workers runtime only provides under this flag.
+compatibility_flags = ["nodejs_compat"]
