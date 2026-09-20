@@ -24,7 +24,12 @@ export default function LoginPage() {
     });
     setSubmitting(false);
     if (signInError) {
-      setError(signInError.message);
+      // Do not render signInError.message verbatim — under this repo's
+      // config it distinguishes "Email not confirmed" from "Invalid login
+      // credentials," which is a user-enumeration oracle. Log it for our
+      // own debugging only.
+      console.error("signIn failed:", signInError.message);
+      setError("Invalid email or password.");
       return;
     }
     router.replace("/dashboard/");
