@@ -18,12 +18,25 @@ const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
 // auth/callback/page.tsx exchanges via exchangeCodeForSession(code). The
 // SDK's default 'implicit' flow instead redirects with tokens in the URL
 // hash fragment, which that page never reads.
+//
+// detectSessionInUrl: false is required alongside flowType: 'pkce'. The
+// SDK's own _initialize() runs automatically at client construction time,
+// before React ever hydrates the callback page, and by default
+// (detectSessionInUrl: true) it races auth/callback/page.tsx's explicit
+// exchangeCodeForSession(code) call for the same one-time-use PKCE code
+// verifier stored in localStorage. Whichever of the two consumes the
+// verifier first wins; the loser gets a "both auth code and code verifier
+// should be non-empty" (or similar) error even on a legitimate,
+// first-use confirmation link. Disabling detectSessionInUrl removes the
+// SDK's automatic consumer entirely, so the callback page's manual
+// exchange is the only code path that ever touches the verifier.
 export const supabase = createClient(
   supabaseUrl || "https://placeholder.supabase.co",
   supabaseAnonKey || "placeholder-anon-key",
   {
     auth: {
       flowType: "pkce",
+      detectSessionInUrl: false,
     },
   }
 );

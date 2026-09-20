@@ -2,11 +2,13 @@
 
 import { useState, type FormEvent } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import Nav from "@/components/Nav";
 import Footer from "@/components/Footer";
 import { supabase } from "@/lib/supabase";
 
 export default function SignupPage() {
+  const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -21,7 +23,7 @@ export default function SignupPage() {
       return;
     }
     setSubmitting(true);
-    const { error: signUpError } = await supabase.auth.signUp({
+    const { data, error: signUpError } = await supabase.auth.signUp({
       email,
       password,
       options: {
@@ -33,7 +35,21 @@ export default function SignupPage() {
     });
     setSubmitting(false);
     if (signUpError) {
-      setError(signUpError.message);
+      // Do not render signUpError.message verbatim — under this repo's
+      // config it distinguishes "User already registered" from a new-email
+      // success, which is a user-enumeration oracle. Log it for our own
+      // debugging only.
+      console.error("signUp failed:", signUpError.message);
+      setError(
+        "Something went wrong creating your account. If you already have an account with this email, try logging in instead."
+      );
+      return;
+    }
+    if (data.session) {
+      // Confirmation is off (or already satisfied) and signUp() returned a
+      // live session directly — go straight to the dashboard instead of
+      // telling an already-logged-in user to check their email.
+      router.replace("/dashboard/");
       return;
     }
     setSubmitted(true);
