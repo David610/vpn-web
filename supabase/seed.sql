@@ -1,3 +1,10 @@
+-- WARNING: creates real (synthetic-data) confirmed user accounts with known
+-- test passwords. `supabase db reset` only ever applies this to the LOCAL
+-- dev database — never run it against a linked/production project
+-- (`supabase db reset --linked` or equivalent). No real credentials appear
+-- anywhere in this file, but a confirmed, loginable account on a real
+-- project is a real account regardless of how the password was chosen.
+
 -- Two synthetic users with one row in every table, so the RLS test script
 -- has real cross-user data to prove isolation against (not empty tables).
 -- No real credentials, no real Stripe/VPN identifiers anywhere here.
@@ -20,10 +27,12 @@ values
   (1, '11111111-1111-1111-1111-111111111111', 'vpn_user_test_a', 'node-1'),
   (2, '22222222-2222-2222-2222-222222222222', 'vpn_user_test_b', 'node-1');
 
+select setval('public.vpn_accounts_id_seq', (select max(id) from public.vpn_accounts));
+
 insert into public.vpn_secrets (vpn_account_id, ciphertext, nonce)
 values
-  (1, '\xdeadbeef', '\x000000000000000000000001'),
-  (2, '\xfeedface', '\x000000000000000000000002');
+  (1, '\xdeadbeef', '\x0102030405060708090a0b0c'),
+  (2, '\xfeedface', '\x0102030405060708090a0b0d');
 
 insert into public.provisioning_jobs (idempotency_key, vpn_account_id, node_id, job_type, status)
 values
