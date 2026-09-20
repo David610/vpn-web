@@ -1,2 +1,11 @@
 # Local agent worktrees — never part of repo history
 /.worktrees/
+
+/node_modules
+/.next/
+/out/
+/.wrangler/
+.env.local
+*.tsbuildinfo
+next-env.d.ts
+.DS_Store
