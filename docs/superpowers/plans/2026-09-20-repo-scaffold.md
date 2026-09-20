@@ -210,7 +210,12 @@ export default eslintConfig;
 
 - [ ] **Step 8: Write `.gitignore`**
 
+A `.gitignore` with just `/.worktrees/` already exists in this repo (isolated-workspace tooling) — keep that line and add the rest:
+
 ```
+# Local agent worktrees — never part of repo history
+/.worktrees/
+
 /node_modules
 /.next/
 /out/
