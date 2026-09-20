@@ -1,6 +1,13 @@
 import Link from "next/link";
 import Nav from "@/components/Nav";
 import Footer from "@/components/Footer";
+import { SITE_URL } from "@/lib/site-config";
+
+export const metadata = {
+  description:
+    "A fast, private VPN with one plan and no upsells. Sign up, pay, connect.",
+  alternates: { canonical: `${SITE_URL}/` },
+};
 
 export default function Home() {
   return (

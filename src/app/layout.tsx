@@ -4,13 +4,13 @@ import { SITE_URL, SITE_NAME, IS_PRODUCTION } from "@/lib/site-config";
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
-  title: `${SITE_NAME} — A VPN without the noise`,
-  description:
-    "A fast, private VPN with one plan and no upsells. Sign up, pay, connect.",
+  title: {
+    default: `${SITE_NAME} — A VPN without the noise`,
+    template: `%s — ${SITE_NAME}`,
+  },
   robots: IS_PRODUCTION
     ? { index: true, follow: true }
     : { index: false, follow: false },
-  alternates: { canonical: `${SITE_URL}/` },
 };
 
 export default function RootLayout({

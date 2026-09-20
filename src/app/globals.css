@@ -491,6 +491,12 @@ body {
   transition: color var(--t-base);
 }
 .dm-footer__link:hover { color: var(--fg); }
+.text-tiny {
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
+  letter-spacing: var(--track-xs);
+  color: var(--fg-3);
+}
 
 /* Accessibility preference fallbacks */
 @media (prefers-reduced-transparency: reduce) {
