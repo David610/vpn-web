@@ -39,20 +39,37 @@ export async function handleCheckoutSessionCompleted(supabaseAdmin, session) {
     );
   }
 
-  const { error } = await supabaseAdmin.from("subscriptions").upsert(
-    {
-      user_id: userId,
-      stripe_customer_id: session.customer,
-      stripe_subscription_id: session.subscription,
-      // "incomplete" until invoice.paid confirms payment and flips this to
-      // "active" — never "active" here, and no provisioning_jobs write in
-      // this function at all (see file header).
-      status: "incomplete",
-    },
-    { onConflict: "stripe_subscription_id" }
-  );
-  if (error) {
-    throw new Error(`subscriptions upsert failed: ${error.message}`);
+  // Only the FIRST delivery for a given subscription id sets status. Once
+  // the row exists, invoice.paid / customer.subscription.updated are the
+  // sole authoritative writers of status — a redelivered or manually
+  // resent checkout.session.completed must never regress an already-
+  // advanced subscription (e.g. "active") back to "incomplete".
+  const { error: insertError } = await supabaseAdmin.from("subscriptions").insert({
+    user_id: userId,
+    stripe_customer_id: session.customer,
+    stripe_subscription_id: session.subscription,
+    // "incomplete" until invoice.paid confirms payment and flips this to
+    // "active" — never "active" here, and no provisioning_jobs write in
+    // this function at all (see file header).
+    status: "incomplete",
+  });
+
+  if (insertError && insertError.code === "23505") {
+    const { error: updateError } = await supabaseAdmin
+      .from("subscriptions")
+      .update({
+        user_id: userId,
+        stripe_customer_id: session.customer,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("stripe_subscription_id", session.subscription);
+    if (updateError) {
+      throw new Error(`subscriptions update failed: ${updateError.message}`);
+    }
+    return;
+  }
+  if (insertError) {
+    throw new Error(`subscriptions insert failed: ${insertError.message}`);
   }
 }
 
