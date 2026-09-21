@@ -6,12 +6,21 @@ import Nav from "@/components/Nav";
 import Footer from "@/components/Footer";
 import { useSession } from "@/hooks/useSession";
 
+type ConfigState =
+  | { phase: "loading" }
+  | { phase: "none" }
+  | { phase: "provisioning" }
+  | { phase: "ready"; subscriptionUrl: string }
+  | { phase: "error" };
+
 export default function DashboardPage() {
   const router = useRouter();
   const { session, loading } = useSession();
   const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [checkoutError, setCheckoutError] = useState<string | null>(null);
   const [checkoutStatus, setCheckoutStatus] = useState<string | null>(null);
+  const [config, setConfig] = useState<ConfigState>({ phase: "loading" });
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     // Static export (output: 'export') means no Suspense-wrapped
@@ -21,6 +30,46 @@ export default function DashboardPage() {
     const params = new URLSearchParams(window.location.search);
     setCheckoutStatus(params.get("checkout"));
   }, []);
+
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    async function poll() {
+      try {
+        const res = await fetch("/api/vpn/config", {
+          headers: { Authorization: `Bearer ${session!.access_token}` },
+        });
+        if (cancelled) return;
+        if (res.status === 200) {
+          const data = await res.json();
+          setConfig({ phase: "ready", subscriptionUrl: data.subscription_url });
+          return;
+        }
+        if (res.status === 404) {
+          // Payment succeeded and a provisioning job exists, but the agent
+          // hasn't completed it yet — keep polling until it does.
+          setConfig({ phase: "provisioning" });
+          timer = setTimeout(poll, 3000);
+          return;
+        }
+        if (res.status === 403) {
+          setConfig({ phase: "none" });
+          return;
+        }
+        setConfig({ phase: "error" });
+      } catch {
+        if (!cancelled) setConfig({ phase: "error" });
+      }
+    }
+    poll();
+
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [session]);
 
   async function handleSubscribe() {
     if (!session) return;
@@ -39,6 +88,16 @@ export default function DashboardPage() {
     } catch (err) {
       setCheckoutError(err instanceof Error ? err.message : "Something went wrong.");
       setCheckoutLoading(false);
+    }
+  }
+
+  async function handleCopy(url: string) {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Clipboard API unavailable — the field itself is still selectable.
     }
   }
 
@@ -82,14 +141,50 @@ export default function DashboardPage() {
             <span className="dm-card-title">Subscription</span>
           </div>
           <div style={{ padding: "var(--space-6)" }}>
-            {checkoutStatus === "success" ? (
+            {config.phase === "ready" ? (
+              <>
+                <p className="section-sub">Your VPN is ready. Import this URL into your client:</p>
+                <div
+                  style={{
+                    display: "flex",
+                    gap: "var(--space-2)",
+                    marginTop: "var(--space-3)",
+                    alignItems: "center",
+                  }}
+                >
+                  <input
+                    className="field"
+                    readOnly
+                    value={config.subscriptionUrl}
+                    onFocus={(e) => e.currentTarget.select()}
+                    style={{ flex: 1, fontSize: "0.85em" }}
+                  />
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={() => handleCopy(config.subscriptionUrl)}
+                  >
+                    {copied ? "Copied" : "Copy"}
+                  </button>
+                </div>
+              </>
+            ) : config.phase === "provisioning" ? (
               <p className="section-sub">
-                Payment received — your configuration will appear here shortly.
+                Payment received — setting up your VPN configuration now, this usually takes a
+                few seconds…
               </p>
+            ) : config.phase === "error" ? (
+              <p className="field-error">
+                Could not load your VPN configuration. Try refreshing this page.
+              </p>
+            ) : config.phase === "loading" ? (
+              <p className="section-sub">Loading…</p>
             ) : (
               <>
                 <p className="section-sub">
-                  No active subscription yet.
+                  {checkoutStatus === "cancel"
+                    ? "Checkout was canceled."
+                    : "No active subscription yet."}
                 </p>
                 {checkoutError && <p className="field-error">{checkoutError}</p>}
                 <button
