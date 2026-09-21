@@ -212,8 +212,34 @@ export async function handleSubscriptionUpdated(supabaseAdmin, subscription) {
       throw new Error(`vpn_accounts lookup failed: ${vpnAccountError.message}`);
     }
     if (!vpnAccount) {
-      // Same transient-vs-permanent reasoning as handleInvoicePaid: the
-      // account may not be provisioned yet. Throw so this retries.
+      // A missing vpn_accounts row is ambiguous on its own: either the
+      // account's CREATE_USER job hasn't been processed by the agent yet
+      // (transient — retry) or this subscription was never provisioned at
+      // all (permanent — no CREATE_USER job was ever enqueued, so retrying
+      // will never find a row). Disambiguate via the CREATE_USER job's
+      // deterministic idempotency_key, same key shape handleInvoicePaid
+      // uses to insert it.
+      const { data: createJob, error: createJobError } = await supabaseAdmin
+        .from("provisioning_jobs")
+        .select("id")
+        .eq("idempotency_key", `create-user:${subscription.id}`)
+        .maybeSingle();
+      if (createJobError) {
+        throw new Error(`provisioning_jobs lookup failed: ${createJobError.message}`);
+      }
+      if (!createJob) {
+        // Same "genuinely nothing to disable" reasoning as
+        // handleSubscriptionDeleted's !updated early-return: no CREATE_USER
+        // job means this subscription was never provisioned. Log for
+        // visibility, return cleanly — no retry needed.
+        console.warn(
+          `customer.subscription.updated (${subscription.status}) for stripe_subscription_id=${subscription.id} with no vpn_accounts row and no CREATE_USER job ever enqueued — nothing to disable`
+        );
+        return;
+      }
+      // The CREATE_USER job exists but hasn't produced a vpn_accounts row
+      // yet — a real race (Stripe can fire a cancellation before the first
+      // job is claimed). Throw so this retries.
       throw new Error(`no vpn_accounts row for user_id=${updated.user_id} yet`);
     }
 
@@ -270,8 +296,31 @@ export async function handleSubscriptionDeleted(supabaseAdmin, subscription) {
     throw new Error(`vpn_accounts lookup failed: ${vpnAccountError.message}`);
   }
   if (!vpnAccount) {
-    // Same transient-vs-permanent reasoning as handleInvoicePaid: the
-    // account may not be provisioned yet. Throw so this retries.
+    // A missing vpn_accounts row is ambiguous on its own: either the
+    // account's CREATE_USER job hasn't been processed by the agent yet
+    // (transient — retry) or this subscription was never provisioned at
+    // all (permanent — no CREATE_USER job was ever enqueued, so retrying
+    // will never find a row, same "genuinely nothing to disable" case as
+    // the !updated early-return above). Disambiguate via the CREATE_USER
+    // job's deterministic idempotency_key, same key shape handleInvoicePaid
+    // uses to insert it.
+    const { data: createJob, error: createJobError } = await supabaseAdmin
+      .from("provisioning_jobs")
+      .select("id")
+      .eq("idempotency_key", `create-user:${subscription.id}`)
+      .maybeSingle();
+    if (createJobError) {
+      throw new Error(`provisioning_jobs lookup failed: ${createJobError.message}`);
+    }
+    if (!createJob) {
+      console.warn(
+        `customer.subscription.deleted for stripe_subscription_id=${subscription.id} with no vpn_accounts row and no CREATE_USER job ever enqueued — nothing to disable`
+      );
+      return;
+    }
+    // The CREATE_USER job exists but hasn't produced a vpn_accounts row
+    // yet — a real race (Stripe can fire a deletion before the first job
+    // is claimed). Throw so this retries.
     throw new Error(`no vpn_accounts row for user_id=${updated.user_id} yet`);
   }
 
