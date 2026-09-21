@@ -95,8 +95,21 @@ export async function handleInvoicePaid(supabaseAdmin, invoice) {
   // for the same subscription to this handler. Those disable handlers
   // durably set subscriptions.status to "canceled"/"unpaid" before their
   // own no-op branches return, so a plain pre-read here is enough to
-  // detect "a newer cancel already landed" and refuse to resurrect the
-  // subscription — no new persistence mechanism needed.
+  // detect that.
+  //
+  // The two statuses aren't equally terminal, though: "canceled" is
+  // terminal in Stripe (never reactivated), so any invoice.paid arriving
+  // once we've observed it is stale — always skip. "unpaid" is NOT
+  // terminal — it's the end of Stripe's dunning process, and the customer
+  // can still pay the outstanding invoice afterward (customer portal,
+  // hosted invoice page, etc.), producing a legitimate invoice.paid while
+  // this row still reads "unpaid" (the customer.subscription.updated that
+  // flips it back to "active" typically arrives after). So "unpaid" only
+  // blocks the specific resurrection case this guard targets — a FIRST
+  // invoice (billing_reason=subscription_create) for a subscription that
+  // was marked unpaid/never fully activated — not a later renewal/
+  // recovery invoice, which must be allowed through normally even while
+  // status still reads "unpaid" at read time.
   const { data: currentSub, error: currentSubError } = await supabaseAdmin
     .from("subscriptions")
     .select("status")
@@ -105,7 +118,10 @@ export async function handleInvoicePaid(supabaseAdmin, invoice) {
   if (currentSubError) {
     throw new Error(`subscriptions status read failed: ${currentSubError.message}`);
   }
-  if (currentSub?.status === "canceled" || currentSub?.status === "unpaid") {
+  const isStaleAfterCancellation = currentSub?.status === "canceled";
+  const isFirstInvoiceForUnpaidSubscription =
+    currentSub?.status === "unpaid" && invoice.billing_reason === "subscription_create";
+  if (isStaleAfterCancellation || isFirstInvoiceForUnpaidSubscription) {
     console.warn(
       `invoice.paid ${invoice.id} for stripe_subscription_id=${subscriptionId} arrived after a newer cancellation (status=${currentSub.status}) — skipping provisioning`
     );
