@@ -90,6 +90,28 @@ export async function handleInvoicePaid(supabaseAdmin, invoice) {
   }
   const currentPeriodEnd = new Date(periodEndUnix * 1000).toISOString();
 
+  // Stripe doesn't guarantee webhook delivery order — a cancellation
+  // (customer.subscription.updated/deleted) can beat a delayed invoice.paid
+  // for the same subscription to this handler. Those disable handlers
+  // durably set subscriptions.status to "canceled"/"unpaid" before their
+  // own no-op branches return, so a plain pre-read here is enough to
+  // detect "a newer cancel already landed" and refuse to resurrect the
+  // subscription — no new persistence mechanism needed.
+  const { data: currentSub, error: currentSubError } = await supabaseAdmin
+    .from("subscriptions")
+    .select("status")
+    .eq("stripe_subscription_id", subscriptionId)
+    .maybeSingle();
+  if (currentSubError) {
+    throw new Error(`subscriptions status read failed: ${currentSubError.message}`);
+  }
+  if (currentSub?.status === "canceled" || currentSub?.status === "unpaid") {
+    console.warn(
+      `invoice.paid ${invoice.id} for stripe_subscription_id=${subscriptionId} arrived after a newer cancellation (status=${currentSub.status}) — skipping provisioning`
+    );
+    return;
+  }
+
   const { data: sub, error: subError } = await supabaseAdmin
     .from("subscriptions")
     .update({
@@ -141,10 +163,14 @@ export async function handleInvoicePaid(supabaseAdmin, invoice) {
     }
     if (!vpnAccount) {
       // The account's CREATE_USER job hasn't been processed by the agent
-      // yet — a real race (Stripe can fire a renewal before the first
-      // job is claimed). Throw so this retries, same transient-vs-
-      // permanent reasoning already used elsewhere in this file, rather
-      // than enqueueing a job with no vpn_user_id to act on.
+      // yet — a real race (Stripe can fire a renewal before the first job
+      // is claimed). Unlike the disable handlers' missing-vpn_accounts
+      // case, this one has no permanent variant to disambiguate: a
+      // renewal invoice only fires for a subscription that already had a
+      // successful first invoice (billing_reason=subscription_create), so
+      // its CREATE_USER job is always enqueued — the row will eventually
+      // exist once the agent processes it. Throw unconditionally so this
+      // retries, rather than enqueueing a job with no vpn_user_id to act on.
       throw new Error(`no vpn_accounts row for user_id=${sub.user_id} yet`);
     }
     vpnAccountId = vpnAccount.id;
