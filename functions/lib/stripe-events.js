@@ -90,6 +90,44 @@ export async function handleInvoicePaid(supabaseAdmin, invoice) {
   }
   const currentPeriodEnd = new Date(periodEndUnix * 1000).toISOString();
 
+  // Stripe doesn't guarantee webhook delivery order — a cancellation
+  // (customer.subscription.updated/deleted) can beat a delayed invoice.paid
+  // for the same subscription to this handler. Those disable handlers
+  // durably set subscriptions.status to "canceled"/"unpaid" before their
+  // own no-op branches return, so a plain pre-read here is enough to
+  // detect that.
+  //
+  // The two statuses aren't equally terminal, though: "canceled" is
+  // terminal in Stripe (never reactivated), so any invoice.paid arriving
+  // once we've observed it is stale — always skip. "unpaid" is NOT
+  // terminal — it's the end of Stripe's dunning process, and the customer
+  // can still pay the outstanding invoice afterward (customer portal,
+  // hosted invoice page, etc.), producing a legitimate invoice.paid while
+  // this row still reads "unpaid" (the customer.subscription.updated that
+  // flips it back to "active" typically arrives after). So "unpaid" only
+  // blocks the specific resurrection case this guard targets — a FIRST
+  // invoice (billing_reason=subscription_create) for a subscription that
+  // was marked unpaid/never fully activated — not a later renewal/
+  // recovery invoice, which must be allowed through normally even while
+  // status still reads "unpaid" at read time.
+  const { data: currentSub, error: currentSubError } = await supabaseAdmin
+    .from("subscriptions")
+    .select("status")
+    .eq("stripe_subscription_id", subscriptionId)
+    .maybeSingle();
+  if (currentSubError) {
+    throw new Error(`subscriptions status read failed: ${currentSubError.message}`);
+  }
+  const isStaleAfterCancellation = currentSub?.status === "canceled";
+  const isFirstInvoiceForUnpaidSubscription =
+    currentSub?.status === "unpaid" && invoice.billing_reason === "subscription_create";
+  if (isStaleAfterCancellation || isFirstInvoiceForUnpaidSubscription) {
+    console.warn(
+      `invoice.paid ${invoice.id} for stripe_subscription_id=${subscriptionId} arrived after a newer cancellation (status=${currentSub.status}) — skipping provisioning`
+    );
+    return;
+  }
+
   const { data: sub, error: subError } = await supabaseAdmin
     .from("subscriptions")
     .update({
@@ -121,14 +159,45 @@ export async function handleInvoicePaid(supabaseAdmin, invoice) {
   const idempotencyKey = isFirstInvoice
     ? `create-user:${subscriptionId}`
     : `set-expiry:${subscriptionId}:${currentPeriodEnd}`;
-  const payload = isFirstInvoice
-    ? { user_id: sub.user_id, expires_at: currentPeriodEnd }
-    : { stripe_subscription_id: subscriptionId, expires_at: currentPeriodEnd };
+  let vpnAccountId = null;
+  let payload;
+  if (isFirstInvoice) {
+    payload = { user_id: sub.user_id, expires_at: currentPeriodEnd };
+  } else {
+    // A renewal targets an existing vpn_accounts row — resolve it now so
+    // the provisioning agent's job payload carries vpn_user_id directly
+    // rather than needing its own Supabase lookup (it has no Supabase
+    // credential at all, by design).
+    const { data: vpnAccount, error: vpnAccountError } = await supabaseAdmin
+      .from("vpn_accounts")
+      .select("id, vpn_user_id")
+      .eq("user_id", sub.user_id)
+      .eq("node_id", "node-1")
+      .maybeSingle();
+    if (vpnAccountError) {
+      throw new Error(`vpn_accounts lookup failed: ${vpnAccountError.message}`);
+    }
+    if (!vpnAccount) {
+      // The account's CREATE_USER job hasn't been processed by the agent
+      // yet — a real race (Stripe can fire a renewal before the first job
+      // is claimed). Unlike the disable handlers' missing-vpn_accounts
+      // case, this one has no permanent variant to disambiguate: a
+      // renewal invoice only fires for a subscription that already had a
+      // successful first invoice (billing_reason=subscription_create), so
+      // its CREATE_USER job is always enqueued — the row will eventually
+      // exist once the agent processes it. Throw unconditionally so this
+      // retries, rather than enqueueing a job with no vpn_user_id to act on.
+      throw new Error(`no vpn_accounts row for user_id=${sub.user_id} yet`);
+    }
+    vpnAccountId = vpnAccount.id;
+    payload = { vpn_user_id: vpnAccount.vpn_user_id, expires_at: currentPeriodEnd };
+  }
 
   const { error: jobError } = await supabaseAdmin.from("provisioning_jobs").insert({
     idempotency_key: idempotencyKey,
     node_id: "node-1",
     job_type: jobType,
+    vpn_account_id: vpnAccountId,
     payload,
   });
   if (jobError && jobError.code !== "23505") {
@@ -175,11 +244,57 @@ export async function handleSubscriptionUpdated(supabaseAdmin, subscription) {
   // cancellation, the second insert is a harmless no-op (23505), not a
   // second job.
   if (subscription.status === "canceled" || subscription.status === "unpaid") {
+    const { data: vpnAccount, error: vpnAccountError } = await supabaseAdmin
+      .from("vpn_accounts")
+      .select("id, vpn_user_id")
+      .eq("user_id", updated.user_id)
+      .eq("node_id", "node-1")
+      .maybeSingle();
+    if (vpnAccountError) {
+      throw new Error(`vpn_accounts lookup failed: ${vpnAccountError.message}`);
+    }
+    if (!vpnAccount) {
+      // A missing vpn_accounts row is ambiguous on its own: either the
+      // account's CREATE_USER job hasn't been processed by the agent yet
+      // (transient — retry) or this subscription was never provisioned at
+      // all (permanent — no CREATE_USER job was ever enqueued, so retrying
+      // will never find a row). Disambiguate via the CREATE_USER job's
+      // deterministic idempotency_key, same key shape handleInvoicePaid
+      // uses to insert it.
+      const { data: createJob, error: createJobError } = await supabaseAdmin
+        .from("provisioning_jobs")
+        .select("id")
+        .eq("idempotency_key", `create-user:${subscription.id}`)
+        .maybeSingle();
+      if (createJobError) {
+        throw new Error(`provisioning_jobs lookup failed: ${createJobError.message}`);
+      }
+      if (!createJob) {
+        // Same "genuinely nothing to disable" reasoning as
+        // handleSubscriptionDeleted's !updated early-return: no CREATE_USER
+        // job means this subscription was never provisioned. Log for
+        // visibility, return cleanly — no retry needed.
+        console.warn(
+          `customer.subscription.updated (${subscription.status}) for stripe_subscription_id=${subscription.id} with no vpn_accounts row and no CREATE_USER job ever enqueued — nothing to disable`
+        );
+        return;
+      }
+      // The CREATE_USER job exists but hasn't produced a vpn_accounts row
+      // yet — a real race (Stripe can fire a cancellation before the first
+      // job is claimed). Throw so this retries.
+      throw new Error(`no vpn_accounts row for user_id=${updated.user_id} yet`);
+    }
+
     const { error: jobError } = await supabaseAdmin.from("provisioning_jobs").insert({
       idempotency_key: `disable-user:${subscription.id}`,
       node_id: "node-1",
       job_type: "DISABLE_USER",
-      payload: { user_id: updated.user_id, stripe_subscription_id: subscription.id },
+      vpn_account_id: vpnAccount.id,
+      payload: {
+        vpn_user_id: vpnAccount.vpn_user_id,
+        user_id: updated.user_id,
+        stripe_subscription_id: subscription.id,
+      },
     });
     if (jobError && jobError.code !== "23505") {
       throw new Error(`provisioning_jobs insert failed: ${jobError.message}`);
@@ -213,11 +328,54 @@ export async function handleSubscriptionDeleted(supabaseAdmin, subscription) {
     return;
   }
 
+  const { data: vpnAccount, error: vpnAccountError } = await supabaseAdmin
+    .from("vpn_accounts")
+    .select("id, vpn_user_id")
+    .eq("user_id", updated.user_id)
+    .eq("node_id", "node-1")
+    .maybeSingle();
+  if (vpnAccountError) {
+    throw new Error(`vpn_accounts lookup failed: ${vpnAccountError.message}`);
+  }
+  if (!vpnAccount) {
+    // A missing vpn_accounts row is ambiguous on its own: either the
+    // account's CREATE_USER job hasn't been processed by the agent yet
+    // (transient — retry) or this subscription was never provisioned at
+    // all (permanent — no CREATE_USER job was ever enqueued, so retrying
+    // will never find a row, same "genuinely nothing to disable" case as
+    // the !updated early-return above). Disambiguate via the CREATE_USER
+    // job's deterministic idempotency_key, same key shape handleInvoicePaid
+    // uses to insert it.
+    const { data: createJob, error: createJobError } = await supabaseAdmin
+      .from("provisioning_jobs")
+      .select("id")
+      .eq("idempotency_key", `create-user:${subscription.id}`)
+      .maybeSingle();
+    if (createJobError) {
+      throw new Error(`provisioning_jobs lookup failed: ${createJobError.message}`);
+    }
+    if (!createJob) {
+      console.warn(
+        `customer.subscription.deleted for stripe_subscription_id=${subscription.id} with no vpn_accounts row and no CREATE_USER job ever enqueued — nothing to disable`
+      );
+      return;
+    }
+    // The CREATE_USER job exists but hasn't produced a vpn_accounts row
+    // yet — a real race (Stripe can fire a deletion before the first job
+    // is claimed). Throw so this retries.
+    throw new Error(`no vpn_accounts row for user_id=${updated.user_id} yet`);
+  }
+
   const { error: jobError } = await supabaseAdmin.from("provisioning_jobs").insert({
     idempotency_key: `disable-user:${subscription.id}`,
     node_id: "node-1",
     job_type: "DISABLE_USER",
-    payload: { user_id: updated.user_id, stripe_subscription_id: subscription.id },
+    vpn_account_id: vpnAccount.id,
+    payload: {
+      vpn_user_id: vpnAccount.vpn_user_id,
+      user_id: updated.user_id,
+      stripe_subscription_id: subscription.id,
+    },
   });
   if (jobError && jobError.code !== "23505") {
     throw new Error(`provisioning_jobs insert failed: ${jobError.message}`);
