@@ -30,6 +30,26 @@ export async function onRequestPost({ env, request }) {
       httpClient: Stripe.createFetchHttpClient(),
     });
 
+    const { data: existingSubscription, error: existingSubError } = await supabaseAdmin
+      .from("subscriptions")
+      .select("status")
+      .eq("user_id", user.id)
+      .in("status", ["trialing", "active", "past_due"])
+      .maybeSingle();
+    if (existingSubError) {
+      console.error("create-checkout-session: subscription lookup failed:", existingSubError.message);
+      return new Response(JSON.stringify({ error: "Something went wrong" }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    if (existingSubscription) {
+      return new Response(
+        JSON.stringify({ error: "You already have an active subscription" }),
+        { status: 409, headers: { "Content-Type": "application/json" } }
+      );
+    }
+
     let session;
     try {
       session = await stripe.checkout.sessions.create({
