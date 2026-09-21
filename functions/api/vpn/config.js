@@ -38,7 +38,7 @@ export async function onRequestGet({ env, request }) {
     // a new multi-row hazard itself.
     const { data: subscription, error: subError } = await supabaseAdmin
       .from("subscriptions")
-      .select("status")
+      .select("status, current_period_end, cancel_at_period_end")
       .eq("user_id", user.id)
       .eq("status", "active")
       .maybeSingle();
@@ -72,7 +72,15 @@ export async function onRequestGet({ env, request }) {
     }
 
     const subscriptionUrl = await decryptSecret(secret.ciphertext, secret.nonce, env.VPN_SECRETS_ENCRYPTION_KEY);
-    return noStoreJson({ subscription_url: subscriptionUrl }, 200);
+    return noStoreJson(
+      {
+        subscription_url: subscriptionUrl,
+        status: subscription.status,
+        current_period_end: subscription.current_period_end,
+        cancel_at_period_end: subscription.cancel_at_period_end,
+      },
+      200
+    );
   } catch (err) {
     console.error("vpn/config: failed:", err.message);
     return noStoreJson({ error: "Internal error" }, 500);

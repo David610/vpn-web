@@ -219,6 +219,7 @@ export async function handleSubscriptionUpdated(supabaseAdmin, subscription) {
     .update({
       status: subscription.status,
       current_period_end: currentPeriodEnd,
+      cancel_at_period_end: Boolean(subscription.cancel_at_period_end),
       updated_at: new Date().toISOString(),
     })
     .eq("stripe_subscription_id", subscription.id)

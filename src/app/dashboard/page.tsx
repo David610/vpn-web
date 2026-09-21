@@ -10,7 +10,7 @@ type ConfigState =
   | { phase: "loading" }
   | { phase: "none" }
   | { phase: "provisioning" }
-  | { phase: "ready"; subscriptionUrl: string }
+  | { phase: "ready"; subscriptionUrl: string; currentPeriodEnd: string | null; cancelAtPeriodEnd: boolean }
   | { phase: "error" };
 
 export default function DashboardPage() {
@@ -44,7 +44,12 @@ export default function DashboardPage() {
         if (cancelled) return;
         if (res.status === 200) {
           const data = await res.json();
-          setConfig({ phase: "ready", subscriptionUrl: data.subscription_url });
+          setConfig({
+            phase: "ready",
+            subscriptionUrl: data.subscription_url,
+            currentPeriodEnd: data.current_period_end,
+            cancelAtPeriodEnd: data.cancel_at_period_end,
+          });
           return;
         }
         if (res.status === 404) {
@@ -88,6 +93,64 @@ export default function DashboardPage() {
     } catch (err) {
       setCheckoutError(err instanceof Error ? err.message : "Something went wrong.");
       setCheckoutLoading(false);
+    }
+  }
+
+  const [cancelLoading, setCancelLoading] = useState(false);
+  const [cancelError, setCancelError] = useState<string | null>(null);
+  const [resumeLoading, setResumeLoading] = useState(false);
+  const [resumeError, setResumeError] = useState<string | null>(null);
+
+  async function handleCancel() {
+    if (!session) return;
+    if (
+      !window.confirm(
+        "Are you sure you want to cancel your subscription? You'll keep access until the end of your current billing period."
+      )
+    ) {
+      return;
+    }
+    setCancelLoading(true);
+    setCancelError(null);
+    try {
+      const res = await fetch("/api/cancel-subscription", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error || "Could not cancel subscription");
+      }
+      setConfig((prev) =>
+        prev.phase === "ready" ? { ...prev, cancelAtPeriodEnd: true } : prev
+      );
+    } catch (err) {
+      setCancelError(err instanceof Error ? err.message : "Something went wrong.");
+    } finally {
+      setCancelLoading(false);
+    }
+  }
+
+  async function handleResume() {
+    if (!session) return;
+    setResumeLoading(true);
+    setResumeError(null);
+    try {
+      const res = await fetch("/api/resume-subscription", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error || "Could not resume subscription");
+      }
+      setConfig((prev) =>
+        prev.phase === "ready" ? { ...prev, cancelAtPeriodEnd: false } : prev
+      );
+    } catch (err) {
+      setResumeError(err instanceof Error ? err.message : "Something went wrong.");
+    } finally {
+      setResumeLoading(false);
     }
   }
 
@@ -167,6 +230,40 @@ export default function DashboardPage() {
                     {copied ? "Copied" : "Copy"}
                   </button>
                 </div>
+                {config.cancelAtPeriodEnd ? (
+                  <>
+                    <p className="section-sub" style={{ marginTop: "var(--space-4)" }}>
+                      Your subscription is canceled and will end on{" "}
+                      {config.currentPeriodEnd
+                        ? new Date(config.currentPeriodEnd).toLocaleDateString()
+                        : "the end of the current billing period"}
+                      .
+                    </p>
+                    {resumeError && <p className="field-error">{resumeError}</p>}
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={handleResume}
+                      disabled={resumeLoading}
+                      style={{ marginTop: "var(--space-4)" }}
+                    >
+                      {resumeLoading ? "Resuming…" : "Resume subscription"}
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    {cancelError && <p className="field-error">{cancelError}</p>}
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={handleCancel}
+                      disabled={cancelLoading}
+                      style={{ marginTop: "var(--space-4)" }}
+                    >
+                      {cancelLoading ? "Canceling…" : "Cancel subscription"}
+                    </button>
+                  </>
+                )}
               </>
             ) : config.phase === "provisioning" ? (
               <p className="section-sub">

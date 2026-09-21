@@ -30,6 +30,43 @@ export async function onRequestPost({ env, request }) {
       httpClient: Stripe.createFetchHttpClient(),
     });
 
+    // A checkout.session.completed for a delayed-payment method (e.g. SEPA
+    // Direct Debit — see stripe-events.js's header comment) inserts the
+    // subscriptions row at status "incomplete" until invoice.paid confirms
+    // payment. Without also blocking a retry here, a user in that window
+    // (who GET /api/vpn/config correctly shows as not-yet-active) would hit
+    // "Subscribe" again and get a second paid subscription — the exact
+    // dedup hole this endpoint exists to close. So "incomplete" must count
+    // too, but unlike a real active subscription an "incomplete" row can
+    // get stuck forever (abandoned/failed Checkout Session — Stripe expires
+    // those after 24h by default) with no event ever arriving to move it
+    // out of that status. Scope the "incomplete" branch to rows created in
+    // the last 24h so a stuck one doesn't permanently block the user from
+    // ever subscribing again; real active/trialing/past_due subscriptions
+    // are never time-limited.
+    const recentCutoffIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const { data: existingSubscription, error: existingSubError } = await supabaseAdmin
+      .from("subscriptions")
+      .select("status")
+      .eq("user_id", user.id)
+      .or(
+        `status.in.(trialing,active,past_due),and(status.eq.incomplete,created_at.gt.${recentCutoffIso})`
+      )
+      .maybeSingle();
+    if (existingSubError) {
+      console.error("create-checkout-session: subscription lookup failed:", existingSubError.message);
+      return new Response(JSON.stringify({ error: "Something went wrong" }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    if (existingSubscription) {
+      return new Response(
+        JSON.stringify({ error: "You already have an active subscription" }),
+        { status: 409, headers: { "Content-Type": "application/json" } }
+      );
+    }
+
     let session;
     try {
       session = await stripe.checkout.sessions.create({
