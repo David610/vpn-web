@@ -195,6 +195,45 @@ body {
   max-width: 56ch;
   margin: 0;
 }
+.legal-content {
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  line-height: 1.7;
+  color: var(--fg-2);
+  max-width: 68ch;
+}
+.legal-content h2 {
+  font-family: var(--font-display);
+  font-size: var(--text-h3);
+  color: var(--fg);
+  margin: var(--space-8) 0 var(--space-3);
+}
+.legal-content h2:first-child {
+  margin-top: 0;
+}
+.legal-content p {
+  margin: 0 0 var(--space-4);
+}
+.legal-content ul {
+  margin: 0 0 var(--space-4);
+  padding-left: var(--space-6);
+}
+.legal-content li {
+  margin-bottom: var(--space-2);
+}
+.legal-content strong {
+  color: var(--fg);
+}
+.legal-content .legal-todo {
+  display: block;
+  margin-top: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  color: var(--fg-3);
+}
 .section-eyebrow {
   display: inline-flex;
   align-items: center;
