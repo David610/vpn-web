@@ -121,14 +121,41 @@ export async function handleInvoicePaid(supabaseAdmin, invoice) {
   const idempotencyKey = isFirstInvoice
     ? `create-user:${subscriptionId}`
     : `set-expiry:${subscriptionId}:${currentPeriodEnd}`;
-  const payload = isFirstInvoice
-    ? { user_id: sub.user_id, expires_at: currentPeriodEnd }
-    : { stripe_subscription_id: subscriptionId, expires_at: currentPeriodEnd };
+  let vpnAccountId = null;
+  let payload;
+  if (isFirstInvoice) {
+    payload = { user_id: sub.user_id, expires_at: currentPeriodEnd };
+  } else {
+    // A renewal targets an existing vpn_accounts row — resolve it now so
+    // the provisioning agent's job payload carries vpn_user_id directly
+    // rather than needing its own Supabase lookup (it has no Supabase
+    // credential at all, by design).
+    const { data: vpnAccount, error: vpnAccountError } = await supabaseAdmin
+      .from("vpn_accounts")
+      .select("id, vpn_user_id")
+      .eq("user_id", sub.user_id)
+      .eq("node_id", "node-1")
+      .maybeSingle();
+    if (vpnAccountError) {
+      throw new Error(`vpn_accounts lookup failed: ${vpnAccountError.message}`);
+    }
+    if (!vpnAccount) {
+      // The account's CREATE_USER job hasn't been processed by the agent
+      // yet — a real race (Stripe can fire a renewal before the first
+      // job is claimed). Throw so this retries, same transient-vs-
+      // permanent reasoning already used elsewhere in this file, rather
+      // than enqueueing a job with no vpn_user_id to act on.
+      throw new Error(`no vpn_accounts row for user_id=${sub.user_id} yet`);
+    }
+    vpnAccountId = vpnAccount.id;
+    payload = { vpn_user_id: vpnAccount.vpn_user_id, expires_at: currentPeriodEnd };
+  }
 
   const { error: jobError } = await supabaseAdmin.from("provisioning_jobs").insert({
     idempotency_key: idempotencyKey,
     node_id: "node-1",
     job_type: jobType,
+    vpn_account_id: vpnAccountId,
     payload,
   });
   if (jobError && jobError.code !== "23505") {
@@ -175,11 +202,31 @@ export async function handleSubscriptionUpdated(supabaseAdmin, subscription) {
   // cancellation, the second insert is a harmless no-op (23505), not a
   // second job.
   if (subscription.status === "canceled" || subscription.status === "unpaid") {
+    const { data: vpnAccount, error: vpnAccountError } = await supabaseAdmin
+      .from("vpn_accounts")
+      .select("id, vpn_user_id")
+      .eq("user_id", updated.user_id)
+      .eq("node_id", "node-1")
+      .maybeSingle();
+    if (vpnAccountError) {
+      throw new Error(`vpn_accounts lookup failed: ${vpnAccountError.message}`);
+    }
+    if (!vpnAccount) {
+      // Same transient-vs-permanent reasoning as handleInvoicePaid: the
+      // account may not be provisioned yet. Throw so this retries.
+      throw new Error(`no vpn_accounts row for user_id=${updated.user_id} yet`);
+    }
+
     const { error: jobError } = await supabaseAdmin.from("provisioning_jobs").insert({
       idempotency_key: `disable-user:${subscription.id}`,
       node_id: "node-1",
       job_type: "DISABLE_USER",
-      payload: { user_id: updated.user_id, stripe_subscription_id: subscription.id },
+      vpn_account_id: vpnAccount.id,
+      payload: {
+        vpn_user_id: vpnAccount.vpn_user_id,
+        user_id: updated.user_id,
+        stripe_subscription_id: subscription.id,
+      },
     });
     if (jobError && jobError.code !== "23505") {
       throw new Error(`provisioning_jobs insert failed: ${jobError.message}`);
@@ -213,11 +260,31 @@ export async function handleSubscriptionDeleted(supabaseAdmin, subscription) {
     return;
   }
 
+  const { data: vpnAccount, error: vpnAccountError } = await supabaseAdmin
+    .from("vpn_accounts")
+    .select("id, vpn_user_id")
+    .eq("user_id", updated.user_id)
+    .eq("node_id", "node-1")
+    .maybeSingle();
+  if (vpnAccountError) {
+    throw new Error(`vpn_accounts lookup failed: ${vpnAccountError.message}`);
+  }
+  if (!vpnAccount) {
+    // Same transient-vs-permanent reasoning as handleInvoicePaid: the
+    // account may not be provisioned yet. Throw so this retries.
+    throw new Error(`no vpn_accounts row for user_id=${updated.user_id} yet`);
+  }
+
   const { error: jobError } = await supabaseAdmin.from("provisioning_jobs").insert({
     idempotency_key: `disable-user:${subscription.id}`,
     node_id: "node-1",
     job_type: "DISABLE_USER",
-    payload: { user_id: updated.user_id, stripe_subscription_id: subscription.id },
+    vpn_account_id: vpnAccount.id,
+    payload: {
+      vpn_user_id: vpnAccount.vpn_user_id,
+      user_id: updated.user_id,
+      stripe_subscription_id: subscription.id,
+    },
   });
   if (jobError && jobError.code !== "23505") {
     throw new Error(`provisioning_jobs insert failed: ${jobError.message}`);
