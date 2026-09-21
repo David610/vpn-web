@@ -51,6 +51,8 @@ export async function onRequestGet({ env, request }) {
       .from("vpn_accounts")
       .select("id")
       .eq("user_id", user.id)
+      .order("created_at", { ascending: false })
+      .limit(1)
       .maybeSingle();
     if (vpnAccountError) throw new Error(`vpn_accounts lookup failed: ${vpnAccountError.message}`);
     if (!vpnAccount) {

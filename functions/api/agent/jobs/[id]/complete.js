@@ -2,6 +2,15 @@ import { createClient } from "@supabase/supabase-js";
 import { authenticateNode } from "../../../../lib/node-auth.js";
 import { encryptSecret } from "../../../../lib/crypto.js";
 
+// Cross-repo idempotency contract (for the provisioning agent in the
+// sibling singbox-vpn repo): on a 5xx response from this endpoint, the
+// agent MUST retry POST /complete again — never fall back to POST
+// /fail. A 5xx can happen after the DB writes below already succeeded
+// but before the response was sent, so calling /fail instead would
+// regress an already-`done` job back to `failed` (see the terminal-
+// status guard in fail.js, which exists specifically to make a retried
+// /complete-then-/fail sequence a safe no-op, not to make it correct
+// to call /fail here in the first place).
 export async function onRequestPost({ env, request, params }) {
   const jobId = params.id;
   const supabaseAdmin = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
@@ -25,7 +34,7 @@ export async function onRequestPost({ env, request, params }) {
       headers: { "Content-Type": "application/json" },
     });
   }
-  const result = body.result ?? {};
+  const result = body?.result ?? {};
 
   try {
     const { data: job, error: jobError } = await supabaseAdmin

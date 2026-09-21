@@ -25,7 +25,7 @@ export async function onRequestPost({ env, request, params }) {
       headers: { "Content-Type": "application/json" },
     });
   }
-  const errorMessage = typeof body.error === "string" ? body.error : "Unknown error";
+  const errorMessage = typeof body?.error === "string" ? body.error : "Unknown error";
 
   try {
     const { data: job, error: jobError } = await supabaseAdmin
@@ -43,6 +43,18 @@ export async function onRequestPost({ env, request, params }) {
     if (!job || job.node_id !== nodeId) {
       return new Response(JSON.stringify({ error: "Job not found" }), {
         status: 404,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    if (job.status === "done" || job.status === "failed") {
+      // Duplicate report (agent retried a request whose response it
+      // never saw) — idempotent no-op, not an error. Critically, this
+      // must not regress an already-`done` job back to `failed` (see
+      // complete.js's retry contract), and a job already `failed`
+      // doesn't need a second alert for a retried report of the same
+      // failure either.
+      return new Response(JSON.stringify({ ok: true, duplicate: true }), {
+        status: 200,
         headers: { "Content-Type": "application/json" },
       });
     }
