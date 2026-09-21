@@ -11,6 +11,16 @@ export default function DashboardPage() {
   const { session, loading } = useSession();
   const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [checkoutError, setCheckoutError] = useState<string | null>(null);
+  const [checkoutStatus, setCheckoutStatus] = useState<string | null>(null);
+
+  useEffect(() => {
+    // Static export (output: 'export') means no Suspense-wrapped
+    // useSearchParams available here — read the redirect-back status
+    // straight off the client-side URL instead, consistent with how the
+    // rest of this file reads client-only state.
+    const params = new URLSearchParams(window.location.search);
+    setCheckoutStatus(params.get("checkout"));
+  }, []);
 
   async function handleSubscribe() {
     if (!session) return;
@@ -21,7 +31,7 @@ export default function DashboardPage() {
         method: "POST",
         headers: { Authorization: `Bearer ${session.access_token}` },
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.url) {
         throw new Error(data.error || "Could not start checkout");
       }
@@ -72,19 +82,27 @@ export default function DashboardPage() {
             <span className="dm-card-title">Subscription</span>
           </div>
           <div style={{ padding: "var(--space-6)" }}>
-            <p className="section-sub">
-              No active subscription yet.
-            </p>
-            {checkoutError && <p className="field-error">{checkoutError}</p>}
-            <button
-              type="button"
-              className="btn btn-primary"
-              onClick={handleSubscribe}
-              disabled={checkoutLoading}
-              style={{ width: "100%", marginTop: "var(--space-4)" }}
-            >
-              {checkoutLoading ? "Redirecting…" : "Subscribe"}
-            </button>
+            {checkoutStatus === "success" ? (
+              <p className="section-sub">
+                Payment received — your configuration will appear here shortly.
+              </p>
+            ) : (
+              <>
+                <p className="section-sub">
+                  No active subscription yet.
+                </p>
+                {checkoutError && <p className="field-error">{checkoutError}</p>}
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={handleSubscribe}
+                  disabled={checkoutLoading}
+                  style={{ width: "100%", marginTop: "var(--space-4)" }}
+                >
+                  {checkoutLoading ? "Redirecting…" : "Subscribe"}
+                </button>
+              </>
+            )}
           </div>
         </div>
       </main>

@@ -8,6 +8,10 @@
 SUPABASE_URL=http://127.0.0.1:54321
 SUPABASE_SERVICE_ROLE_KEY=<paste the SERVICE_ROLE_KEY your local `npx supabase start` prints>
 STRIPE_API_KEY=sk_test_placeholder_not_a_real_key
+# The Dashboard's webhook endpoint (or your local `stripe listen` forward)
+# must be subscribed to exactly these event types for this integration to
+# work: checkout.session.completed, invoice.paid,
+# customer.subscription.updated, customer.subscription.deleted
 STRIPE_SIGNING_SECRET=whsec_test_local_secret_for_synthetic_events_only
 STRIPE_PRICE_ID=price_placeholder_not_real
 SITE_URL=http://127.0.0.1:8788
