@@ -11,6 +11,7 @@ vi.mock("@supabase/supabase-js", () => ({
       select: vi.fn().mockReturnThis(),
       eq: vi.fn().mockReturnThis(),
       in: vi.fn().mockReturnThis(),
+      or: vi.fn().mockReturnThis(),
       maybeSingle,
     })),
   })),
@@ -53,6 +54,16 @@ describe("create-checkout-session", () => {
   it("returns 409 without calling Stripe when the user already has an active subscription", async () => {
     getUser.mockResolvedValue({ data: { user: { id: "user-1", email: "a@test.dev" } }, error: null });
     maybeSingle.mockResolvedValue({ data: { status: "active" }, error: null });
+
+    const res = await onRequestPost({ env, request: makeRequest() });
+
+    expect(res.status).toBe(409);
+    expect(sessionsCreate).not.toHaveBeenCalled();
+  });
+
+  it("returns 409 without calling Stripe when the user has a recent incomplete subscription", async () => {
+    getUser.mockResolvedValue({ data: { user: { id: "user-1", email: "a@test.dev" } }, error: null });
+    maybeSingle.mockResolvedValue({ data: { status: "incomplete" }, error: null });
 
     const res = await onRequestPost({ env, request: makeRequest() });
 
