@@ -34,14 +34,19 @@ do $$
 declare
   own_count int;
   other_count int;
+  own_cancel_at_period_end boolean;
 begin
   select count(*) into own_count from public.subscriptions where user_id = '11111111-1111-1111-1111-111111111111';
   select count(*) into other_count from public.subscriptions where user_id = '22222222-2222-2222-2222-222222222222';
+  select cancel_at_period_end into own_cancel_at_period_end from public.subscriptions where user_id = '11111111-1111-1111-1111-111111111111';
   if own_count <> 1 then
     raise exception 'subscriptions RLS FAILED: user A should see their own 1 row, saw %', own_count;
   end if;
   if other_count <> 0 then
     raise exception 'subscriptions RLS FAILED: user A should see 0 of user B''s rows, saw %', other_count;
+  end if;
+  if own_cancel_at_period_end is distinct from false then
+    raise exception 'subscriptions RLS FAILED: user A''s cancel_at_period_end should default to false, saw %', own_cancel_at_period_end;
   end if;
 end $$;
 rollback;
