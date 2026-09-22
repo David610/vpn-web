@@ -22,7 +22,7 @@ export async function onRequestPost({ env, request, params }) {
   try {
     const { data: vpnAccount, error: vpnError } = await supabaseAdmin
       .from("vpn_accounts")
-      .select("id, node_id")
+      .select("id, node_id, vpn_user_id")
       .eq("user_id", userId)
       .maybeSingle();
     if (vpnError) throw new Error(`vpn_accounts lookup failed: ${vpnError.message}`);
@@ -33,7 +33,7 @@ export async function onRequestPost({ env, request, params }) {
       node_id: vpnAccount.node_id,
       job_type: "DISABLE_USER",
       vpn_account_id: vpnAccount.id,
-      payload: {},
+      payload: { vpn_user_id: vpnAccount.vpn_user_id },
     });
     if (jobError) throw new Error(`provisioning_jobs insert failed: ${jobError.message}`);
 

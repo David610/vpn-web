@@ -13,7 +13,7 @@ vi.mock("@supabase/supabase-js", () => ({
         return { select: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(), maybeSingle: adminMaybeSingle };
       }
       if (table === "subscriptions") {
-        return { select: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(), maybeSingle: subMaybeSingle };
+        return { select: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(), in: vi.fn().mockReturnThis(), maybeSingle: subMaybeSingle };
       }
       if (table === "vpn_accounts") {
         return { select: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(), maybeSingle: vpnMaybeSingle };

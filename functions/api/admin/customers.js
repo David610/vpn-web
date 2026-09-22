@@ -37,9 +37,15 @@ export async function onRequestGet({ env, request }) {
     const emailByUserId = new Map(usersPage.users.map((u) => [u.id, u.email]));
     const vpnByUserId = new Map(vpnAccounts.map((v) => [v.user_id, v]));
 
-    let customers = subs.map((sub) => {
+    // Deduplicate by userId, keeping the first (most-recent) row per user.
+    // A resubscriber has multiple subscriptions rows; created_at DESC ordering
+    // above means index 0 is always the most recent subscription.
+    const seenUserIds = new Set();
+    let customers = subs.reduce((acc, sub) => {
+      if (seenUserIds.has(sub.user_id)) return acc;
+      seenUserIds.add(sub.user_id);
       const vpn = vpnByUserId.get(sub.user_id);
-      return {
+      acc.push({
         userId: sub.user_id,
         email: emailByUserId.get(sub.user_id) ?? null,
         subscriptionStatus: sub.status,
@@ -48,8 +54,9 @@ export async function onRequestGet({ env, request }) {
         vpnUserId: vpn?.vpn_user_id ?? null,
         nodeId: vpn?.node_id ?? null,
         enabled: vpn?.enabled ?? null,
-      };
-    });
+      });
+      return acc;
+    }, []);
 
     if (q) {
       customers = customers.filter(

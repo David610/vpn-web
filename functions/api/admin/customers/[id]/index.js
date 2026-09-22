@@ -23,7 +23,7 @@ export async function onRequestGet({ env, request, params }) {
       { data: vpnAccount, error: vpnError },
     ] = await Promise.all([
       supabaseAdmin.auth.admin.getUserById(userId),
-      supabaseAdmin.from("subscriptions").select("status, current_period_end, stripe_customer_id, stripe_subscription_id").eq("user_id", userId).maybeSingle(),
+      supabaseAdmin.from("subscriptions").select("status, current_period_end, cancel_at_period_end, stripe_customer_id, stripe_subscription_id").eq("user_id", userId).in("status", ["trialing", "active", "past_due"]).maybeSingle(),
       supabaseAdmin.from("vpn_accounts").select("id, vpn_user_id, node_id, enabled").eq("user_id", userId).maybeSingle(),
     ]);
     if (userError || !user?.user) {
@@ -58,6 +58,7 @@ export async function onRequestGet({ env, request, params }) {
         ? {
             status: sub.status,
             currentPeriodEnd: sub.current_period_end,
+            cancelAtPeriodEnd: sub.cancel_at_period_end,
             stripeCustomerId: sub.stripe_customer_id,
             stripeSubscriptionId: sub.stripe_subscription_id,
           }

@@ -12,6 +12,7 @@ vi.mock("@supabase/supabase-js", () => ({
       eq: vi.fn().mockReturnThis(),
       in: vi.fn().mockReturnThis(),
       or: vi.fn().mockReturnThis(),
+      limit: vi.fn().mockReturnThis(),
       maybeSingle,
     })),
   })),

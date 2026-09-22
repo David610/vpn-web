@@ -80,4 +80,19 @@ describe("GET /api/admin/customers", () => {
     const body = await res.json();
     expect(body.customers).toEqual([]);
   });
+
+  it("deduplicates resubscribers — a user with two subscription rows appears once", async () => {
+    subsResult = {
+      data: [
+        { user_id: "user-1", status: "active", current_period_end: "2026-10-21T00:00:00Z" },
+        { user_id: "user-1", status: "canceled", current_period_end: "2025-10-21T00:00:00Z" },
+      ],
+      error: null,
+    };
+    const res = await onRequestGet({ env, request: makeRequest() });
+    const body = await res.json();
+    expect(res.status).toBe(200);
+    expect(body.customers).toHaveLength(1);
+    expect(body.customers[0].subscriptionStatus).toBe("active");
+  });
 });

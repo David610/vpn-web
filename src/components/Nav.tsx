@@ -9,11 +9,9 @@ export default function Nav() {
   const { session, loading } = useSession();
 
   async function handleLogout() {
-    const { error } = await supabase.auth.signOut();
-    if (error) {
-      console.error("Sign out failed:", error.message);
-      return;
-    }
+    await supabase.auth.signOut().catch((err) => {
+      console.error("Sign out failed:", err.message);
+    });
     window.location.href = "/";
   }
 
