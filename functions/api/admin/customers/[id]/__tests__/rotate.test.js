@@ -50,6 +50,13 @@ describe("POST /api/admin/customers/:id/rotate", () => {
     expect(res.status).toBe(404);
   });
 
+  it("returns 403 for a readonly admin and does not insert a job", async () => {
+    adminMaybeSingle.mockResolvedValue({ data: { role: "readonly" }, error: null });
+    const res = await onRequestPost({ env, request: makeRequest(), params: { id: "user-1" } });
+    expect(res.status).toBe(403);
+    expect(jobInsert).not.toHaveBeenCalled();
+  });
+
   it("inserts a ROTATE_SUBSCRIPTION_TOKEN job and an audit row", async () => {
     const res = await onRequestPost({ env, request: makeRequest(), params: { id: "user-1" } });
     expect(res.status).toBe(200);

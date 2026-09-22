@@ -43,6 +43,13 @@ describe("POST /api/admin/jobs/:id/retry", () => {
     expect(res.status).toBe(400);
   });
 
+  it("returns 403 for a readonly admin and does not insert a job", async () => {
+    adminMaybeSingle.mockResolvedValue({ data: { role: "readonly" }, error: null });
+    const res = await onRequestPost({ env, request: makeRequest(), params: { id: "5" } });
+    expect(res.status).toBe(403);
+    expect(jobInsert).not.toHaveBeenCalled();
+  });
+
   it("inserts a new job copying the failed job's payload, and an audit row", async () => {
     const res = await onRequestPost({ env, request: makeRequest(), params: { id: "5" } });
     expect(res.status).toBe(200);

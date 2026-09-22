@@ -13,6 +13,9 @@ export async function onRequestPost({ env, request, params }) {
 
   const { admin, response } = await requireAdmin(request, supabaseAdmin);
   if (!admin) return response;
+  if (admin.role === "readonly") {
+    return jsonResponse({ error: "Read-only admins cannot perform this action" }, 403);
+  }
 
   const userId = params.id;
 
