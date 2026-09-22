@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
-import { useParams } from "next/navigation";
+import { Suspense, useEffect, useState, useCallback } from "react";
+import { useSearchParams } from "next/navigation";
 import { AdminShell } from "@/components/admin/AdminShell";
 import { StatusBadge } from "@/components/admin/StatusBadge";
 import { ConfirmButton } from "@/components/admin/ConfirmButton";
@@ -16,28 +16,51 @@ type CustomerDetail = {
 };
 
 export default function AdminCustomerDetailPage() {
+  return (
+    <Suspense
+      fallback={
+        <AdminShell>
+          <p>Loading…</p>
+        </AdminShell>
+      }
+    >
+      <AdminCustomerDetailContent />
+    </Suspense>
+  );
+}
+
+function AdminCustomerDetailContent() {
   const { session } = useAdminSession();
-  const params = useParams<{ id: string }>();
+  const searchParams = useSearchParams();
+  const id = searchParams.get("id");
   const [detail, setDetail] = useState<CustomerDetail | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
 
   const load = useCallback(() => {
-    if (!session) return;
-    fetch(`/api/admin/customers/${params.id}`, { headers: { Authorization: `Bearer ${session.access_token}` } })
+    if (!session || !id) return;
+    fetch(`/api/admin/customers/${id}`, { headers: { Authorization: `Bearer ${session.access_token}` } })
       .then((res) => res.json())
       .then(setDetail);
-  }, [session, params.id]);
+  }, [session, id]);
 
   useEffect(load, [load]);
 
   async function callAction(path: string, label: string) {
-    if (!session) return;
-    const res = await fetch(`/api/admin/customers/${params.id}/${path}`, {
+    if (!session || !id) return;
+    const res = await fetch(`/api/admin/customers/${id}/${path}`, {
       method: "POST",
       headers: { Authorization: `Bearer ${session.access_token}` },
     });
     setActionMessage(res.ok ? `${label} job created.` : "Action failed.");
     load();
+  }
+
+  if (!id) {
+    return (
+      <AdminShell>
+        <p>No customer id provided.</p>
+      </AdminShell>
+    );
   }
 
   if (!detail) {

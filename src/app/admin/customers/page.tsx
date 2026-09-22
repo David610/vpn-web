@@ -55,7 +55,7 @@ export default function AdminCustomersPage() {
             {customers.map((c) => (
               <tr key={c.userId} className="border-b">
                 <td className="py-2">
-                  <Link href={`/admin/customers/${c.userId}`} className="text-blue-600 hover:underline">
+                  <Link href={`/admin/customers/detail?id=${c.userId}`} className="text-blue-600 hover:underline">
                     {c.email ?? c.userId}
                   </Link>
                 </td>
