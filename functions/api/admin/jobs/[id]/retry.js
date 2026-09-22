@@ -51,16 +51,17 @@ export async function onRequestPost({ env, request, params }) {
       .eq("idempotency_key", idempotencyKey)
       .maybeSingle();
     if (fetchError) throw new Error(`provisioning_jobs re-fetch failed: ${fetchError.message}`);
+    if (!newJob) throw new Error("provisioning_jobs re-fetch found no row after insert");
 
     await writeAdminAudit(supabaseAdmin, {
       adminUserId: admin.userId,
       action: "admin.retry_job",
       targetType: "provisioning_job",
-      targetId: newJob?.id,
+      targetId: newJob.id,
       metadata: { original_job_id: job.id },
     });
 
-    return jsonResponse({ ok: true, jobId: newJob?.id });
+    return jsonResponse({ ok: true, jobId: newJob.id });
   } catch (err) {
     console.error("admin/jobs/:id/retry: unexpected error:", err.message);
     return jsonResponse({ error: "Internal error" }, 500);

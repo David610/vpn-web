@@ -53,4 +53,17 @@ describe("POST /api/admin/jobs/:id/retry", () => {
       expect.objectContaining({ action: "admin.retry_job" })
     );
   });
+
+  it("returns 500 when the post-insert re-fetch finds no row", async () => {
+    jobMaybeSingle
+      .mockReset()
+      .mockResolvedValueOnce({
+        data: { id: 5, job_type: "CREATE_USER", status: "failed", node_id: "node-1", vpn_account_id: 1, payload: { user_id: "user-1" } },
+        error: null,
+      })
+      .mockResolvedValueOnce({ data: null, error: null });
+    const res = await onRequestPost({ env, request: makeRequest(), params: { id: "5" } });
+    expect(res.status).toBe(500);
+    expect(auditInsert).not.toHaveBeenCalled();
+  });
 });

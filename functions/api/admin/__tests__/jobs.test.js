@@ -29,6 +29,7 @@ beforeEach(() => {
     select: vi.fn().mockReturnThis(),
     order: vi.fn().mockReturnThis(),
     eq: vi.fn().mockReturnThis(),
+    limit: vi.fn().mockReturnThis(),
     then: (resolve) =>
       resolve({
         data: [{ id: 5, job_type: "CREATE_USER", status: "failed", node_id: "node-1", vpn_account_id: 1, created_at: "t1", claimed_at: "t2", completed_at: null, result: { subscription_url: "secret" } }],
@@ -49,5 +50,19 @@ describe("GET /api/admin/jobs", () => {
     const body = await res.json();
     expect(res.status).toBe(200);
     expect(body.jobs[0].result.subscription_url).toBe("[redacted]");
+  });
+
+  it("caps the query at 200 rows", async () => {
+    const limitSpy = vi.fn().mockReturnThis();
+    jobsQuery = () => ({
+      select: vi.fn().mockReturnThis(),
+      order: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      limit: limitSpy,
+      then: (resolve) => resolve({ data: [], error: null }),
+    });
+    const res = await onRequestGet({ env, request: makeRequest() });
+    expect(res.status).toBe(200);
+    expect(limitSpy).toHaveBeenCalledWith(200);
   });
 });

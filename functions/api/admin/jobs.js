@@ -21,7 +21,8 @@ export async function onRequestGet({ env, request }) {
     let query = supabaseAdmin
       .from("provisioning_jobs")
       .select("id, job_type, status, node_id, vpn_account_id, created_at, claimed_at, completed_at, result")
-      .order("created_at", { ascending: false });
+      .order("created_at", { ascending: false })
+      .limit(200);
     if (status) query = query.eq("status", status);
 
     const { data, error } = await query;
