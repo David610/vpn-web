@@ -10,8 +10,21 @@ import { adminFetch } from "@/lib/adminFetch";
 
 type CustomerDetail = {
   userId: string;
+  // Null only for a user with no account membership at all, which the
+  // handle_new_user trigger makes impossible for anyone created after the
+  // customer_accounts migration.
+  accountId: string | null;
+  accountRole: string | null;
+  memberCount: number;
   email: string | null;
-  subscription: { status: string; currentPeriodEnd: string | null; stripeCustomerId: string | null } | null;
+  subscription: {
+    status: string;
+    currentPeriodEnd: string | null;
+    cancelAtPeriodEnd: boolean | null;
+    // Carried on customer_accounts, not on the subscription: the billing
+    // portal needs it even once a subscription has lapsed.
+    stripeCustomerId: string | null;
+  } | null;
   vpnAccount: { id: number; vpnUserId: string; nodeId: string; enabled: boolean } | null;
   jobs: { id: number; jobType: string; status: string; createdAt: string }[];
 };

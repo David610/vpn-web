@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const getClaims = vi.fn();
 const adminMaybeSingle = vi.fn();
 const listUsers = vi.fn();
+let membersResult = { data: [], error: null };
 let subsResult = { data: [], error: null };
 let vpnResult = { data: [], error: null };
 
@@ -12,6 +13,9 @@ vi.mock("@supabase/supabase-js", () => ({
     from: vi.fn((table) => {
       if (table === "admin_users") {
         return { select: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(), maybeSingle: adminMaybeSingle };
+      }
+      if (table === "account_members") {
+        return { select: vi.fn(() => Promise.resolve(membersResult)) };
       }
       if (table === "subscriptions") {
         return { select: vi.fn(() => ({ order: vi.fn(() => Promise.resolve(subsResult)) })) };
@@ -40,8 +44,12 @@ beforeEach(() => {
     data: { users: [{ id: "user-1", email: "alice@example.com" }] },
     error: null,
   });
+  membersResult = {
+    data: [{ account_id: "acct-1", user_id: "user-1", role: "owner" }],
+    error: null,
+  };
   subsResult = {
-    data: [{ user_id: "user-1", status: "active", current_period_end: "2026-10-21T00:00:00Z" }],
+    data: [{ account_id: "acct-1", status: "active", current_period_end: "2026-10-21T00:00:00Z" }],
     error: null,
   };
   vpnResult = {
@@ -57,13 +65,16 @@ describe("GET /api/admin/customers", () => {
     expect(res.status).toBe(401);
   });
 
-  it("merges subscriptions, vpn_accounts, and auth emails into one row per customer", async () => {
+  it("merges members, subscriptions, vpn_accounts and auth emails into one row per person", async () => {
     const res = await onRequestGet({ env, request: makeRequest() });
     const body = await res.json();
     expect(res.status).toBe(200);
     expect(body.customers).toEqual([
       {
         userId: "user-1",
+        accountId: "acct-1",
+        accountRole: "owner",
+        memberCount: 1,
         email: "alice@example.com",
         subscriptionStatus: "active",
         currentPeriodEnd: "2026-10-21T00:00:00Z",
@@ -81,18 +92,53 @@ describe("GET /api/admin/customers", () => {
     expect(body.customers).toEqual([]);
   });
 
-  it("deduplicates resubscribers — a user with two subscription rows appears once", async () => {
+  it("lists a resubscriber once, showing the most recent subscription", async () => {
+    // An account that lapsed and resubscribed keeps its old canceled rows.
+    // Listing is driven by membership, so the person appears once, and the
+    // created_at-descending order makes the live row the one reported.
     subsResult = {
       data: [
-        { user_id: "user-1", status: "active", current_period_end: "2026-10-21T00:00:00Z" },
-        { user_id: "user-1", status: "canceled", current_period_end: "2025-10-21T00:00:00Z" },
+        { account_id: "acct-1", status: "active", current_period_end: "2026-12-01T00:00:00Z" },
+        { account_id: "acct-1", status: "canceled", current_period_end: "2026-06-01T00:00:00Z" },
       ],
       error: null,
     };
     const res = await onRequestGet({ env, request: makeRequest() });
     const body = await res.json();
-    expect(res.status).toBe(200);
     expect(body.customers).toHaveLength(1);
     expect(body.customers[0].subscriptionStatus).toBe("active");
+    expect(body.customers[0].currentPeriodEnd).toBe("2026-12-01T00:00:00Z");
+  });
+
+  it("lists every seat on a shared account, each with that account's status", async () => {
+    membersResult = {
+      data: [
+        { account_id: "acct-1", user_id: "user-1", role: "owner" },
+        { account_id: "acct-1", user_id: "user-2", role: "member" },
+      ],
+      error: null,
+    };
+    listUsers.mockResolvedValue({
+      data: {
+        users: [
+          { id: "user-1", email: "alice@example.com" },
+          { id: "user-2", email: "bob@example.com" },
+        ],
+      },
+      error: null,
+    });
+    const res = await onRequestGet({ env, request: makeRequest() });
+    const body = await res.json();
+    expect(body.customers).toHaveLength(2);
+    expect(body.customers.map((c) => c.email)).toEqual([
+      "alice@example.com",
+      "bob@example.com",
+    ]);
+    // The member inherits the owner's billing status and both report the
+    // same seat count.
+    expect(body.customers.every((c) => c.subscriptionStatus === "active")).toBe(true);
+    expect(body.customers.every((c) => c.memberCount === 2)).toBe(true);
+    // The member has no VPN account provisioned yet.
+    expect(body.customers[1].vpnUserId).toBeNull();
   });
 });

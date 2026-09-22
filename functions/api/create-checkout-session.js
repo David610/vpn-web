@@ -1,5 +1,6 @@
 import Stripe from "stripe";
 import { createClient } from "@supabase/supabase-js";
+import { getAccountForUser } from "../lib/accounts.js";
 
 export async function onRequestPost({ env, request }) {
   const authHeader = request.headers.get("Authorization");
@@ -44,11 +45,22 @@ export async function onRequestPost({ env, request }) {
     // the last 24h so a stuck one doesn't permanently block the user from
     // ever subscribing again; real active/trialing/past_due subscriptions
     // are never time-limited.
+    const account = await getAccountForUser(supabaseAdmin, user.id);
+    if (!account) {
+      console.error(
+        `create-checkout-session: user ${user.id} has no account_members row`
+      );
+      return new Response(JSON.stringify({ error: "Something went wrong" }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
     const recentCutoffIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
     const { data: existingSubscription, error: existingSubError } = await supabaseAdmin
       .from("subscriptions")
       .select("status")
-      .eq("user_id", user.id)
+      .eq("account_id", account.accountId)
       .or(
         `status.in.(trialing,active,past_due),and(status.eq.incomplete,created_at.gt.${recentCutoffIso})`
       )

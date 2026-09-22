@@ -2,19 +2,31 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const getUser = vi.fn();
 const maybeSingle = vi.fn();
+const memberMaybeSingle = vi.fn();
 const sessionsCreate = vi.fn();
 
 vi.mock("@supabase/supabase-js", () => ({
   createClient: vi.fn(() => ({
     auth: { getUser },
-    from: vi.fn(() => ({
-      select: vi.fn().mockReturnThis(),
-      eq: vi.fn().mockReturnThis(),
-      in: vi.fn().mockReturnThis(),
-      or: vi.fn().mockReturnThis(),
-      limit: vi.fn().mockReturnThis(),
-      maybeSingle,
-    })),
+    from: vi.fn((table) => {
+      // getAccountForUser resolves the caller's account before the
+      // subscription dedup check, so the two tables need separate results.
+      if (table === "account_members") {
+        return {
+          select: vi.fn().mockReturnThis(),
+          eq: vi.fn().mockReturnThis(),
+          maybeSingle: memberMaybeSingle,
+        };
+      }
+      return {
+        select: vi.fn().mockReturnThis(),
+        eq: vi.fn().mockReturnThis(),
+        in: vi.fn().mockReturnThis(),
+        or: vi.fn().mockReturnThis(),
+        limit: vi.fn().mockReturnThis(),
+        maybeSingle,
+      };
+    }),
   })),
 }));
 
@@ -48,6 +60,10 @@ const env = {
 beforeEach(() => {
   getUser.mockReset();
   maybeSingle.mockReset();
+  memberMaybeSingle.mockReset().mockResolvedValue({
+    data: { account_id: "acct-1", role: "owner" },
+    error: null,
+  });
   sessionsCreate.mockReset();
 });
 

@@ -9,8 +9,13 @@ import { adminFetch } from "@/lib/adminFetch";
 
 type Customer = {
   userId: string;
+  accountId: string;
+  accountRole: string;
+  memberCount: number;
   email: string | null;
-  subscriptionStatus: string;
+  // Null for a user whose account has never had a subscription row — the
+  // listing is driven by membership, so those people appear here too.
+  subscriptionStatus: string | null;
   currentPeriodEnd: string | null;
   vpnAccountId: number | null;
   nodeId: string | null;
@@ -49,6 +54,7 @@ export default function AdminCustomersPage() {
           <thead>
             <tr className="border-b text-gray-500">
               <th className="py-2">Customer</th>
+              <th>Seat</th>
               <th>Subscription</th>
               <th>VPN</th>
               <th>Node</th>
@@ -63,7 +69,12 @@ export default function AdminCustomersPage() {
                     {c.email ?? c.userId}
                   </Link>
                 </td>
-                <td><StatusBadge status={c.subscriptionStatus} /></td>
+                <td className="text-gray-500">
+                  {c.accountRole === "owner" && c.memberCount > 1
+                    ? `owner of ${c.memberCount}`
+                    : c.accountRole}
+                </td>
+                <td>{c.subscriptionStatus ? <StatusBadge status={c.subscriptionStatus} /> : "—"}</td>
                 <td>{c.vpnAccountId ? <StatusBadge status={c.enabled ? "active" : "canceled"} /> : "—"}</td>
                 <td>{c.nodeId ?? "—"}</td>
                 <td>{c.currentPeriodEnd ? new Date(c.currentPeriodEnd).toLocaleDateString() : "—"}</td>
