@@ -92,6 +92,11 @@ export default function LoginPage() {
                 {submitting ? "Logging in…" : "Log in"}
               </button>
               <p className="text-tiny">
+                <Link href="/forgot-password" className="text-link">
+                  Forgot your password?
+                </Link>
+              </p>
+              <p className="text-tiny">
                 No account yet?{" "}
                 <Link href="/signup" className="text-link">
                   Sign up
