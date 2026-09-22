@@ -58,4 +58,13 @@ describe("GET /api/admin/nodes", () => {
     const body = await res.json();
     expect(body.nodes[0].status).toBe("offline");
   });
+
+  it("classifies a revoked node as revoked regardless of last_seen_at", async () => {
+    const recent = new Date(Date.now() - 10_000).toISOString();
+    const revokedDate = new Date(Date.now() - 30_000).toISOString();
+    nodesSelect = vi.fn().mockResolvedValue({ data: [{ node_id: "node-1", last_seen_at: recent, revoked_at: revokedDate }], error: null });
+    const res = await onRequestGet({ env, request: makeRequest() });
+    const body = await res.json();
+    expect(body.nodes[0].status).toBe("revoked");
+  });
 });
