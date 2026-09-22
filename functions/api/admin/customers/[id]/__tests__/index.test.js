@@ -1,13 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const getUser = vi.fn();
+const getClaims = vi.fn();
 const adminMaybeSingle = vi.fn();
 const getUserById = vi.fn();
 let subMaybeSingle, vpnMaybeSingle, jobsOrder;
 
 vi.mock("@supabase/supabase-js", () => ({
   createClient: vi.fn(() => ({
-    auth: { getUser, admin: { getUserById } },
+    auth: { getClaims, admin: { getUserById } },
     from: vi.fn((table) => {
       if (table === "admin_users") {
         return { select: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(), maybeSingle: adminMaybeSingle };
@@ -36,7 +36,7 @@ function makeRequest() {
 }
 
 beforeEach(() => {
-  getUser.mockReset().mockResolvedValue({ data: { user: { id: "admin-1" } }, error: null });
+  getClaims.mockReset().mockResolvedValue({ data: { claims: { sub: "admin-1", aal: "aal2" } }, error: null });
   adminMaybeSingle.mockReset().mockResolvedValue({ data: { role: "owner" }, error: null });
   getUserById.mockReset().mockResolvedValue({ data: { user: { email: "alice@example.com" } }, error: null });
   subMaybeSingle = vi.fn().mockResolvedValue({ data: { status: "active", current_period_end: "2026-10-21T00:00:00Z" }, error: null });
