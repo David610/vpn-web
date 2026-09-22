@@ -67,4 +67,16 @@ describe("GET /api/admin/customers/:id", () => {
     const body = await res.json();
     expect(body.vpnAccount).toBeNull();
   });
+
+  it("returns 500 (not a false null vpnAccount) when the vpn_accounts query errors", async () => {
+    vpnMaybeSingle.mockResolvedValue({ data: null, error: { message: "db unavailable" } });
+    const res = await onRequestGet({ env, request: makeRequest(), params: { id: "user-1" } });
+    expect(res.status).toBe(500);
+  });
+
+  it("returns 500 when the subscriptions query errors", async () => {
+    subMaybeSingle.mockResolvedValue({ data: null, error: { message: "db unavailable" } });
+    const res = await onRequestGet({ env, request: makeRequest(), params: { id: "user-1" } });
+    expect(res.status).toBe(500);
+  });
 });

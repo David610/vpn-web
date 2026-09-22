@@ -17,7 +17,11 @@ export async function onRequestGet({ env, request, params }) {
   const userId = params.id;
 
   try {
-    const [{ data: user, error: userError }, { data: sub }, { data: vpnAccount }] = await Promise.all([
+    const [
+      { data: user, error: userError },
+      { data: sub, error: subError },
+      { data: vpnAccount, error: vpnError },
+    ] = await Promise.all([
       supabaseAdmin.auth.admin.getUserById(userId),
       supabaseAdmin.from("subscriptions").select("status, current_period_end, stripe_customer_id, stripe_subscription_id").eq("user_id", userId).maybeSingle(),
       supabaseAdmin.from("vpn_accounts").select("id, vpn_user_id, node_id, enabled").eq("user_id", userId).maybeSingle(),
@@ -25,6 +29,8 @@ export async function onRequestGet({ env, request, params }) {
     if (userError || !user?.user) {
       return jsonResponse({ error: "Customer not found" }, 404);
     }
+    if (subError) throw new Error(`subscriptions query failed: ${subError.message}`);
+    if (vpnError) throw new Error(`vpn_accounts query failed: ${vpnError.message}`);
 
     let jobs = [];
     if (vpnAccount) {
