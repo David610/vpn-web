@@ -10,7 +10,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
 
   useEffect(() => {
-    if (!loading && !session) router.replace("/login");
+    if (!loading && !session) router.replace("/admin/login");
   }, [loading, session, router]);
 
   if (loading) return <div className="p-8">Loading…</div>;
