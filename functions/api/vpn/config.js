@@ -27,20 +27,19 @@ export async function onRequestGet({ env, request }) {
       return noStoreJson({ error: "Invalid or expired token" }, 401);
     }
 
-    // Narrowed to status = 'active' before .maybeSingle(): subscriptions
+    // Use .in() with all live statuses before .maybeSingle(): subscriptions
     // has no unique constraint on user_id alone (a canceled-then-
     // resubscribed customer can have 2+ rows), only a partial unique
     // index on (user_id) where status in ('trialing','active','past_due')
     // (subscriptions_user_active_uniq). Querying user_id alone can match
-    // multiple rows for a real (not corner-case) flow, and .maybeSingle()
-    // throws on a multi-row result. Adding status = 'active' guarantees
-    // at most one match via that same partial index, so this can't become
-    // a new multi-row hazard itself.
+    // multiple rows; .in() narrowed to these three statuses is guaranteed
+    // at most one match via that same partial index.
+    // trialing and past_due are live billing states entitled to VPN access.
     const { data: subscription, error: subError } = await supabaseAdmin
       .from("subscriptions")
       .select("status, current_period_end, cancel_at_period_end")
       .eq("user_id", user.id)
-      .eq("status", "active")
+      .in("status", ["active", "trialing", "past_due"])
       .maybeSingle();
     if (subError) throw new Error(`subscriptions lookup failed: ${subError.message}`);
     if (!subscription) {

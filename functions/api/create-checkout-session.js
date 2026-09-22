@@ -52,6 +52,7 @@ export async function onRequestPost({ env, request }) {
       .or(
         `status.in.(trialing,active,past_due),and(status.eq.incomplete,created_at.gt.${recentCutoffIso})`
       )
+      .limit(1)
       .maybeSingle();
     if (existingSubError) {
       console.error("create-checkout-session: subscription lookup failed:", existingSubError.message);

@@ -32,7 +32,7 @@ function makeRequest() {
 beforeEach(() => {
   getUser.mockReset().mockResolvedValue({ data: { user: { id: "admin-1" } }, error: null });
   adminMaybeSingle.mockReset().mockResolvedValue({ data: { role: "owner" }, error: null });
-  vpnMaybeSingle.mockReset().mockResolvedValue({ data: { id: 1, node_id: "node-1" }, error: null });
+  vpnMaybeSingle.mockReset().mockResolvedValue({ data: { id: 1, node_id: "node-1", vpn_user_id: "vpn-user-test-1" }, error: null });
   jobInsert.mockReset().mockResolvedValue({ error: null });
   auditInsert.mockReset().mockResolvedValue({ error: null });
 });
@@ -61,7 +61,7 @@ describe("POST /api/admin/customers/:id/enable", () => {
     const res = await onRequestPost({ env, request: makeRequest(), params: { id: "user-1" } });
     expect(res.status).toBe(200);
     expect(jobInsert).toHaveBeenCalledWith(
-      expect.objectContaining({ job_type: "ENABLE_USER", node_id: "node-1", vpn_account_id: 1 })
+      expect.objectContaining({ job_type: "ENABLE_USER", node_id: "node-1", vpn_account_id: 1, payload: { vpn_user_id: "vpn-user-test-1" } })
     );
     expect(auditInsert).toHaveBeenCalledWith(
       expect.objectContaining({ action: "admin.enable_user", target_type: "vpn_account", target_id: "1" })
