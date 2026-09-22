@@ -15,15 +15,15 @@ export async function onRequestGet({ env, request }) {
 
   try {
     const [
-      { count: activeCount },
-      { count: pastDueCount },
-      { count: canceledCount },
-      { count: totalSubs },
-      { count: vpnAccountCount },
-      { count: pendingJobs },
-      { count: claimedJobs },
-      { count: failedJobs },
-      { data: nodes },
+      { count: activeCount, error: activeError },
+      { count: pastDueCount, error: pastDueError },
+      { count: canceledCount, error: canceledError },
+      { count: totalSubs, error: totalSubsError },
+      { count: vpnAccountCount, error: vpnAccountError },
+      { count: pendingJobs, error: pendingJobsError },
+      { count: claimedJobs, error: claimedJobsError },
+      { count: failedJobs, error: failedJobsError },
+      { data: nodes, error: nodesError },
     ] = await Promise.all([
       supabaseAdmin.from("subscriptions").select("id", { count: "exact", head: true }).in("status", ["trialing", "active"]),
       supabaseAdmin.from("subscriptions").select("id", { count: "exact", head: true }).eq("status", "past_due"),
@@ -35,6 +35,15 @@ export async function onRequestGet({ env, request }) {
       supabaseAdmin.from("provisioning_jobs").select("id", { count: "exact", head: true }).eq("status", "failed"),
       supabaseAdmin.from("nodes").select("last_seen_at, revoked_at"),
     ]);
+    if (activeError) throw new Error(`active subscriptions count failed: ${activeError.message}`);
+    if (pastDueError) throw new Error(`past_due subscriptions count failed: ${pastDueError.message}`);
+    if (canceledError) throw new Error(`canceled subscriptions count failed: ${canceledError.message}`);
+    if (totalSubsError) throw new Error(`total subscriptions count failed: ${totalSubsError.message}`);
+    if (vpnAccountError) throw new Error(`vpn_accounts count failed: ${vpnAccountError.message}`);
+    if (pendingJobsError) throw new Error(`pending jobs count failed: ${pendingJobsError.message}`);
+    if (claimedJobsError) throw new Error(`claimed jobs count failed: ${claimedJobsError.message}`);
+    if (failedJobsError) throw new Error(`failed jobs count failed: ${failedJobsError.message}`);
+    if (nodesError) throw new Error(`nodes query failed: ${nodesError.message}`);
 
     const now = Date.now();
     const onlineCount = (nodes ?? []).filter(

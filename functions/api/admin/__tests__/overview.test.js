@@ -105,4 +105,45 @@ describe("GET /api/admin/overview", () => {
       nodes: { online: 1, offline: 2 },
     });
   });
+
+  it("returns 500 (not a zeroed/empty success response) when one query errors", async () => {
+    // subscriptions: three .eq/.in-filtered count queries plus one
+    // unfiltered total — all succeed here.
+    countQueries.subscriptions = () => ({
+      select: vi.fn(() =>
+        chainable(({ in: inArgs, eq: eqArgs }) => {
+          if (inArgs && inArgs[0] === "status") return { count: 12, data: null, error: null };
+          if (eqArgs && eqArgs[1] === "past_due") return { count: 3, data: null, error: null };
+          if (eqArgs && eqArgs[1] === "canceled") return { count: 2, data: null, error: null };
+          return { count: 20, data: null, error: null };
+        })
+      ),
+    });
+
+    // vpn_accounts: simulate a PostgREST-level failure — resolves with
+    // { data: null, error } rather than rejecting, as the real client does.
+    countQueries.vpn_accounts = () => ({
+      select: vi.fn(() => chainable(() => ({ count: null, data: null, error: { message: "connection reset" } }))),
+    });
+
+    countQueries.provisioning_jobs = () => ({
+      select: vi.fn(() =>
+        chainable(({ eq: eqArgs }) => {
+          if (eqArgs && eqArgs[1] === "pending") return { count: 4, data: null, error: null };
+          if (eqArgs && eqArgs[1] === "claimed") return { count: 1, data: null, error: null };
+          if (eqArgs && eqArgs[1] === "failed") return { count: 2, data: null, error: null };
+          return { count: 0, data: null, error: null };
+        })
+      ),
+    });
+
+    countQueries.nodes = () => ({
+      select: vi.fn(() => chainable(() => ({ count: null, data: [], error: null }))),
+    });
+
+    const res = await onRequestGet({ env, request: makeRequest() });
+    expect(res.status).toBe(500);
+    const body = await res.json();
+    expect(body).toEqual({ error: "Internal error" });
+  });
 });
