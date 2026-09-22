@@ -6,16 +6,24 @@ import { useAdminSession } from "@/hooks/useAdminSession";
 import { AdminNav } from "./AdminNav";
 
 export function AdminShell({ children }: { children: React.ReactNode }) {
-  const { session, isAdmin, loading } = useAdminSession();
+  const { session, access, loading } = useAdminSession();
   const router = useRouter();
 
   useEffect(() => {
-    if (!loading && !session) router.replace("/admin/login");
-  }, [loading, session, router]);
+    if (loading) return;
+    if (!session) {
+      router.replace("/admin/login");
+      return;
+    }
+    // A real admin on a password-only session: send them to step up rather
+    // than showing an error. /admin/login works out whether that means
+    // entering a TOTP code or enrolling a first factor.
+    if (access === "mfa-required") router.replace("/admin/login");
+  }, [loading, session, access, router]);
 
   if (loading) return <div className="p-8">Loading…</div>;
-  if (!session) return null;
-  if (isAdmin === false) {
+  if (!session || access === "mfa-required") return null;
+  if (access === "denied") {
     return <div className="p-8 text-red-600">You do not have admin access.</div>;
   }
 
