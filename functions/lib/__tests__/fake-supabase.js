@@ -15,13 +15,14 @@ import { vi } from "vitest";
  * handlers use and throws on anything else, so an untested query shape fails
  * loudly instead of silently returning [].
  */
-export function makeFakeSupabase(seed = {}) {
+export function makeFakeSupabase(seed = {}, options = {}) {
   const tables = {
     customer_accounts: [],
     account_members: [],
     subscriptions: [],
     vpn_accounts: [],
     provisioning_jobs: [],
+    member_invites: [],
     ...structuredClone(seed),
   };
 
@@ -91,6 +92,16 @@ export function makeFakeSupabase(seed = {}) {
         state.filters.push((r) => vals.includes(r[col]));
         return chain;
       },
+      is(col, val) {
+        // PostgREST .is(col, null) — the null checks the invite queries use
+        // to mean "still outstanding".
+        state.filters.push((r) => (r[col] ?? null) === val);
+        return chain;
+      },
+      gt(col, val) {
+        state.filters.push((r) => r[col] > val);
+        return chain;
+      },
       like(col, pattern) {
         const rx = new RegExp(`^${pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/%/g, ".*")}$`);
         state.filters.push((r) => rx.test(r[col]));
@@ -104,12 +115,49 @@ export function makeFakeSupabase(seed = {}) {
         return chain;
       },
       maybeSingle: () => Promise.resolve(exec(true)),
+      single: () => {
+        const result = exec(true);
+        if (!result.error && !result.data) {
+          return Promise.resolve({
+            data: null,
+            error: { code: "PGRST116", message: "no rows returned" },
+          });
+        }
+        // An insert resolves to { data: [row] }; .single() unwraps it.
+        if (Array.isArray(result.data)) {
+          return Promise.resolve({ data: result.data[0] ?? null, error: result.error });
+        }
+        return Promise.resolve(result);
+      },
       then: (resolve, reject) => Promise.resolve(exec(false)).then(resolve, reject),
     };
     return chain;
   }
 
-  return { from: vi.fn(from), _tables: tables };
+  // An insert's exec() returns { data: [row] }; .single() needs the row.
+  const rpcHandlers = options.rpc ?? {};
+
+  return {
+    from: vi.fn(from),
+    rpc: vi.fn(async (name, args) => {
+      const handler = rpcHandlers[name];
+      if (!handler) throw new Error(`unstubbed rpc ${name}`);
+      return handler(args, tables);
+    }),
+    auth: {
+      getUser: vi.fn(async () => ({
+        data: { user: options.user ?? { id: "user-1", email: "owner@example.com" } },
+        error: options.user === null ? { message: "bad token" } : null,
+      })),
+      admin: {
+        listUsers: vi.fn(async () => ({
+          data: { users: options.users ?? [] },
+          error: null,
+        })),
+      },
+    },
+    _tables: tables,
+  };
 }
 
 /**
