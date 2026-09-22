@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { AdminShell } from "@/components/admin/AdminShell";
 import { MetricCard } from "@/components/admin/MetricCard";
 import { useAdminSession } from "@/hooks/useAdminSession";
+import { adminFetch } from "@/lib/adminFetch";
 
 type Overview = {
   customers: { total: number; active: number; past_due: number; canceled: number };
@@ -15,18 +16,21 @@ type Overview = {
 export default function AdminOverviewPage() {
   const { session } = useAdminSession();
   const [overview, setOverview] = useState<Overview | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!session) return;
-    fetch("/api/admin/overview", { headers: { Authorization: `Bearer ${session.access_token}` } })
-      .then((res) => res.json())
-      .then(setOverview);
+    adminFetch<Overview>("/api/admin/overview", session.access_token)
+      .then(setOverview)
+      .catch((err) => setError(err.message));
   }, [session]);
 
   return (
     <AdminShell>
       <h1 className="mb-6 text-xl font-semibold">Overview</h1>
-      {!overview ? (
+      {error ? (
+        <p className="text-red-600">{error}</p>
+      ) : !overview ? (
         <p>Loading…</p>
       ) : (
         <div className="grid grid-cols-2 gap-4 md:grid-cols-4">

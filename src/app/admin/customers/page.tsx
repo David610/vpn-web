@@ -5,6 +5,7 @@ import Link from "next/link";
 import { AdminShell } from "@/components/admin/AdminShell";
 import { StatusBadge } from "@/components/admin/StatusBadge";
 import { useAdminSession } from "@/hooks/useAdminSession";
+import { adminFetch } from "@/lib/adminFetch";
 
 type Customer = {
   userId: string;
@@ -20,13 +21,14 @@ export default function AdminCustomersPage() {
   const { session } = useAdminSession();
   const [customers, setCustomers] = useState<Customer[] | null>(null);
   const [q, setQ] = useState("");
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!session) return;
     const url = q ? `/api/admin/customers?q=${encodeURIComponent(q)}` : "/api/admin/customers";
-    fetch(url, { headers: { Authorization: `Bearer ${session.access_token}` } })
-      .then((res) => res.json())
-      .then((body) => setCustomers(body.customers));
+    adminFetch<{ customers: Customer[] }>(url, session.access_token)
+      .then((body) => setCustomers(body.customers))
+      .catch((err) => setError(err.message));
   }, [session, q]);
 
   return (
@@ -38,7 +40,9 @@ export default function AdminCustomersPage() {
         value={q}
         onChange={(e) => setQ(e.target.value)}
       />
-      {!customers ? (
+      {error ? (
+        <p className="text-red-600">{error}</p>
+      ) : !customers ? (
         <p>Loading…</p>
       ) : (
         <table className="w-full text-left text-sm">

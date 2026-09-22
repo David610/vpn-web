@@ -4,24 +4,28 @@ import { useEffect, useState } from "react";
 import { AdminShell } from "@/components/admin/AdminShell";
 import { StatusBadge } from "@/components/admin/StatusBadge";
 import { useAdminSession } from "@/hooks/useAdminSession";
+import { adminFetch } from "@/lib/adminFetch";
 
 type Node = { nodeId: string; status: string; lastSeenAt: string | null };
 
 export default function AdminNodesPage() {
   const { session } = useAdminSession();
   const [nodes, setNodes] = useState<Node[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!session) return;
-    fetch("/api/admin/nodes", { headers: { Authorization: `Bearer ${session.access_token}` } })
-      .then((res) => res.json())
-      .then((body) => setNodes(body.nodes));
+    adminFetch<{ nodes: Node[] }>("/api/admin/nodes", session.access_token)
+      .then((body) => setNodes(body.nodes))
+      .catch((err) => setError(err.message));
   }, [session]);
 
   return (
     <AdminShell>
       <h1 className="mb-4 text-xl font-semibold">Nodes</h1>
-      {!nodes ? (
+      {error ? (
+        <p className="text-red-600">{error}</p>
+      ) : !nodes ? (
         <p>Loading…</p>
       ) : (
         <table className="w-full text-left text-sm">

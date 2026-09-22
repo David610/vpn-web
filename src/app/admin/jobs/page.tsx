@@ -5,6 +5,7 @@ import { AdminShell } from "@/components/admin/AdminShell";
 import { StatusBadge } from "@/components/admin/StatusBadge";
 import { ConfirmButton } from "@/components/admin/ConfirmButton";
 import { useAdminSession } from "@/hooks/useAdminSession";
+import { adminFetch } from "@/lib/adminFetch";
 
 type Job = {
   id: number;
@@ -19,23 +20,30 @@ export default function AdminJobsPage() {
   const { session } = useAdminSession();
   const [jobs, setJobs] = useState<Job[] | null>(null);
   const [statusFilter, setStatusFilter] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [actionMessage, setActionMessage] = useState<string | null>(null);
 
   const load = useCallback(() => {
     if (!session) return;
     const url = statusFilter ? `/api/admin/jobs?status=${statusFilter}` : "/api/admin/jobs";
-    fetch(url, { headers: { Authorization: `Bearer ${session.access_token}` } })
-      .then((res) => res.json())
-      .then((body) => setJobs(body.jobs));
+    adminFetch<{ jobs: Job[] }>(url, session.access_token)
+      .then((body) => {
+        setJobs(body.jobs);
+        setError(null);
+      })
+      .catch((err) => setError(err.message));
   }, [session, statusFilter]);
 
   useEffect(load, [load]);
 
   async function retry(jobId: number) {
     if (!session) return;
-    await fetch(`/api/admin/jobs/${jobId}/retry`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${session.access_token}` },
-    });
+    try {
+      await adminFetch(`/api/admin/jobs/${jobId}/retry`, session.access_token, { method: "POST" });
+      setActionMessage(`Job #${jobId} retried.`);
+    } catch (err) {
+      setActionMessage(err instanceof Error ? err.message : "Retry failed.");
+    }
     load();
   }
 
@@ -49,7 +57,10 @@ export default function AdminJobsPage() {
         <option value="done">Done</option>
         <option value="failed">Failed</option>
       </select>
-      {!jobs ? (
+      {actionMessage && <p className="mb-4 text-sm text-gray-600">{actionMessage}</p>}
+      {error ? (
+        <p className="text-red-600">{error}</p>
+      ) : !jobs ? (
         <p>Loading…</p>
       ) : (
         <table className="w-full text-left text-sm">

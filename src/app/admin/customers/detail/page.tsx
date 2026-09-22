@@ -6,6 +6,7 @@ import { AdminShell } from "@/components/admin/AdminShell";
 import { StatusBadge } from "@/components/admin/StatusBadge";
 import { ConfirmButton } from "@/components/admin/ConfirmButton";
 import { useAdminSession } from "@/hooks/useAdminSession";
+import { adminFetch } from "@/lib/adminFetch";
 
 type CustomerDetail = {
   userId: string;
@@ -35,23 +36,28 @@ function AdminCustomerDetailContent() {
   const id = searchParams.get("id");
   const [detail, setDetail] = useState<CustomerDetail | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(() => {
     if (!session || !id) return;
-    fetch(`/api/admin/customers/${id}`, { headers: { Authorization: `Bearer ${session.access_token}` } })
-      .then((res) => res.json())
-      .then(setDetail);
+    adminFetch<CustomerDetail>(`/api/admin/customers/${id}`, session.access_token)
+      .then((body) => {
+        setDetail(body);
+        setError(null);
+      })
+      .catch((err) => setError(err.message));
   }, [session, id]);
 
   useEffect(load, [load]);
 
   async function callAction(path: string, label: string) {
     if (!session || !id) return;
-    const res = await fetch(`/api/admin/customers/${id}/${path}`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${session.access_token}` },
-    });
-    setActionMessage(res.ok ? `${label} job created.` : "Action failed.");
+    try {
+      await adminFetch(`/api/admin/customers/${id}/${path}`, session.access_token, { method: "POST" });
+      setActionMessage(`${label} job created.`);
+    } catch (err) {
+      setActionMessage(err instanceof Error ? err.message : "Action failed.");
+    }
     load();
   }
 
@@ -59,6 +65,14 @@ function AdminCustomerDetailContent() {
     return (
       <AdminShell>
         <p>No customer id provided.</p>
+      </AdminShell>
+    );
+  }
+
+  if (error) {
+    return (
+      <AdminShell>
+        <p className="text-red-600">{error}</p>
       </AdminShell>
     );
   }

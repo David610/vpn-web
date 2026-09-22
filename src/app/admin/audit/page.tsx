@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { AdminShell } from "@/components/admin/AdminShell";
 import { useAdminSession } from "@/hooks/useAdminSession";
+import { adminFetch } from "@/lib/adminFetch";
 
 type AuditEntry = {
   id: number;
@@ -16,18 +17,21 @@ type AuditEntry = {
 export default function AdminAuditPage() {
   const { session } = useAdminSession();
   const [entries, setEntries] = useState<AuditEntry[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!session) return;
-    fetch("/api/admin/audit", { headers: { Authorization: `Bearer ${session.access_token}` } })
-      .then((res) => res.json())
-      .then((body) => setEntries(body.entries));
+    adminFetch<{ entries: AuditEntry[] }>("/api/admin/audit", session.access_token)
+      .then((body) => setEntries(body.entries))
+      .catch((err) => setError(err.message));
   }, [session]);
 
   return (
     <AdminShell>
       <h1 className="mb-4 text-xl font-semibold">Audit log</h1>
-      {!entries ? (
+      {error ? (
+        <p className="text-red-600">{error}</p>
+      ) : !entries ? (
         <p>Loading…</p>
       ) : (
         <table className="w-full text-left text-sm">
