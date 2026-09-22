@@ -19,6 +19,7 @@ import {
   getInvoiceSubscriptionId,
   getInvoiceLinePeriodEnd,
 } from "./stripe-fields.js";
+import { resolveNodeForUser } from "./resolve-node.js";
 
 /**
  * @param {import('@supabase/supabase-js').SupabaseClient} supabaseAdmin
@@ -172,7 +173,7 @@ export async function handleInvoicePaid(supabaseAdmin, invoice) {
       .from("vpn_accounts")
       .select("id, vpn_user_id")
       .eq("user_id", sub.user_id)
-      .eq("node_id", "node-1")
+      .eq("node_id", resolveNodeForUser())
       .maybeSingle();
     if (vpnAccountError) {
       throw new Error(`vpn_accounts lookup failed: ${vpnAccountError.message}`);
@@ -195,7 +196,7 @@ export async function handleInvoicePaid(supabaseAdmin, invoice) {
 
   const { error: jobError } = await supabaseAdmin.from("provisioning_jobs").insert({
     idempotency_key: idempotencyKey,
-    node_id: "node-1",
+    node_id: resolveNodeForUser(),
     job_type: jobType,
     vpn_account_id: vpnAccountId,
     payload,
@@ -249,7 +250,7 @@ export async function handleSubscriptionUpdated(supabaseAdmin, subscription) {
       .from("vpn_accounts")
       .select("id, vpn_user_id")
       .eq("user_id", updated.user_id)
-      .eq("node_id", "node-1")
+      .eq("node_id", resolveNodeForUser())
       .maybeSingle();
     if (vpnAccountError) {
       throw new Error(`vpn_accounts lookup failed: ${vpnAccountError.message}`);
@@ -288,7 +289,7 @@ export async function handleSubscriptionUpdated(supabaseAdmin, subscription) {
 
     const { error: jobError } = await supabaseAdmin.from("provisioning_jobs").insert({
       idempotency_key: `disable-user:${subscription.id}`,
-      node_id: "node-1",
+      node_id: resolveNodeForUser(),
       job_type: "DISABLE_USER",
       vpn_account_id: vpnAccount.id,
       payload: {
@@ -333,7 +334,7 @@ export async function handleSubscriptionDeleted(supabaseAdmin, subscription) {
     .from("vpn_accounts")
     .select("id, vpn_user_id")
     .eq("user_id", updated.user_id)
-    .eq("node_id", "node-1")
+    .eq("node_id", resolveNodeForUser())
     .maybeSingle();
   if (vpnAccountError) {
     throw new Error(`vpn_accounts lookup failed: ${vpnAccountError.message}`);
@@ -369,7 +370,7 @@ export async function handleSubscriptionDeleted(supabaseAdmin, subscription) {
 
   const { error: jobError } = await supabaseAdmin.from("provisioning_jobs").insert({
     idempotency_key: `disable-user:${subscription.id}`,
-    node_id: "node-1",
+    node_id: resolveNodeForUser(),
     job_type: "DISABLE_USER",
     vpn_account_id: vpnAccount.id,
     payload: {
