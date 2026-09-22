@@ -105,8 +105,17 @@ export async function onRequestPost({ env, request, params }) {
         .from("vpn_secrets")
         .insert({ vpn_account_id: vpnAccountId, ciphertext, nonce });
       if (secretError) throw new Error(`vpn_secrets insert failed: ${secretError.message}`);
+    } else if (job.job_type === "DISABLE_USER" || job.job_type === "ENABLE_USER") {
+      if (!vpnAccountId) {
+        throw new Error(`${job.job_type} job ${jobId} has no vpn_account_id`);
+      }
+      const { error: enabledError } = await supabaseAdmin
+        .from("vpn_accounts")
+        .update({ enabled: job.job_type === "ENABLE_USER" })
+        .eq("id", vpnAccountId);
+      if (enabledError) throw new Error(`vpn_accounts enabled-update failed: ${enabledError.message}`);
     }
-    // SET_EXPIRY / ENABLE_USER / DISABLE_USER: no additional writes here.
+    // SET_EXPIRY: no additional writes here.
 
     const { error: updateError } = await supabaseAdmin
       .from("provisioning_jobs")

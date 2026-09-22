@@ -14,6 +14,12 @@ export async function onRequestPost({ env, request }) {
     });
   }
 
+  supabaseAdmin
+    .from("nodes")
+    .update({ last_seen_at: new Date().toISOString() })
+    .eq("node_id", nodeId)
+    .catch((err) => console.error("claim: last_seen_at update failed:", err.message));
+
   try {
     const { data, error } = await supabaseAdmin.rpc("claim_next_job", { p_node_id: nodeId });
     if (error) {
