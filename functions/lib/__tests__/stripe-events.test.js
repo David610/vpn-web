@@ -1,32 +1,302 @@
-import { describe, it, expect, vi } from "vitest";
-import { handleSubscriptionUpdated } from "../stripe-events.js";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import {
+  handleCheckoutSessionCompleted,
+  handleInvoicePaid,
+  handleSubscriptionUpdated,
+  handleSubscriptionDeleted,
+} from "../stripe-events.js";
+import { makeFakeSupabase, seedAccount } from "./fake-supabase.js";
 
-function makeSupabaseAdminMock({ updateResult }) {
-  const update = vi.fn().mockReturnThis();
-  const eq = vi.fn().mockReturnThis();
-  const select = vi.fn().mockReturnThis();
-  const maybeSingle = vi.fn().mockResolvedValue(updateResult);
+const PERIOD_END_UNIX = 1893456000; // 2030-01-01T00:00:00Z
+const PERIOD_END_ISO = new Date(PERIOD_END_UNIX * 1000).toISOString();
+
+function invoice({ billingReason, subscriptionId = "sub_123" }) {
   return {
-    from: vi.fn(() => ({ update, eq, select, maybeSingle })),
-    _update: update,
+    id: "in_1",
+    billing_reason: billingReason,
+    subscription: subscriptionId,
+    lines: { data: [{ period: { end: PERIOD_END_UNIX } }] },
   };
 }
 
-describe("handleSubscriptionUpdated", () => {
-  it("persists cancel_at_period_end from the Stripe subscription object", async () => {
-    const supabaseAdmin = makeSupabaseAdminMock({
-      updateResult: { data: { user_id: "user-1" }, error: null },
+const jobsOf = (db) => db._tables.provisioning_jobs;
+
+beforeEach(() => {
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+});
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+describe("handleCheckoutSessionCompleted", () => {
+  it("records the Stripe customer on the account, not on the subscription", async () => {
+    // The billing portal needs a customer id even when an account has no
+    // live subscription, which a subscriptions row cannot supply.
+    const db = makeFakeSupabase({
+      customer_accounts: [{ id: "acct-1", stripe_customer_id: null }],
+      account_members: [{ account_id: "acct-1", user_id: "user-1", role: "owner" }],
     });
 
-    await handleSubscriptionUpdated(supabaseAdmin, {
+    await handleCheckoutSessionCompleted(db, {
+      mode: "subscription",
+      client_reference_id: "user-1",
+      customer: "cus_123",
+      subscription: "sub_123",
+    });
+
+    expect(db._tables.customer_accounts[0].stripe_customer_id).toBe("cus_123");
+    expect(db._tables.subscriptions).toHaveLength(1);
+    expect(db._tables.subscriptions[0]).toMatchObject({
+      account_id: "acct-1",
+      stripe_subscription_id: "sub_123",
+      status: "incomplete",
+    });
+  });
+
+  it("throws when the checkout user has no account membership", async () => {
+    // handle_new_user gives every user an account, so this is data
+    // corruption rather than a race — it must not be swallowed.
+    const db = makeFakeSupabase({});
+    await expect(
+      handleCheckoutSessionCompleted(db, {
+        mode: "subscription",
+        client_reference_id: "ghost",
+        customer: "cus_123",
+        subscription: "sub_123",
+      })
+    ).rejects.toThrow(/no account_members row/);
+  });
+
+  it("ignores non-subscription checkout sessions", async () => {
+    const db = makeFakeSupabase({});
+    await handleCheckoutSessionCompleted(db, { mode: "payment" });
+    expect(db.from).not.toHaveBeenCalled();
+  });
+});
+
+describe("handleInvoicePaid — first invoice", () => {
+  it("enqueues one CREATE_USER per member, keyed per member", async () => {
+    const db = makeFakeSupabase(seedAccount({ status: "incomplete" }));
+
+    await handleInvoicePaid(db, invoice({ billingReason: "subscription_create" }));
+
+    const jobs = jobsOf(db);
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]).toMatchObject({
+      job_type: "CREATE_USER",
+      idempotency_key: "create-user:sub_123:user-1",
+      payload: { user_id: "user-1", expires_at: PERIOD_END_ISO },
+    });
+    expect(db._tables.subscriptions[0].status).toBe("active");
+  });
+
+  it("is a no-op on redelivery (idempotency key already present)", async () => {
+    const db = makeFakeSupabase(seedAccount({ status: "incomplete" }));
+    const paid = invoice({ billingReason: "subscription_create" });
+
+    await handleInvoicePaid(db, paid);
+    await handleInvoicePaid(db, paid);
+
+    expect(jobsOf(db)).toHaveLength(1);
+  });
+});
+
+describe("handleInvoicePaid — renewal", () => {
+  it("extends every provisioned seat, one SET_EXPIRY per VPN account", async () => {
+    // The fan-out that the pre-account code could not express: a renewal has
+    // to push the new expiry to all three seats, not just the owner's.
+    const db = makeFakeSupabase(
+      seedAccount({
+        members: [
+          { userId: "user-1", role: "owner" },
+          { userId: "user-2", role: "member" },
+          { userId: "user-3", role: "member" },
+        ],
+        provisioned: [
+          { userId: "user-1", vpnUserId: "vpn-1" },
+          { userId: "user-2", vpnUserId: "vpn-2" },
+          { userId: "user-3", vpnUserId: "vpn-3" },
+        ],
+      })
+    );
+
+    await handleInvoicePaid(db, invoice({ billingReason: "subscription_cycle" }));
+
+    const jobs = jobsOf(db);
+    expect(jobs).toHaveLength(3);
+    expect(jobs.every((j) => j.job_type === "SET_EXPIRY")).toBe(true);
+    expect(jobs.map((j) => j.payload.vpn_user_id).sort()).toEqual([
+      "vpn-1",
+      "vpn-2",
+      "vpn-3",
+    ]);
+    // Keys include the vpn_account so three seats produce three jobs rather
+    // than colliding on one subscription-scoped key.
+    expect(new Set(jobs.map((j) => j.idempotency_key)).size).toBe(3);
+    expect(jobs.every((j) => j.payload.expires_at === PERIOD_END_ISO)).toBe(true);
+  });
+
+  it("only extends seats on the renewing account", async () => {
+    const db = makeFakeSupabase({
+      ...seedAccount({
+        provisioned: [{ userId: "user-1", vpnUserId: "vpn-1" }],
+      }),
+    });
+    // A bystander account that must not receive any job.
+    db._tables.account_members.push({ account_id: "acct-2", user_id: "user-9", role: "owner" });
+    db._tables.vpn_accounts.push({ id: 99, user_id: "user-9", vpn_user_id: "vpn-9", node_id: "node-1", enabled: true });
+
+    await handleInvoicePaid(db, invoice({ billingReason: "subscription_cycle" }));
+
+    const jobs = jobsOf(db);
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0].payload.vpn_user_id).toBe("vpn-1");
+  });
+
+  it("throws so Stripe retries when no seat is provisioned yet", async () => {
+    // A renewal only fires for a subscription whose first invoice already
+    // succeeded, so the CREATE_USER jobs exist and the rows will appear once
+    // the agent catches up. Retrying is correct; silently extending nobody
+    // is not.
+    const db = makeFakeSupabase(seedAccount({ provisioned: [] }));
+    await expect(
+      handleInvoicePaid(db, invoice({ billingReason: "subscription_cycle" }))
+    ).rejects.toThrow(/no vpn_accounts rows/);
+  });
+
+  it("skips provisioning for an invoice that lands after cancellation", async () => {
+    const db = makeFakeSupabase(seedAccount({ status: "canceled" }));
+    await handleInvoicePaid(db, invoice({ billingReason: "subscription_cycle" }));
+    expect(jobsOf(db)).toHaveLength(0);
+  });
+});
+
+describe("handleSubscriptionUpdated", () => {
+  it("persists cancel_at_period_end from the Stripe subscription object", async () => {
+    const db = makeFakeSupabase(seedAccount({}));
+
+    await handleSubscriptionUpdated(db, {
       id: "sub_123",
       status: "active",
       cancel_at_period_end: true,
-      current_period_end: 1893456000,
+      current_period_end: PERIOD_END_UNIX,
     });
 
-    expect(supabaseAdmin._update).toHaveBeenCalledWith(
-      expect.objectContaining({ cancel_at_period_end: true })
+    expect(db._tables.subscriptions[0].cancel_at_period_end).toBe(true);
+  });
+
+  it("disables every seat when dunning ends in unpaid", async () => {
+    const db = makeFakeSupabase(
+      seedAccount({
+        members: [
+          { userId: "user-1", role: "owner" },
+          { userId: "user-2", role: "member" },
+        ],
+        provisioned: [
+          { userId: "user-1", vpnUserId: "vpn-1" },
+          { userId: "user-2", vpnUserId: "vpn-2" },
+        ],
+      })
     );
+
+    await handleSubscriptionUpdated(db, {
+      id: "sub_123",
+      status: "unpaid",
+      cancel_at_period_end: false,
+      current_period_end: PERIOD_END_UNIX,
+    });
+
+    const jobs = jobsOf(db);
+    expect(jobs).toHaveLength(2);
+    expect(jobs.every((j) => j.job_type === "DISABLE_USER")).toBe(true);
+    expect(jobs.map((j) => j.payload.vpn_user_id).sort()).toEqual(["vpn-1", "vpn-2"]);
+  });
+
+  it("leaves seats alone while the subscription is merely active", async () => {
+    const db = makeFakeSupabase(
+      seedAccount({ provisioned: [{ userId: "user-1", vpnUserId: "vpn-1" }] })
+    );
+
+    await handleSubscriptionUpdated(db, {
+      id: "sub_123",
+      status: "active",
+      cancel_at_period_end: false,
+      current_period_end: PERIOD_END_UNIX,
+    });
+
+    expect(jobsOf(db)).toHaveLength(0);
+  });
+});
+
+describe("handleSubscriptionDeleted", () => {
+  it("disables every provisioned seat on the account", async () => {
+    const db = makeFakeSupabase(
+      seedAccount({
+        members: [
+          { userId: "user-1", role: "owner" },
+          { userId: "user-2", role: "member" },
+        ],
+        provisioned: [
+          { userId: "user-1", vpnUserId: "vpn-1" },
+          { userId: "user-2", vpnUserId: "vpn-2" },
+        ],
+      })
+    );
+
+    await handleSubscriptionDeleted(db, { id: "sub_123" });
+
+    const jobs = jobsOf(db);
+    expect(jobs).toHaveLength(2);
+    expect(jobs.map((j) => j.idempotency_key).sort()).toEqual([
+      "disable-user:sub_123:1",
+      "disable-user:sub_123:2",
+    ]);
+    expect(db._tables.subscriptions[0].status).toBe("canceled");
+  });
+
+  it("does not double-enqueue when updated and deleted both fire", async () => {
+    // Stripe can send both for one cancellation; the shared key shape makes
+    // the second pass a no-op instead of a second round of jobs.
+    const db = makeFakeSupabase(
+      seedAccount({ provisioned: [{ userId: "user-1", vpnUserId: "vpn-1" }] })
+    );
+
+    await handleSubscriptionUpdated(db, {
+      id: "sub_123",
+      status: "canceled",
+      cancel_at_period_end: false,
+      current_period_end: PERIOD_END_UNIX,
+    });
+    await handleSubscriptionDeleted(db, { id: "sub_123" });
+
+    expect(jobsOf(db)).toHaveLength(1);
+  });
+
+  it("returns cleanly when the subscription was never provisioned", async () => {
+    // No VPN accounts and no CREATE_USER job ever enqueued: there is
+    // genuinely nothing to disable, and retrying would never find a row.
+    const db = makeFakeSupabase(seedAccount({ provisioned: [] }));
+    await expect(handleSubscriptionDeleted(db, { id: "sub_123" })).resolves.toBeUndefined();
+    expect(jobsOf(db)).toHaveLength(0);
+  });
+
+  it("throws so Stripe retries when provisioning is still in flight", async () => {
+    // A CREATE_USER job exists but the agent has not produced the
+    // vpn_accounts row yet — a real race, and the opposite of the case above.
+    const db = makeFakeSupabase(seedAccount({ provisioned: [] }));
+    db._tables.provisioning_jobs.push({
+      id: 1,
+      idempotency_key: "create-user:sub_123:user-1",
+      job_type: "CREATE_USER",
+    });
+
+    await expect(handleSubscriptionDeleted(db, { id: "sub_123" })).rejects.toThrow(
+      /no vpn_accounts rows/
+    );
+  });
+
+  it("returns cleanly for an unknown subscription", async () => {
+    const db = makeFakeSupabase({});
+    await expect(handleSubscriptionDeleted(db, { id: "sub_nope" })).resolves.toBeUndefined();
   });
 });

@@ -1,5 +1,6 @@
 import Stripe from "stripe";
 import { createClient } from "@supabase/supabase-js";
+import { getAccountForUser } from "../lib/accounts.js";
 
 export async function onRequestPost({ env, request }) {
   const authHeader = request.headers.get("Authorization");
@@ -26,10 +27,18 @@ export async function onRequestPost({ env, request }) {
       });
     }
 
+    const account = await getAccountForUser(supabaseAdmin, user.id);
+    if (!account) {
+      return new Response(JSON.stringify({ error: "No active subscription" }), {
+        status: 404,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
     const { data: subscription, error: subError } = await supabaseAdmin
       .from("subscriptions")
       .select("stripe_subscription_id")
-      .eq("user_id", user.id)
+      .eq("account_id", account.accountId)
       .in("status", ["trialing", "active", "past_due"])
       .maybeSingle();
     if (subError) {
