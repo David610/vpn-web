@@ -49,11 +49,16 @@ export default function AdminOverviewPage() {
           }
         })
         .catch((err) => !cancelled && setError(err.message));
+    const refresh = () => {
+      if (document.visibilityState === "visible") load();
+    };
     load();
-    const timer = window.setInterval(load, 30_000);
+    const timer = window.setInterval(refresh, 30_000);
+    document.addEventListener("visibilitychange", refresh);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", refresh);
     };
   }, [session]);
 
