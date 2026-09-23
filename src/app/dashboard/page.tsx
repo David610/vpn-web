@@ -18,6 +18,7 @@ type ConfigState =
       subscriptionUrl: string;
       provisioningUrl: string | null;
       preferredSetupUrl: string;
+      entitlementSource: "stripe" | "admin_grant";
       status: string;
       currentPeriodEnd: string | null;
       cancelAtPeriodEnd: boolean;
@@ -60,6 +61,7 @@ export default function DashboardPage() {
             subscriptionUrl: data.subscription_url,
             provisioningUrl: data.provisioning_url ?? null,
             preferredSetupUrl: data.preferred_setup_url ?? data.subscription_url,
+            entitlementSource: data.entitlement_source ?? "stripe",
             status: data.status,
             currentPeriodEnd: data.current_period_end,
             cancelAtPeriodEnd: data.cancel_at_period_end,
@@ -259,7 +261,15 @@ export default function DashboardPage() {
                     {copied ? "Copied" : "Copy"}
                   </button>
                 </div>
-                {config.cancelAtPeriodEnd ? (
+                {config.entitlementSource === "admin_grant" ? (
+                  <p className="section-sub" style={{ marginTop: "var(--space-4)" }}>
+                    Support access is active
+                    {config.currentPeriodEnd
+                      ? ` until ${new Date(config.currentPeriodEnd).toLocaleDateString()}`
+                      : " with no expiry"}
+                    . It is separate from Stripe billing.
+                  </p>
+                ) : config.cancelAtPeriodEnd ? (
                   <>
                     <p className="section-sub" style={{ marginTop: "var(--space-4)" }}>
                       Your subscription is canceled and will end on{" "}
@@ -345,7 +355,11 @@ export default function DashboardPage() {
         {config.phase === "ready" && (
           <>
             <UsageCard session={session} />
-            <AccountActionsCard session={session} setupUrl={config.preferredSetupUrl} />
+            <AccountActionsCard
+              session={session}
+              setupUrl={config.preferredSetupUrl}
+              canManageBilling={config.entitlementSource === "stripe"}
+            />
           </>
         )}
       </main>
