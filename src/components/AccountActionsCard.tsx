@@ -23,6 +23,10 @@ export function AccountActionsCard({
         headers: { Authorization: `Bearer ${session.access_token}` },
       });
       const data = await res.json().catch(() => ({}));
+      if (res.status === 403 && data.code === "reauth_required") {
+        window.location.href = "/login/?next=/dashboard/&reauth=1";
+        return;
+      }
       if (!res.ok || !data.url) throw new Error(data.error || "Could not open billing.");
       window.location.href = data.url;
     } catch (err) {
