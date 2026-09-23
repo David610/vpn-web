@@ -1,6 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import { requireRecentUser, jsonResponse } from "../../lib/user-auth.js";
-import { getAccountForUser, getLiveSubscription } from "../../lib/accounts.js";
+import { getAccountForUser, getEffectiveEntitlement } from "../../lib/accounts.js";
 
 /**
  * Rotates the caller's actual VLESS + Hysteria2 credentials.
@@ -21,12 +21,8 @@ export async function onRequestPost({ env, request }) {
     const account = await getAccountForUser(supabaseAdmin, user.id);
     if (!account) return jsonResponse({ error: "Account not found" }, 404);
 
-    const subscription = await getLiveSubscription(
-      supabaseAdmin,
-      account.accountId,
-      "id"
-    );
-    if (!subscription) return jsonResponse({ error: "No active subscription" }, 403);
+    const entitlement = await getEffectiveEntitlement(supabaseAdmin, account.accountId);
+    if (!entitlement) return jsonResponse({ error: "No active entitlement" }, 403);
 
     const { data: vpnAccount, error } = await supabaseAdmin
       .from("vpn_accounts")
