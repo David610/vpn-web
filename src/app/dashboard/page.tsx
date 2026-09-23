@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import Nav from "@/components/Nav";
 import Footer from "@/components/Footer";
 import { useSession } from "@/hooks/useSession";
-import { MembersCard } from "@/components/MembersCard";
+import { MembersCard, type AccountInfo } from "@/components/MembersCard";
 import { AccountActionsCard } from "@/components/AccountActionsCard";
 import { UsageCard } from "@/components/UsageCard";
 import { SecurityCard } from "@/components/SecurityCard";
@@ -23,6 +23,7 @@ type ConfigState =
       status: string;
       currentPeriodEnd: string | null;
       cancelAtPeriodEnd: boolean;
+      account: AccountInfo;
     }
   | { phase: "error" };
 
@@ -66,6 +67,7 @@ export default function DashboardPage() {
             status: data.status,
             currentPeriodEnd: data.current_period_end,
             cancelAtPeriodEnd: data.cancel_at_period_end,
+            account: data.account,
           });
           return;
         }
@@ -352,9 +354,9 @@ export default function DashboardPage() {
             )}
           </div>
         </div>
-        <MembersCard session={session} />
         {config.phase === "ready" && (
           <>
+            <MembersCard session={session} initialAccount={config.account} />
             <UsageCard session={session} />
             <AccountActionsCard
               session={session}
