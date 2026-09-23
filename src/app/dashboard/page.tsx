@@ -2,13 +2,28 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import dynamic from "next/dynamic";
 import Nav from "@/components/Nav";
 import Footer from "@/components/Footer";
 import { useSession } from "@/hooks/useSession";
-import { MembersCard, type AccountInfo } from "@/components/MembersCard";
-import { AccountActionsCard } from "@/components/AccountActionsCard";
-import { UsageCard } from "@/components/UsageCard";
-import { SecurityCard } from "@/components/SecurityCard";
+import type { AccountInfo } from "@/components/MembersCard";
+
+const MembersCard = dynamic(
+  () => import("@/components/MembersCard").then((mod) => mod.MembersCard),
+  { loading: () => null }
+);
+const UsageCard = dynamic(
+  () => import("@/components/UsageCard").then((mod) => mod.UsageCard),
+  { loading: () => null }
+);
+const AccountActionsCard = dynamic(
+  () => import("@/components/AccountActionsCard").then((mod) => mod.AccountActionsCard),
+  { loading: () => null }
+);
+const SecurityCard = dynamic(
+  () => import("@/components/SecurityCard").then((mod) => mod.SecurityCard),
+  { loading: () => null }
+);
 
 type ConfigState =
   | { phase: "loading" }
