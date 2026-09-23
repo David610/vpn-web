@@ -1,6 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import { decryptSecret } from "../../lib/crypto.js";
-import { getAccountForUser, getLiveSubscription } from "../../lib/accounts.js";
+import { getAccountForUser, getEffectiveEntitlement } from "../../lib/accounts.js";
 
 export async function onRequestGet({ env, request }) {
   const noStoreJson = (body, status) =>
@@ -11,9 +11,7 @@ export async function onRequestGet({ env, request }) {
 
   const authHeader = request.headers.get("Authorization");
   const accessToken = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
-  if (!accessToken) {
-    return noStoreJson({ error: "Authorization required" }, 401);
-  }
+  if (!accessToken) return noStoreJson({ error: "Authorization required" }, 401);
 
   const supabaseAdmin = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
     auth: { autoRefreshToken: false, persistSession: false },
@@ -24,63 +22,84 @@ export async function onRequestGet({ env, request }) {
       data: { user },
       error: tokenError,
     } = await supabaseAdmin.auth.getUser(accessToken);
-    if (tokenError || !user) {
-      return noStoreJson({ error: "Invalid or expired token" }, 401);
-    }
+    if (tokenError || !user) return noStoreJson({ error: "Invalid or expired token" }, 401);
 
-    // Entitlement belongs to the account, not the user: a member on someone
-    // else's plan has no subscription row of their own but is fully
-    // entitled.
     const account = await getAccountForUser(supabaseAdmin, user.id);
-    if (!account) {
-      return noStoreJson({ error: "No active subscription" }, 403);
-    }
+    if (!account) return noStoreJson({ error: "No active subscription" }, 403);
 
-    // getLiveSubscription counts trialing and past_due as live alongside
-    // active — a customer on the free trial, or inside Stripe's dunning
-    // window, still has service. The partial unique index
-    // subscriptions_account_active_uniq makes those three statuses match at
-    // most one row, so this cannot become a multi-row hazard.
-    const subscription = await getLiveSubscription(
-      supabaseAdmin,
-      account.accountId,
-      "status, current_period_end, cancel_at_period_end"
-    );
-    if (!subscription) {
-      return noStoreJson({ error: "No active subscription" }, 403);
+    const entitlement = await getEffectiveEntitlement(supabaseAdmin, account.accountId);
+    if (!entitlement) {
+      const { data: accountRow, error: trialError } = await supabaseAdmin
+        .from("customer_accounts")
+        .select("trial_used_at, trial_reserved_at, trial_checkout_session_id")
+        .eq("id", account.accountId)
+        .maybeSingle();
+      if (trialError) throw new Error(`trial eligibility lookup failed: ${trialError.message}`);
+      const reservationFresh =
+        accountRow?.trial_reserved_at &&
+        Date.now() - new Date(accountRow.trial_reserved_at).getTime() < 24 * 60 * 60 * 1000;
+      return noStoreJson(
+        {
+          error: "No active subscription",
+          code: "no_subscription",
+          // A fresh reservation with an attached Checkout Session is still
+          // available: create-checkout-session will resume that same Stripe
+          // session rather than minting a second trial.
+          trial_available:
+            !accountRow?.trial_used_at &&
+            (!reservationFresh || Boolean(accountRow?.trial_checkout_session_id)),
+        },
+        403
+      );
     }
 
     const { data: vpnAccount, error: vpnAccountError } = await supabaseAdmin
       .from("vpn_accounts")
-      .select("id")
+      .select("id, enabled")
       .eq("user_id", user.id)
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
-    if (vpnAccountError) throw new Error(`vpn_accounts lookup failed: ${vpnAccountError.message}`);
-    if (!vpnAccount) {
-      return noStoreJson({ error: "Provisioning still in progress" }, 404);
+    if (vpnAccountError) {
+      throw new Error(`vpn_accounts lookup failed: ${vpnAccountError.message}`);
     }
+    if (!vpnAccount) return noStoreJson({ error: "Provisioning still in progress" }, 404);
+    if (!vpnAccount.enabled) return noStoreJson({ error: "VPN access is disabled" }, 403);
 
     const { data: secret, error: secretError } = await supabaseAdmin
       .from("vpn_secrets")
-      .select("ciphertext, nonce")
+      .select("ciphertext, nonce, provisioning_ciphertext, provisioning_nonce")
       .eq("vpn_account_id", vpnAccount.id)
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
     if (secretError) throw new Error(`vpn_secrets lookup failed: ${secretError.message}`);
-    if (!secret) {
-      return noStoreJson({ error: "Provisioning still in progress" }, 404);
+    if (!secret) return noStoreJson({ error: "Provisioning still in progress" }, 404);
+
+    const subscriptionUrl = await decryptSecret(
+      secret.ciphertext,
+      secret.nonce,
+      env.VPN_SECRETS_ENCRYPTION_KEY
+    );
+
+    let provisioningUrl = null;
+    if (secret.provisioning_ciphertext && secret.provisioning_nonce) {
+      provisioningUrl = await decryptSecret(
+        secret.provisioning_ciphertext,
+        secret.provisioning_nonce,
+        env.VPN_SECRETS_ENCRYPTION_KEY
+      );
     }
 
-    const subscriptionUrl = await decryptSecret(secret.ciphertext, secret.nonce, env.VPN_SECRETS_ENCRYPTION_KEY);
     return noStoreJson(
       {
         subscription_url: subscriptionUrl,
-        status: subscription.status,
-        current_period_end: subscription.current_period_end,
-        cancel_at_period_end: subscription.cancel_at_period_end,
+        provisioning_url: provisioningUrl,
+        preferred_setup_url: provisioningUrl ?? subscriptionUrl,
+        entitlement_source: entitlement.source,
+        status: entitlement.status,
+        current_period_end: entitlement.currentPeriodEnd,
+        cancel_at_period_end: entitlement.cancelAtPeriodEnd,
       },
       200
     );

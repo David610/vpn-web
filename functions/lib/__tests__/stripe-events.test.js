@@ -154,6 +154,54 @@ describe("handleInvoicePaid — renewal", () => {
     expect(jobs[0].payload.vpn_user_id).toBe("vpn-1");
   });
 
+  it("re-enables a VPN account when a late payment recovers it from unpaid", async () => {
+    const db = makeFakeSupabase(
+      seedAccount({
+        status: "unpaid",
+        provisioned: [{ userId: "user-1", vpnUserId: "vpn-1" }],
+      })
+    );
+    db._tables.vpn_accounts[0].enabled = false;
+
+    await handleInvoicePaid(db, invoice({ billingReason: "subscription_cycle" }));
+
+    const jobs = jobsOf(db);
+    expect(jobs.map((j) => j.job_type).sort()).toEqual(["ENABLE_USER", "SET_EXPIRY"]);
+    expect(jobs.find((j) => j.job_type === "ENABLE_USER")).toMatchObject({
+      payload: { vpn_user_id: "vpn-1", user_id: "user-1" },
+    });
+  });
+
+  it("does not shorten an indefinite support grant on renewal", async () => {
+    const db = makeFakeSupabase({
+      ...seedAccount({
+        status: "active",
+        provisioned: [{ userId: "user-1", vpnUserId: "vpn-1" }],
+      }),
+      admin_entitlements: [
+        {
+          id: "grant-1",
+          account_id: "acct-1",
+          status: "active",
+          starts_at: "2026-01-01T00:00:00Z",
+          expires_at: null,
+          seat_limit: 3,
+          reason: "support",
+          created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+    });
+
+    await handleInvoicePaid(db, invoice({ billingReason: "subscription_cycle" }));
+
+    const jobs = jobsOf(db);
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]).toMatchObject({
+      job_type: "CLEAR_EXPIRY",
+      payload: { vpn_user_id: "vpn-1" },
+    });
+  });
+
   it("throws so Stripe retries when no seat is provisioned yet", async () => {
     // A renewal only fires for a subscription whose first invoice already
     // succeeded, so the CREATE_USER jobs exist and the rows will appear once

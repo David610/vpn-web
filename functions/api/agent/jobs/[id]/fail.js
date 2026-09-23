@@ -69,6 +69,18 @@ export async function onRequestPost({ env, request, params }) {
       .eq("id", jobId);
     if (updateError) throw new Error(`provisioning_jobs update failed: ${updateError.message}`);
 
+    const { error: alertError } = await supabaseAdmin.from("operational_alerts").insert({
+      alert_type: "provisioning_job_failed",
+      severity: "warning",
+      dedup_key: `job-failed:${jobId}`,
+      node_id: nodeId,
+      message: `Provisioning job #${jobId} (${job.job_type}) failed`,
+      details: { job_id: jobId, job_type: job.job_type },
+    });
+    if (alertError && alertError.code !== "23505") {
+      console.error("agent/fail: operational alert insert failed:", alertError.message);
+    }
+
     await sendFailureAlert(env, {
       jobId,
       jobType: job.job_type,

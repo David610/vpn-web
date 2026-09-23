@@ -6,14 +6,20 @@ import Nav from "@/components/Nav";
 import Footer from "@/components/Footer";
 import { useSession } from "@/hooks/useSession";
 import { MembersCard } from "@/components/MembersCard";
+import { AccountActionsCard } from "@/components/AccountActionsCard";
+import { UsageCard } from "@/components/UsageCard";
+import { SecurityCard } from "@/components/SecurityCard";
 
 type ConfigState =
   | { phase: "loading" }
-  | { phase: "none" }
+  | { phase: "none"; trialAvailable: boolean }
   | { phase: "provisioning" }
   | {
       phase: "ready";
       subscriptionUrl: string;
+      provisioningUrl: string | null;
+      preferredSetupUrl: string;
+      entitlementSource: "stripe" | "admin_grant";
       status: string;
       currentPeriodEnd: string | null;
       cancelAtPeriodEnd: boolean;
@@ -54,6 +60,9 @@ export default function DashboardPage() {
           setConfig({
             phase: "ready",
             subscriptionUrl: data.subscription_url,
+            provisioningUrl: data.provisioning_url ?? null,
+            preferredSetupUrl: data.preferred_setup_url ?? data.subscription_url,
+            entitlementSource: data.entitlement_source ?? "stripe",
             status: data.status,
             currentPeriodEnd: data.current_period_end,
             cancelAtPeriodEnd: data.cancel_at_period_end,
@@ -68,7 +77,8 @@ export default function DashboardPage() {
           return;
         }
         if (res.status === 403) {
-          setConfig({ phase: "none" });
+          const data = await res.json().catch(() => ({}));
+          setConfig({ phase: "none", trialAvailable: data.trial_available === true });
           return;
         }
         setConfig({ phase: "error" });
@@ -84,14 +94,18 @@ export default function DashboardPage() {
     };
   }, [session]);
 
-  async function handleSubscribe() {
+  async function handleSubscribe(trial: boolean) {
     if (!session) return;
     setCheckoutLoading(true);
     setCheckoutError(null);
     try {
       const res = await fetch("/api/create-checkout-session", {
         method: "POST",
-        headers: { Authorization: `Bearer ${session.access_token}` },
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ trial }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.url) {
@@ -248,7 +262,15 @@ export default function DashboardPage() {
                     {copied ? "Copied" : "Copy"}
                   </button>
                 </div>
-                {config.cancelAtPeriodEnd ? (
+                {config.entitlementSource === "admin_grant" ? (
+                  <p className="section-sub" style={{ marginTop: "var(--space-4)" }}>
+                    Support access is active
+                    {config.currentPeriodEnd
+                      ? ` until ${new Date(config.currentPeriodEnd).toLocaleDateString()}`
+                      : " with no expiry"}
+                    . It is separate from Stripe billing.
+                  </p>
+                ) : config.cancelAtPeriodEnd ? (
                   <>
                     <p className="section-sub" style={{ marginTop: "var(--space-4)" }}>
                       Your subscription is canceled and will end on{" "}
@@ -299,23 +321,49 @@ export default function DashboardPage() {
                 <p className="section-sub">
                   {checkoutStatus === "cancel"
                     ? "Checkout was canceled."
-                    : "No active subscription yet. Try Arcana free for 3 days — cancel any time before it ends and you won't be charged."}
+                    : config.trialAvailable
+                      ? "No active subscription yet. Try Arcana free for 3 days — cancel any time before it ends and you won't be charged."
+                      : "No active subscription yet. Subscribe whenever you're ready."}
                 </p>
                 {checkoutError && <p className="field-error">{checkoutError}</p>}
-                <button
-                  type="button"
-                  className="btn btn-primary"
-                  onClick={handleSubscribe}
-                  disabled={checkoutLoading}
-                  style={{ width: "100%", marginTop: "var(--space-4)" }}
-                >
-                  {checkoutLoading ? "Redirecting…" : "Start 3-day free trial"}
-                </button>
+                <div style={{ display: "grid", gap: "var(--space-2)", marginTop: "var(--space-4)" }}>
+                  {config.trialAvailable && (
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={() => handleSubscribe(true)}
+                      disabled={checkoutLoading}
+                      style={{ width: "100%" }}
+                    >
+                      {checkoutLoading ? "Redirecting…" : "Start 3-day free trial"}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => handleSubscribe(false)}
+                    disabled={checkoutLoading}
+                    style={{ width: "100%" }}
+                  >
+                    Subscribe now
+                  </button>
+                </div>
               </>
             )}
           </div>
         </div>
         <MembersCard session={session} />
+        {config.phase === "ready" && (
+          <>
+            <UsageCard session={session} />
+            <AccountActionsCard
+              session={session}
+              setupUrl={config.preferredSetupUrl}
+              canManageBilling={config.entitlementSource === "stripe"}
+            />
+          </>
+        )}
+        <SecurityCard session={session} />
       </main>
       <Footer />
     </>

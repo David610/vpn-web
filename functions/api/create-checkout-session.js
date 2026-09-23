@@ -2,21 +2,120 @@ import Stripe from "stripe";
 import { createClient } from "@supabase/supabase-js";
 import { getAccountForUser } from "../lib/accounts.js";
 
-/**
- * Free trial length. Stripe bills nothing until it elapses; the subscription
- * sits in "trialing", which entitlement already treats as live.
- */
 const TRIAL_DAYS = 3;
+const TRIAL_RESERVATION_MS = 24 * 60 * 60 * 1000;
 
+function json(body, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
+  });
+}
+
+function reservationIsFresh(row) {
+  if (!row?.trial_reserved_at || row?.trial_used_at) return false;
+  const reservedMs = Date.parse(row.trial_reserved_at);
+  return Number.isFinite(reservedMs) && Date.now() - reservedMs < TRIAL_RESERVATION_MS;
+}
+
+async function clearTrialReservation(
+  supabaseAdmin,
+  accountId,
+  { reservedAt = null, sessionId = null } = {}
+) {
+  let query = supabaseAdmin
+    .from("customer_accounts")
+    .update({
+      trial_reserved_at: null,
+      trial_checkout_session_id: null,
+    })
+    .eq("id", accountId)
+    .is("trial_used_at", null);
+
+  if (reservedAt) query = query.eq("trial_reserved_at", reservedAt);
+  if (sessionId) query = query.eq("trial_checkout_session_id", sessionId);
+
+  return query;
+}
+
+async function resumeReservedTrial(stripe, supabaseAdmin, accountId, accountRow) {
+  if (!reservationIsFresh(accountRow) || !accountRow.trial_checkout_session_id) {
+    return { response: null, cleared: false };
+  }
+
+  let session;
+  try {
+    session = await stripe.checkout.sessions.retrieve(accountRow.trial_checkout_session_id);
+  } catch (err) {
+    console.error("create-checkout-session: failed to retrieve reserved Checkout:", err.message);
+    return {
+      response: json({ error: "Could not resume checkout. Please try again." }, 502),
+      cleared: false,
+    };
+  }
+
+  if (session.status === "open" && session.url) {
+    return {
+      response: json({ url: session.url, trial: true, resumed: true }),
+      cleared: false,
+    };
+  }
+
+  if (session.status === "complete") {
+    return {
+      response: json(
+        {
+          error: "Checkout is already complete. Your subscription is being activated.",
+          code: "checkout_complete",
+        },
+        409
+      ),
+      cleared: false,
+    };
+  }
+
+  if (session.status === "expired") {
+    const { error } = await clearTrialReservation(supabaseAdmin, accountId, {
+      reservedAt: accountRow.trial_reserved_at,
+      sessionId: accountRow.trial_checkout_session_id,
+    });
+    if (error) {
+      console.error("create-checkout-session: expired reservation cleanup failed:", error.message);
+      return {
+        response: json({ error: "Could not restart checkout. Please try again." }, 502),
+        cleared: false,
+      };
+    }
+    return { response: null, cleared: true };
+  }
+
+  return {
+    response: json({ error: "Checkout is not available to resume yet.", code: "trial_starting" }, 409),
+    cleared: false,
+  };
+}
+
+/**
+ * Starts either the one-time 3-day trial or an immediately-paid subscription.
+ *
+ * Body: { trial?: boolean }. Omitted keeps the historical behaviour
+ * (trial=true); the dashboard explicitly sends true/false for its two CTAs.
+ */
 export async function onRequestPost({ env, request }) {
   const authHeader = request.headers.get("Authorization");
   const accessToken = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
-  if (!accessToken) {
-    return new Response(JSON.stringify({ error: "Authorization required" }), {
-      status: 401,
-      headers: { "Content-Type": "application/json" },
-    });
+  if (!accessToken) return json({ error: "Authorization required" }, 401);
+
+  let wantsTrial = true;
+  try {
+    const raw = await request.text();
+    if (raw) wantsTrial = JSON.parse(raw)?.trial !== false;
+  } catch {
+    return json({ error: "Invalid JSON body" }, 400);
   }
+
+  let reservedAt = null;
+  let accountId = null;
 
   try {
     const supabaseAdmin = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
@@ -26,47 +125,23 @@ export async function onRequestPost({ env, request }) {
       data: { user },
       error: tokenError,
     } = await supabaseAdmin.auth.getUser(accessToken);
-    if (tokenError || !user) {
-      return new Response(JSON.stringify({ error: "Invalid or expired token" }), {
-        status: 401,
-        headers: { "Content-Type": "application/json" },
-      });
-    }
+    if (tokenError || !user) return json({ error: "Invalid or expired token" }, 401);
 
-    const stripe = new Stripe(env.STRIPE_API_KEY, {
-      httpClient: Stripe.createFetchHttpClient(),
-    });
-
-    // A checkout.session.completed for a delayed-payment method (e.g. SEPA
-    // Direct Debit — see stripe-events.js's header comment) inserts the
-    // subscriptions row at status "incomplete" until invoice.paid confirms
-    // payment. Without also blocking a retry here, a user in that window
-    // (who GET /api/vpn/config correctly shows as not-yet-active) would hit
-    // "Subscribe" again and get a second paid subscription — the exact
-    // dedup hole this endpoint exists to close. So "incomplete" must count
-    // too, but unlike a real active subscription an "incomplete" row can
-    // get stuck forever (abandoned/failed Checkout Session — Stripe expires
-    // those after 24h by default) with no event ever arriving to move it
-    // out of that status. Scope the "incomplete" branch to rows created in
-    // the last 24h so a stuck one doesn't permanently block the user from
-    // ever subscribing again; real active/trialing/past_due subscriptions
-    // are never time-limited.
     const account = await getAccountForUser(supabaseAdmin, user.id);
     if (!account) {
-      console.error(
-        `create-checkout-session: user ${user.id} has no account_members row`
-      );
-      return new Response(JSON.stringify({ error: "Something went wrong" }), {
-        status: 500,
-        headers: { "Content-Type": "application/json" },
-      });
+      console.error(`create-checkout-session: user ${user.id} has no account_members row`);
+      return json({ error: "Something went wrong" }, 500);
     }
+    if (account.role !== "owner") {
+      return json({ error: "Only the account owner can start or change a subscription." }, 403);
+    }
+    accountId = account.accountId;
 
     const recentCutoffIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
     const { data: existingSubscription, error: existingSubError } = await supabaseAdmin
       .from("subscriptions")
       .select("status")
-      .eq("account_id", account.accountId)
+      .eq("account_id", accountId)
       .or(
         `status.in.(trialing,active,past_due),and(status.eq.incomplete,created_at.gt.${recentCutoffIso})`
       )
@@ -74,51 +149,152 @@ export async function onRequestPost({ env, request }) {
       .maybeSingle();
     if (existingSubError) {
       console.error("create-checkout-session: subscription lookup failed:", existingSubError.message);
-      return new Response(JSON.stringify({ error: "Something went wrong" }), {
-        status: 500,
-        headers: { "Content-Type": "application/json" },
-      });
+      return json({ error: "Something went wrong" }, 500);
     }
     if (existingSubscription) {
-      return new Response(
-        JSON.stringify({ error: "You already have an active subscription" }),
-        { status: 409, headers: { "Content-Type": "application/json" } }
-      );
+      return json({ error: "You already have an active subscription" }, 409);
     }
+
+    const { data: accountRow, error: accountError } = await supabaseAdmin
+      .from("customer_accounts")
+      .select(
+        "stripe_customer_id, trial_used_at, trial_reserved_at, trial_checkout_session_id"
+      )
+      .eq("id", accountId)
+      .maybeSingle();
+    if (accountError) throw new Error(`customer_accounts lookup failed: ${accountError.message}`);
+
+    const stripe = new Stripe(env.STRIPE_API_KEY, {
+      httpClient: Stripe.createFetchHttpClient(),
+    });
+
+    if (wantsTrial) {
+      const resumed = await resumeReservedTrial(stripe, supabaseAdmin, accountId, accountRow);
+      if (resumed.response) return resumed.response;
+
+      const { data: reservation, error: reservationError } = await supabaseAdmin.rpc(
+        "reserve_free_trial",
+        { p_account_id: accountId }
+      );
+      if (reservationError) {
+        throw new Error(`trial reservation failed: ${reservationError.message}`);
+      }
+
+      if (!reservation) {
+        // A concurrent request may have acquired the reservation and already
+        // attached a Checkout Session. Re-read once so that request becomes
+        // resumable instead of looking like a permanently unavailable trial.
+        const { data: latestAccount, error: latestError } = await supabaseAdmin
+          .from("customer_accounts")
+          .select("trial_used_at, trial_reserved_at, trial_checkout_session_id")
+          .eq("id", accountId)
+          .maybeSingle();
+        if (latestError) {
+          throw new Error(`trial reservation recheck failed: ${latestError.message}`);
+        }
+
+        const concurrent = await resumeReservedTrial(
+          stripe,
+          supabaseAdmin,
+          accountId,
+          latestAccount
+        );
+        if (concurrent.response) return concurrent.response;
+
+        return json(
+          {
+            error: latestAccount?.trial_used_at
+              ? "The free trial has already been used."
+              : "The free trial is already being started. Please try again.",
+            code: latestAccount?.trial_used_at ? "trial_unavailable" : "trial_starting",
+          },
+          409
+        );
+      }
+      reservedAt = reservation;
+    }
+
+    const checkoutParams = {
+      mode: "subscription",
+      line_items: [{ price: env.STRIPE_PRICE_ID, quantity: 1 }],
+      client_reference_id: user.id,
+      success_url: `${env.SITE_URL}/dashboard/?checkout=success`,
+      cancel_url: `${env.SITE_URL}/dashboard/?checkout=cancel`,
+      ...(wantsTrial ? { subscription_data: { trial_period_days: TRIAL_DAYS } } : {}),
+      ...(accountRow?.stripe_customer_id
+        ? { customer: accountRow.stripe_customer_id }
+        : { customer_email: user.email }),
+    };
 
     let session;
     try {
-      session = await stripe.checkout.sessions.create({
-        mode: "subscription",
-        line_items: [{ price: env.STRIPE_PRICE_ID, quantity: 1 }],
-        subscription_data: { trial_period_days: TRIAL_DAYS },
-        client_reference_id: user.id,
-        customer_email: user.email,
-        success_url: `${env.SITE_URL}/dashboard/?checkout=success`,
-        cancel_url: `${env.SITE_URL}/dashboard/?checkout=cancel`,
-      });
+      session = await stripe.checkout.sessions.create(checkoutParams);
     } catch (err) {
+      if (wantsTrial && reservedAt) {
+        const { error: releaseError } = await clearTrialReservation(
+          supabaseAdmin,
+          accountId,
+          { reservedAt }
+        );
+        if (releaseError) {
+          console.error(
+            "create-checkout-session: trial reservation release failed:",
+            releaseError.message
+          );
+        }
+      }
       console.error("create-checkout-session: Stripe error:", err.message);
-      return new Response(JSON.stringify({ error: "Could not start checkout" }), {
-        status: 502,
-        headers: { "Content-Type": "application/json" },
-      });
+      return json({ error: "Could not start checkout" }, 502);
     }
 
-    return new Response(JSON.stringify({ url: session.url }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
+    if (wantsTrial) {
+      const { data: tracked, error: trackError } = await supabaseAdmin
+        .from("customer_accounts")
+        .update({ trial_checkout_session_id: session.id })
+        .eq("id", accountId)
+        .eq("trial_reserved_at", reservedAt)
+        .is("trial_used_at", null)
+        .select("id")
+        .maybeSingle();
+
+      if (trackError || !tracked) {
+        console.error(
+          "create-checkout-session: failed to attach Checkout to trial reservation:",
+          trackError?.message ?? "reservation changed"
+        );
+
+        let expired = false;
+        try {
+          await stripe.checkout.sessions.expire(session.id);
+          expired = true;
+        } catch (expireError) {
+          console.error(
+            "create-checkout-session: failed to expire untracked Checkout:",
+            expireError.message
+          );
+        }
+
+        if (expired) {
+          const { error: releaseError } = await clearTrialReservation(
+            supabaseAdmin,
+            accountId,
+            { reservedAt }
+          );
+          if (releaseError) {
+            console.error(
+              "create-checkout-session: untracked reservation cleanup failed:",
+              releaseError.message
+            );
+          }
+        }
+
+        return json({ error: "Could not start checkout" }, 502);
+      }
+    }
+
+    return json({ url: session.url, trial: wantsTrial, resumed: false });
   } catch (err) {
-    // Catch-all for anything unexpected — bad/missing env bindings throwing
-    // synchronously from createClient/Stripe, a Supabase network error, etc.
-    // Never let Cloudflare's raw error page leak past this handler; log the
-    // real reason and return the same fixed generic error shape as
-    // stripe-webhook.js.
     console.error("create-checkout-session: unexpected error:", err.message);
-    return new Response(JSON.stringify({ error: "Something went wrong" }), {
-      status: 500,
-      headers: { "Content-Type": "application/json" },
-    });
+    return json({ error: "Something went wrong" }, 500);
   }
 }

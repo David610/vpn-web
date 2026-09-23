@@ -19,8 +19,8 @@ export default function SignupPage() {
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
-    if (password.length < 6) {
-      setError("Password must be at least 6 characters.");
+    if (password.length < 12) {
+      setError("Password must be at least 12 characters.");
       return;
     }
     setSubmitting(true);
@@ -109,7 +109,7 @@ export default function SignupPage() {
                     id="password"
                     type="password"
                     required
-                    minLength={6}
+                    minLength={12}
                     autoComplete="new-password"
                     className="field"
                     aria-invalid={error ? "true" : undefined}

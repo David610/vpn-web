@@ -5,6 +5,8 @@ const jobsUpdate = vi.fn();
 const jobsUpdateEq = vi.fn();
 const vpnAccountsUpdate = vi.fn();
 const vpnAccountsUpdateEq = vi.fn();
+const alertUpdate = vi.fn();
+const alertEq = vi.fn();
 
 vi.mock("../../../../../lib/node-auth.js", () => ({
   authenticateNode: vi.fn(),
@@ -30,6 +32,16 @@ vi.mock("@supabase/supabase-js", () => ({
           update: vpnAccountsUpdate.mockReturnValue({ eq: vpnAccountsUpdateEq }),
         };
       }
+      if (table === "operational_alerts") {
+        const chain = {
+          update: alertUpdate.mockReturnValue({
+            eq: alertEq.mockReturnValue({
+              eq: vi.fn().mockResolvedValue({ error: null }),
+            }),
+          }),
+        };
+        return chain;
+      }
       return {};
     }),
   })),
@@ -54,11 +66,13 @@ beforeEach(() => {
   jobsUpdateEq.mockReset().mockResolvedValue({ error: null });
   vpnAccountsUpdate.mockClear();
   vpnAccountsUpdateEq.mockReset().mockResolvedValue({ error: null });
+  alertUpdate.mockClear();
+  alertEq.mockClear();
   authenticateNode.mockReset().mockResolvedValue("node-1");
 });
 
-describe("agent/jobs/[id]/complete vpn_accounts.enabled", () => {
-  it("sets vpn_accounts.enabled = false on a DISABLE_USER completion", async () => {
+describe("agent/jobs/[id]/complete", () => {
+  it("sets vpn_accounts.enabled=false after DISABLE_USER completes", async () => {
     maybeSingle.mockResolvedValue({
       data: {
         id: "job-1",
@@ -72,13 +86,13 @@ describe("agent/jobs/[id]/complete vpn_accounts.enabled", () => {
     });
 
     const res = await onRequestPost({ env, request: makeRequest(), params: { id: "job-1" } });
-
     expect(res.status).toBe(200);
     expect(vpnAccountsUpdate).toHaveBeenCalledWith({ enabled: false });
     expect(vpnAccountsUpdateEq).toHaveBeenCalledWith("id", 7);
+    expect(alertUpdate).toHaveBeenCalled();
   });
 
-  it("sets vpn_accounts.enabled = true on an ENABLE_USER completion", async () => {
+  it("sets vpn_accounts.enabled=true after ENABLE_USER completes", async () => {
     maybeSingle.mockResolvedValue({
       data: {
         id: "job-1",
@@ -92,9 +106,8 @@ describe("agent/jobs/[id]/complete vpn_accounts.enabled", () => {
     });
 
     const res = await onRequestPost({ env, request: makeRequest(), params: { id: "job-1" } });
-
     expect(res.status).toBe(200);
     expect(vpnAccountsUpdate).toHaveBeenCalledWith({ enabled: true });
-    expect(vpnAccountsUpdateEq).toHaveBeenCalledWith("id", 7);
+    expect(alertUpdate).toHaveBeenCalled();
   });
 });

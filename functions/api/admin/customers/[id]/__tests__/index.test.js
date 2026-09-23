@@ -37,6 +37,13 @@ vi.mock("@supabase/supabase-js", () => ({
       if (table === "provisioning_jobs") {
         return { select: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(), order: jobsOrder };
       }
+      if (table === "admin_entitlements") {
+        return {
+          select: vi.fn().mockReturnThis(),
+          eq: vi.fn().mockReturnThis(),
+          order: vi.fn().mockResolvedValue({ data: [], error: null }),
+        };
+      }
       throw new Error(`unexpected table ${table}`);
     }),
   })),

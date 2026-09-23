@@ -21,7 +21,7 @@ type Invite = {
 type AccountInfo = {
   accountId: string;
   role: string;
-  subscription: { status: string } | null;
+  subscription: { status: string; source?: "stripe" | "admin_grant" } | null;
   seats: { included: number; extra: number; limit: number; used: number; available: number };
   members: Member[];
   invites: Invite[];
@@ -114,6 +114,10 @@ export function MembersCard({ session }: { session: Session }) {
         body: JSON.stringify({ quantity: nextExtra }),
       });
       const data = await res.json().catch(() => ({}));
+      if (res.status === 403 && data.code === "reauth_required") {
+        window.location.href = "/login/?next=/dashboard/&reauth=1";
+        return;
+      }
       if (!res.ok) throw new Error(data.error || "Could not change your seats.");
       setNotice(
         nextExtra > account.seats.extra
@@ -162,6 +166,10 @@ export function MembersCard({ session }: { session: Session }) {
         headers: { Authorization: `Bearer ${session.access_token}` },
       });
       const data = await res.json().catch(() => ({}));
+      if (res.status === 403 && data.code === "reauth_required") {
+        window.location.href = "/login/?next=/dashboard/&reauth=1";
+        return;
+      }
       if (!res.ok) throw new Error(data.error || "Could not remove that member.");
       if (member.isYou) {
         // They just left the plan their VPN config came from; the rest of
@@ -206,8 +214,9 @@ export function MembersCard({ session }: { session: Session }) {
       </div>
       <div style={{ padding: "var(--space-6)" }}>
         <p className="section-sub">
-          Your plan includes {seats.included} seats
-          {seats.extra > 0 ? `, plus ${seats.extra} you have added` : ""}. Everyone on it
+          {account.subscription.source === "admin_grant"
+            ? `Support access currently allows ${seats.limit} seats.`
+            : `Your plan includes ${seats.included} seats${seats.extra > 0 ? `, plus ${seats.extra} paid extra seats` : ""}.`} Everyone on it
           gets their own VPN configuration.
         </p>
 
@@ -313,14 +322,15 @@ export function MembersCard({ session }: { session: Session }) {
             </div>
             {seats.available === 0 && (
               <p className="text-tiny" style={{ marginTop: "var(--space-2)" }}>
-                All seats are in use. Add a seat below, or free one by removing a member
-                or withdrawing an invitation.
+                {account.subscription.source === "admin_grant"
+                  ? "All granted seats are in use. Free one by removing a member or withdrawing an invitation."
+                  : "All seats are in use. Add a seat below, or free one by removing a member or withdrawing an invitation."}
               </p>
             )}
           </form>
         )}
 
-        {isOwner && (
+        {isOwner && account.subscription.source !== "admin_grant" && (
           <div
             style={{
               display: "flex",

@@ -146,6 +146,49 @@ describe("GET /api/admin/nodes", () => {
     expect(body.nodes[0].traffic.bpsDown).toBe(80_000);
   });
 
+  it("returns heartbeat host-health telemetry without replacing VPN traffic", async () => {
+    const recent = new Date(Date.now() - 10_000).toISOString();
+    nodesSelect = vi.fn().mockResolvedValue({
+      data: [{
+        node_id: "node-1",
+        last_seen_at: recent,
+        revoked_at: null,
+        telemetry_at: recent,
+        agent_version: "1.0.0",
+        vpn_version: "1.0.0",
+        singbox_version: "1.13.19",
+        uptime_seconds: 90061,
+        cpu_percent: 12.5,
+        memory_percent: 44.5,
+        disk_percent: 61.2,
+        network_rx_bps: 1000,
+        network_tx_bps: 2000,
+        configured_users: 7,
+        active_users_recent: null,
+      }],
+      error: null,
+    });
+    samplesResult = {
+      data: [sample({ deltaDown: 1_500_000, interval: 15, connections: 3 })],
+      error: null,
+    };
+
+    const body = await (await onRequestGet({ env, request: makeRequest() })).json();
+    expect(body.nodes[0]).toMatchObject({
+      cpuPercent: 12.5,
+      memoryPercent: 44.5,
+      diskPercent: 61.2,
+      networkRxBps: 1000,
+      networkTxBps: 2000,
+      configuredUsers: 7,
+      singboxVersion: "1.13.19",
+      traffic: {
+        bpsDown: 800_000,
+        connectionsOpen: 3,
+      },
+    });
+  });
+
   it("includes today's rollup totals", async () => {
     const recent = new Date(Date.now() - 10_000).toISOString();
     nodesSelect = vi.fn().mockResolvedValue({ data: [{ node_id: "node-1", last_seen_at: recent, revoked_at: null }], error: null });
