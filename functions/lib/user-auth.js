@@ -1,25 +1,28 @@
 /**
- * Bearer-token authentication for customer-facing routes, mirroring
- * requireAdmin's shape in functions/lib/admin-auth.js:
+ * Bearer-token authentication for customer-facing routes.
  *
- *   const { user, response } = await requireUser(request, supabaseAdmin);
- *   if (!user) return response;
- *
- * getUser() rather than getClaims() because these routes need only the
- * caller's identity — there is no assurance-level requirement on customer
- * endpoints, unlike the admin ones.
+ * Normal routes call requireUser(). Sensitive operations call
+ * requireRecentUser(), which reads the JWT's signed AMR timestamps through
+ * getClaims() rather than trusting a browser timestamp.
  */
-export async function requireUser(request, supabaseAdmin) {
-  const unauthorized = (message) => ({
-    user: null,
-    response: new Response(JSON.stringify({ error: message }), {
-      status: 401,
-      headers: { "Content-Type": "application/json" },
-    }),
-  });
 
+const DEFAULT_RECENT_AUTH_SECONDS = 15 * 60;
+
+function accessTokenFrom(request) {
   const authHeader = request.headers.get("Authorization");
-  const accessToken = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
+  return authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
+}
+
+function unauthorized(message) {
+  return {
+    user: null,
+    claims: null,
+    response: jsonResponse({ error: message }, 401),
+  };
+}
+
+export async function requireUser(request, supabaseAdmin) {
+  const accessToken = accessTokenFrom(request);
   if (!accessToken) return unauthorized("Authorization required");
 
   const {
@@ -28,8 +31,67 @@ export async function requireUser(request, supabaseAdmin) {
   } = await supabaseAdmin.auth.getUser(accessToken);
   if (error || !user) return unauthorized("Invalid or expired token");
 
-  return { user, response: null };
+  return { user, claims: null, response: null };
 }
+
+/**
+ * Requires a real authentication event within maxAgeSeconds.
+ *
+ * Token refreshes deliberately do not count: refreshing a long-lived session
+ * is not the same thing as the user proving possession of an authentication
+ * factor again. Password / OTP / WebAuthn entries in the signed AMR list do.
+ */
+export async function requireRecentUser(
+  request,
+  supabaseAdmin,
+  maxAgeSeconds = DEFAULT_RECENT_AUTH_SECONDS
+) {
+  const accessToken = accessTokenFrom(request);
+  if (!accessToken) return unauthorized("Authorization required");
+
+  const { data: claimsData, error: claimsError } =
+    await supabaseAdmin.auth.getClaims(accessToken);
+  const claims = claimsData?.claims;
+  if (claimsError || !claims?.sub) return unauthorized("Invalid or expired token");
+
+  const amr = Array.isArray(claims.amr) ? claims.amr : [];
+  const authTimestamps = amr
+    .filter((entry) => entry && entry.method !== "token_refresh")
+    .map((entry) => Number(entry.timestamp))
+    .filter(Number.isFinite);
+
+  // If AMR is absent, fail closed for sensitive actions. Falling back to
+  // JWT iat would be unsafe because a refreshed access token gets a fresh iat
+  // even when the human has not authenticated again.
+  const latestAuth = authTimestamps.length ? Math.max(...authTimestamps) : null;
+
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  if (!Number.isFinite(latestAuth) || nowSeconds - latestAuth > maxAgeSeconds) {
+    return {
+      user: null,
+      claims,
+      response: jsonResponse(
+        {
+          error: "Please sign in again before continuing.",
+          code: "reauth_required",
+        },
+        403
+      ),
+    };
+  }
+
+  const {
+    data: { user },
+    error: userError,
+  } = await supabaseAdmin.auth.getUser(accessToken);
+  if (userError || !user || user.id !== claims.sub) {
+    return unauthorized("Invalid or expired token");
+  }
+
+  return { user, claims, response: null };
+}
+
+export { DEFAULT_RECENT_AUTH_SECONDS };
 
 export function jsonResponse(body, status = 200) {
   return new Response(JSON.stringify(body), {
