@@ -1,6 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import { decryptSecret } from "../../lib/crypto.js";
-import { getAccountForUser, getLiveSubscription } from "../../lib/accounts.js";
+import { getAccountForUser, getEffectiveEntitlement } from "../../lib/accounts.js";
 
 export async function onRequestGet({ env, request }) {
   const noStoreJson = (body, status) =>
@@ -27,12 +27,8 @@ export async function onRequestGet({ env, request }) {
     const account = await getAccountForUser(supabaseAdmin, user.id);
     if (!account) return noStoreJson({ error: "No active subscription" }, 403);
 
-    const subscription = await getLiveSubscription(
-      supabaseAdmin,
-      account.accountId,
-      "status, current_period_end, cancel_at_period_end"
-    );
-    if (!subscription) return noStoreJson({ error: "No active subscription" }, 403);
+    const entitlement = await getEffectiveEntitlement(supabaseAdmin, account.accountId);
+    if (!entitlement) return noStoreJson({ error: "No active subscription" }, 403);
 
     const { data: vpnAccount, error: vpnAccountError } = await supabaseAdmin
       .from("vpn_accounts")
@@ -77,9 +73,10 @@ export async function onRequestGet({ env, request }) {
         subscription_url: subscriptionUrl,
         provisioning_url: provisioningUrl,
         preferred_setup_url: provisioningUrl ?? subscriptionUrl,
-        status: subscription.status,
-        current_period_end: subscription.current_period_end,
-        cancel_at_period_end: subscription.cancel_at_period_end,
+        entitlement_source: entitlement.source,
+        status: entitlement.status,
+        current_period_end: entitlement.currentPeriodEnd,
+        cancel_at_period_end: entitlement.cancelAtPeriodEnd,
       },
       200
     );
