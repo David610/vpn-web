@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Nav from "@/components/Nav";
 import Footer from "@/components/Footer";
 import { useSession } from "@/hooks/useSession";
+import { MembersCard } from "@/components/MembersCard";
 
 type ConfigState =
   | { phase: "loading" }
@@ -297,6 +298,7 @@ export default function DashboardPage() {
             )}
           </div>
         </div>
+        <MembersCard session={session} />
       </main>
       <Footer />
     </>
