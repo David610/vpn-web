@@ -114,6 +114,10 @@ export function MembersCard({ session }: { session: Session }) {
         body: JSON.stringify({ quantity: nextExtra }),
       });
       const data = await res.json().catch(() => ({}));
+      if (res.status === 403 && data.code === "reauth_required") {
+        window.location.href = "/login/?next=/dashboard/&reauth=1";
+        return;
+      }
       if (!res.ok) throw new Error(data.error || "Could not change your seats.");
       setNotice(
         nextExtra > account.seats.extra
