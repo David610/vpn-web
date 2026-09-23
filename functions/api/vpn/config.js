@@ -31,7 +31,7 @@ export async function onRequestGet({ env, request }) {
     if (!entitlement) {
       const { data: accountRow, error: trialError } = await supabaseAdmin
         .from("customer_accounts")
-        .select("trial_used_at, trial_reserved_at")
+        .select("trial_used_at, trial_reserved_at, trial_checkout_session_id")
         .eq("id", account.accountId)
         .maybeSingle();
       if (trialError) throw new Error(`trial eligibility lookup failed: ${trialError.message}`);
@@ -42,7 +42,12 @@ export async function onRequestGet({ env, request }) {
         {
           error: "No active subscription",
           code: "no_subscription",
-          trial_available: !accountRow?.trial_used_at && !reservationFresh,
+          // A fresh reservation with an attached Checkout Session is still
+          // available: create-checkout-session will resume that same Stripe
+          // session rather than minting a second trial.
+          trial_available:
+            !accountRow?.trial_used_at &&
+            (!reservationFresh || Boolean(accountRow?.trial_checkout_session_id)),
         },
         403
       );
