@@ -50,11 +50,15 @@ export async function onRequestGet({ env, request }) {
       supabaseAdmin.from("provisioning_jobs").select("id", { count: "exact", head: true }).eq("status", "claimed"),
       supabaseAdmin.from("provisioning_jobs").select("id", { count: "exact", head: true }).eq("status", "failed"),
       supabaseAdmin.from("nodes").select("last_seen_at, revoked_at"),
-      supabaseAdmin.from("vpn_usage_current").select("download_bps, upload_bps"),
       supabaseAdmin
-        .from("vpn_usage_hourly")
-        .select("download_bytes, upload_bytes")
-        .gte("hour", monthStart.toISOString()),
+        .from("node_traffic_samples")
+        .select("node_id, delta_up, delta_down, interval_seconds, sampled_at")
+        .order("sampled_at", { ascending: false })
+        .limit(500),
+      supabaseAdmin
+        .from("node_traffic_daily")
+        .select("bytes_up, bytes_down")
+        .gte("day", monthStart.toISOString().slice(0, 10)),
       supabaseAdmin
         .from("operational_alerts")
         .select("id", { count: "exact", head: true })
@@ -73,7 +77,7 @@ export async function onRequestGet({ env, request }) {
     const [
       accounts, active, trialing, pastDue, canceled, members, invites, grants,
       seatRows, vpnTotal, vpnEnabled, vpnDisabled, jobsPending, jobsClaimed,
-      jobsFailed, nodesResult, currentUsage, monthlyUsage, alerts, abuse,
+      jobsFailed, nodesResult, trafficSamples, monthlyTraffic, alerts, abuse,
     ] = results;
 
     const now = Date.now();
@@ -83,10 +87,26 @@ export async function onRequestGet({ env, request }) {
     ).length;
     const nonRevoked = nodeRows.filter((n) => !n.revoked_at).length;
 
-    const downloadBps = sum(currentUsage.data, "download_bps");
-    const uploadBps = sum(currentUsage.data, "upload_bps");
-    const monthDownload = sum(monthlyUsage.data, "download_bytes");
-    const monthUpload = sum(monthlyUsage.data, "upload_bytes");
+    // Current throughput must come from the verified per-node Clash API
+    // accounting. Per-user usage tables exist as a capability-gated future
+    // surface, but the official sing-box build cannot populate them reliably.
+    const latestByNode = new Map();
+    for (const sample of trafficSamples.data ?? []) {
+      if (!latestByNode.has(sample.node_id)) latestByNode.set(sample.node_id, sample);
+    }
+
+    let downloadBps = 0;
+    let uploadBps = 0;
+    for (const sample of latestByNode.values()) {
+      const fresh = now - new Date(sample.sampled_at).getTime() < 120_000;
+      const interval = Number(sample.interval_seconds);
+      if (!fresh || !Number.isFinite(interval) || interval <= 0) continue;
+      downloadBps += Math.round(((Number(sample.delta_down) || 0) * 8) / interval);
+      uploadBps += Math.round(((Number(sample.delta_up) || 0) * 8) / interval);
+    }
+
+    const monthDownload = sum(monthlyTraffic.data, "bytes_down");
+    const monthUpload = sum(monthlyTraffic.data, "bytes_up");
 
     return jsonResponse({
       customers: {
