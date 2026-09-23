@@ -111,3 +111,76 @@ export async function getLiveSubscription(supabaseAdmin, accountId, columns = "*
   if (error) throw new Error(`subscriptions lookup failed: ${error.message}`);
   return data ?? null;
 }
+
+
+/**
+ * Returns the newest currently-valid admin grant for an account.
+ * Expired/revoked grants remain in the table for audit but confer no access.
+ */
+export async function getActiveAdminEntitlement(supabaseAdmin, accountId) {
+  const { data, error } = await supabaseAdmin
+    .from("admin_entitlements")
+    .select("id, starts_at, expires_at, seat_limit, reason")
+    .eq("account_id", accountId)
+    .eq("status", "active")
+    .order("created_at", { ascending: false });
+  if (error) throw new Error(`admin_entitlements lookup failed: ${error.message}`);
+
+  const now = Date.now();
+  return (
+    (data ?? []).find((row) => {
+      const starts = new Date(row.starts_at).getTime();
+      const expires = row.expires_at ? new Date(row.expires_at).getTime() : Infinity;
+      return starts <= now && expires > now;
+    }) ?? null
+  );
+}
+
+/**
+ * Effective service entitlement. Billing and support grants remain distinct
+ * records; this helper only answers whether service is available and at what
+ * capacity. When both exist, paid status remains the displayed source while
+ * the larger seat limit wins.
+ */
+export async function getEffectiveEntitlement(supabaseAdmin, accountId) {
+  const [subscription, grant] = await Promise.all([
+    getLiveSubscription(
+      supabaseAdmin,
+      accountId,
+      "id, status, current_period_end, cancel_at_period_end, extra_seats"
+    ),
+    getActiveAdminEntitlement(supabaseAdmin, accountId),
+  ]);
+
+  if (!subscription && !grant) return null;
+
+  const stripeSeatLimit = subscription
+    ? INCLUDED_SEATS + (subscription.extra_seats ?? 0)
+    : 0;
+  const grantSeatLimit = grant?.seat_limit ?? 0;
+  const seatLimit = Math.max(INCLUDED_SEATS, stripeSeatLimit, grantSeatLimit);
+
+  if (subscription) {
+    return {
+      source: "stripe",
+      status: subscription.status,
+      currentPeriodEnd: subscription.current_period_end ?? null,
+      cancelAtPeriodEnd: Boolean(subscription.cancel_at_period_end),
+      seatLimit,
+      extraSeats: Math.max(0, seatLimit - INCLUDED_SEATS),
+      subscription,
+      grant,
+    };
+  }
+
+  return {
+    source: "admin_grant",
+    status: "active",
+    currentPeriodEnd: grant.expires_at ?? null,
+    cancelAtPeriodEnd: false,
+    seatLimit,
+    extraSeats: Math.max(0, seatLimit - INCLUDED_SEATS),
+    subscription: null,
+    grant,
+  };
+}
