@@ -14,6 +14,9 @@ const REFUSALS = {
   invite_already_accepted: [409, "This invitation has already been used."],
   invite_revoked: [409, "This invitation was withdrawn."],
   invite_expired: [410, "This invitation has expired. Ask for a new one."],
+  invite_email_unverified: [403, "Verify your email before accepting this invitation."],
+  invite_email_mismatch: [403, "Sign in with the email address this invitation was sent to."],
+  invite_acceptor_missing: [403, "Sign in with the email address this invitation was sent to."],
   seats_full: [409, "That plan has no seats left."],
   already_member: [409, "You are already on this plan."],
   has_own_subscription: [
