@@ -363,6 +363,7 @@ export default function DashboardPage() {
             />
           </>
         )}
+        <SecurityCard session={session} />
       </main>
       <Footer />
     </>
