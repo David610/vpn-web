@@ -4,6 +4,7 @@ import {
   handleInvoicePaid,
   handleSubscriptionUpdated,
   handleSubscriptionDeleted,
+  handleSubscriptionTrialing,
 } from "../stripe-events.js";
 import { makeFakeSupabase, seedAccount } from "./fake-supabase.js";
 
@@ -367,5 +368,115 @@ describe("handleSubscriptionDeleted", () => {
   it("returns cleanly for an unknown subscription", async () => {
     const db = makeFakeSupabase({});
     await expect(handleSubscriptionDeleted(db, { id: "sub_nope" })).resolves.toBeUndefined();
+  });
+});
+
+const TRIAL_END_UNIX = 1893456000;
+const TRIAL_END_ISO = new Date(TRIAL_END_UNIX * 1000).toISOString();
+
+describe("handleSubscriptionTrialing", () => {
+  const trialing = (overrides = {}) => ({
+    id: "sub_123",
+    status: "trialing",
+    trial_end: TRIAL_END_UNIX,
+    ...overrides,
+  });
+
+  it("provisions every member for the trial period without any payment", async () => {
+    // The whole point of a trial is service before payment, so waiting for
+    // a paid invoice would mean the trial grants nothing.
+    const db = makeFakeSupabase(seedAccount({ status: "incomplete" }));
+
+    await handleSubscriptionTrialing(db, trialing());
+
+    const jobs = jobsOf(db);
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]).toMatchObject({
+      job_type: "CREATE_USER",
+      idempotency_key: "create-user:sub_123:user-1",
+      payload: { user_id: "user-1", expires_at: TRIAL_END_ISO },
+    });
+    expect(db._tables.subscriptions[0]).toMatchObject({
+      status: "trialing",
+      current_period_end: TRIAL_END_ISO,
+    });
+  });
+
+  it("expires access at the trial end, not at some later date", async () => {
+    const db = makeFakeSupabase(seedAccount({ status: "incomplete" }));
+    await handleSubscriptionTrialing(db, trialing());
+    expect(jobsOf(db)[0].payload.expires_at).toBe(TRIAL_END_ISO);
+  });
+
+  it("does not double-provision when a zero-amount invoice also arrives", async () => {
+    // Stripe's behaviour around a $0 invoice at trial start is not something
+    // this code should depend on. Whichever fires first provisions; the
+    // other must be a no-op under the same idempotency key.
+    const db = makeFakeSupabase(seedAccount({ status: "incomplete" }));
+
+    await handleSubscriptionTrialing(db, trialing());
+    await handleInvoicePaid(db, invoice({ billingReason: "subscription_create" }));
+
+    expect(jobsOf(db)).toHaveLength(1);
+  });
+
+  it("is a no-op in the other order too", async () => {
+    const db = makeFakeSupabase(seedAccount({ status: "incomplete" }));
+
+    await handleInvoicePaid(db, invoice({ billingReason: "subscription_create" }));
+    await handleSubscriptionTrialing(db, trialing());
+
+    expect(jobsOf(db)).toHaveLength(1);
+  });
+
+  it("provisions a seat for every member of a shared plan", async () => {
+    const db = makeFakeSupabase(
+      seedAccount({
+        status: "incomplete",
+        members: [
+          { userId: "user-1", role: "owner" },
+          { userId: "user-2", role: "member" },
+        ],
+      })
+    );
+
+    await handleSubscriptionTrialing(db, trialing());
+
+    expect(jobsOf(db)).toHaveLength(2);
+  });
+
+  it("throws so Stripe retries when the checkout mapping has not landed", async () => {
+    const db = makeFakeSupabase({});
+    await expect(handleSubscriptionTrialing(db, trialing())).rejects.toThrow(
+      /no subscriptions row/
+    );
+  });
+
+  it("throws rather than guessing an expiry when trial_end is missing", async () => {
+    const db = makeFakeSupabase(seedAccount({ status: "incomplete" }));
+    await expect(
+      handleSubscriptionTrialing(db, trialing({ trial_end: undefined }))
+    ).rejects.toThrow(/no trial_end/);
+    expect(jobsOf(db)).toHaveLength(0);
+  });
+
+  it("extends expiry via SET_EXPIRY when the trial converts", async () => {
+    // Conversion invoices carry billing_reason subscription_cycle, so they
+    // take the renewal path against the seats the trial provisioned.
+    const db = makeFakeSupabase(
+      seedAccount({
+        status: "trialing",
+        provisioned: [{ userId: "user-1", vpnUserId: "vpn-1" }],
+      })
+    );
+
+    await handleInvoicePaid(db, invoice({ billingReason: "subscription_cycle" }));
+
+    const jobs = jobsOf(db);
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]).toMatchObject({
+      job_type: "SET_EXPIRY",
+      payload: { vpn_user_id: "vpn-1", expires_at: PERIOD_END_ISO },
+    });
   });
 });

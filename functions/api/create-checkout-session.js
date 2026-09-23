@@ -2,6 +2,12 @@ import Stripe from "stripe";
 import { createClient } from "@supabase/supabase-js";
 import { getAccountForUser } from "../lib/accounts.js";
 
+/**
+ * Free trial length. Stripe bills nothing until it elapses; the subscription
+ * sits in "trialing", which entitlement already treats as live.
+ */
+const TRIAL_DAYS = 3;
+
 export async function onRequestPost({ env, request }) {
   const authHeader = request.headers.get("Authorization");
   const accessToken = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
@@ -85,6 +91,7 @@ export async function onRequestPost({ env, request }) {
       session = await stripe.checkout.sessions.create({
         mode: "subscription",
         line_items: [{ price: env.STRIPE_PRICE_ID, quantity: 1 }],
+        subscription_data: { trial_period_days: TRIAL_DAYS },
         client_reference_id: user.id,
         customer_email: user.email,
         success_url: `${env.SITE_URL}/dashboard/?checkout=success`,

@@ -184,31 +184,19 @@ export async function handleInvoicePaid(supabaseAdmin, invoice) {
   const isFirstInvoice = invoice.billing_reason === "subscription_create";
 
   if (isFirstInvoice) {
-    // At the first invoice the account has exactly one member — the owner
-    // who just completed Checkout — because seats can only be invited from
-    // a billed account. Provision them. Members who join later are
-    // provisioned by the invite-acceptance path, not from here.
-    const members = await getAccountMembers(supabaseAdmin, sub.account_id);
-    if (members.length === 0) {
-      throw new Error(
-        `invoice.paid: account ${sub.account_id} has no members — cannot provision`
-      );
-    }
-    for (const member of members) {
-      const { error: jobError } = await supabaseAdmin.from("provisioning_jobs").insert({
-        // Keyed per member, not per subscription: an account provisions one
-        // VPN user per seat, so the subscription id alone is not unique
-        // enough to make a redelivery a no-op.
-        idempotency_key: `create-user:${subscriptionId}:${member.userId}`,
-        node_id: nodeId,
-        job_type: "CREATE_USER",
-        vpn_account_id: null,
-        payload: { user_id: member.userId, expires_at: currentPeriodEnd },
-      });
-      if (jobError && jobError.code !== "23505") {
-        throw new Error(`provisioning_jobs insert failed: ${jobError.message}`);
-      }
-    }
+    // At the first invoice the account usually has exactly one member — the
+    // owner who just completed Checkout — because seats can only be invited
+    // from a billed account. Members who join later are provisioned by the
+    // invite-acceptance path, not from here.
+    //
+    // For a subscription that began as a trial this is a no-op: the trial
+    // handler already enqueued these under the same idempotency keys.
+    await enqueueCreateForMembers(
+      supabaseAdmin,
+      sub.account_id,
+      subscriptionId,
+      currentPeriodEnd
+    );
     return;
   }
 
@@ -242,6 +230,91 @@ export async function handleInvoicePaid(supabaseAdmin, invoice) {
       throw new Error(`provisioning_jobs insert failed: ${jobError.message}`);
     }
   }
+}
+
+/**
+ * Enqueues a CREATE_USER job for every member of an account that has none.
+ *
+ * Shared by the first paid invoice and by trial activation. The idempotency
+ * key is per member and per subscription, so whichever of those fires first
+ * provisions and the other is a no-op — which is what lets trial handling be
+ * added without having to know whether Stripe emits a zero-amount invoice at
+ * trial start.
+ */
+async function enqueueCreateForMembers(supabaseAdmin, accountId, subscriptionId, expiresAt) {
+  const members = await getAccountMembers(supabaseAdmin, accountId);
+  if (members.length === 0) {
+    throw new Error(`account ${accountId} has no members — cannot provision`);
+  }
+  const nodeId = resolveNodeForUser();
+  for (const member of members) {
+    const { error: jobError } = await supabaseAdmin.from("provisioning_jobs").insert({
+      // Keyed per member, not per subscription: an account provisions one
+      // VPN user per seat, so the subscription id alone is not unique enough
+      // to make a redelivery a no-op.
+      idempotency_key: `create-user:${subscriptionId}:${member.userId}`,
+      node_id: nodeId,
+      job_type: "CREATE_USER",
+      vpn_account_id: null,
+      payload: { user_id: member.userId, expires_at: expiresAt },
+    });
+    if (jobError && jobError.code !== "23505") {
+      throw new Error(`provisioning_jobs insert failed: ${jobError.message}`);
+    }
+  }
+}
+
+/**
+ * Starts service for a subscription that has entered its free trial.
+ *
+ * The file header says invoice.paid is the sole provisioning trigger. A free
+ * trial is the one case that rule cannot express: its whole point is service
+ * before payment, so waiting for a paid invoice would mean the trial grants
+ * nothing. The rule's actual intent — never provision for a checkout that
+ * was never paid for — still holds, because Stripe only reports `trialing`
+ * for a subscription it created itself.
+ *
+ * Stripe's behaviour around a zero-amount invoice at trial start is not
+ * something this code should depend on: if that invoice does arrive,
+ * handleInvoicePaid provisions under the same idempotency key and this is a
+ * no-op; if it never arrives, this is the only thing that starts the trial.
+ * Correct either way, and the cost of guessing wrong would be trials that
+ * silently deliver no VPN at all.
+ */
+export async function handleSubscriptionTrialing(supabaseAdmin, subscription) {
+  const trialEndUnix = subscription.trial_end;
+  if (typeof trialEndUnix !== "number") {
+    throw new Error(
+      `subscription ${subscription.id} is trialing but carries no trial_end`
+    );
+  }
+  const trialEnd = new Date(trialEndUnix * 1000).toISOString();
+
+  const { data: sub, error: subError } = await supabaseAdmin
+    .from("subscriptions")
+    .update({
+      status: "trialing",
+      current_period_end: trialEnd,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("stripe_subscription_id", subscription.id)
+    .select("account_id")
+    .maybeSingle();
+  if (subError) {
+    throw new Error(`subscriptions update failed: ${subError.message}`);
+  }
+  if (!sub) {
+    // checkout.session.completed's mapping has not landed yet; Stripe does
+    // not guarantee delivery order. Retry rather than dropping the trial.
+    throw new Error(
+      `no subscriptions row for stripe_subscription_id=${subscription.id} yet`
+    );
+  }
+
+  // Access expires when the trial does. If the customer converts, the
+  // invoice for the first real period extends it via SET_EXPIRY; if they do
+  // not, it simply lapses, with no separate revocation needed.
+  await enqueueCreateForMembers(supabaseAdmin, sub.account_id, subscription.id, trialEnd);
 }
 
 /**
