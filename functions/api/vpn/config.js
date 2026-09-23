@@ -1,6 +1,7 @@
 import { createClient } from "@supabase/supabase-js";
 import { decryptSecret } from "../../lib/crypto.js";
 import { getAccountForUser, getEffectiveEntitlement } from "../../lib/accounts.js";
+import { requireUser } from "../../lib/user-auth.js";
 
 export async function onRequestGet({ env, request }) {
   const noStoreJson = (body, status) =>
@@ -9,20 +10,14 @@ export async function onRequestGet({ env, request }) {
       headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
     });
 
-  const authHeader = request.headers.get("Authorization");
-  const accessToken = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
-  if (!accessToken) return noStoreJson({ error: "Authorization required" }, 401);
-
   const supabaseAdmin = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
     auth: { autoRefreshToken: false, persistSession: false },
   });
 
+  const { user, response } = await requireUser(request, supabaseAdmin);
+  if (!user) return response;
+
   try {
-    const {
-      data: { user },
-      error: tokenError,
-    } = await supabaseAdmin.auth.getUser(accessToken);
-    if (tokenError || !user) return noStoreJson({ error: "Invalid or expired token" }, 401);
 
     const account = await getAccountForUser(supabaseAdmin, user.id);
     if (!account) return noStoreJson({ error: "No active subscription" }, 403);
