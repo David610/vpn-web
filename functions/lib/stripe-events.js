@@ -175,6 +175,28 @@ export async function handleInvoicePaid(supabaseAdmin, invoice) {
     );
   }
 
+  // A customer who chooses "Subscribe now" has received the product
+  // without using a trial, so they must not be able to cancel later and
+  // claim a first-time trial. Preserve the original first-use timestamp.
+  const { data: trialAccount, error: trialReadError } = await supabaseAdmin
+    .from("customer_accounts")
+    .select("trial_used_at")
+    .eq("id", sub.account_id)
+    .maybeSingle();
+  if (trialReadError) {
+    throw new Error(`customer_accounts trial lookup failed: ${trialReadError.message}`);
+  }
+  const { error: trialConsumeError } = await supabaseAdmin
+    .from("customer_accounts")
+    .update({
+      trial_used_at: trialAccount?.trial_used_at ?? new Date().toISOString(),
+      trial_reserved_at: null,
+    })
+    .eq("id", sub.account_id);
+  if (trialConsumeError) {
+    throw new Error(`customer_accounts trial update failed: ${trialConsumeError.message}`);
+  }
+
   const nodeId = resolveNodeForUser();
 
   // billing_reason distinguishes a subscription's first invoice from every
@@ -309,6 +331,28 @@ export async function handleSubscriptionTrialing(supabaseAdmin, subscription) {
     throw new Error(
       `no subscriptions row for stripe_subscription_id=${subscription.id} yet`
     );
+  }
+
+  // Stripe has now confirmed that the subscription really entered its
+  // trial, so consume the account's one-time eligibility and clear the
+  // short-lived Checkout reservation.
+  const { data: trialAccount, error: trialReadError } = await supabaseAdmin
+    .from("customer_accounts")
+    .select("trial_used_at")
+    .eq("id", sub.account_id)
+    .maybeSingle();
+  if (trialReadError) {
+    throw new Error(`customer_accounts trial lookup failed: ${trialReadError.message}`);
+  }
+  const { error: trialConsumeError } = await supabaseAdmin
+    .from("customer_accounts")
+    .update({
+      trial_used_at: trialAccount?.trial_used_at ?? new Date().toISOString(),
+      trial_reserved_at: null,
+    })
+    .eq("id", sub.account_id);
+  if (trialConsumeError) {
+    throw new Error(`customer_accounts trial update failed: ${trialConsumeError.message}`);
   }
 
   // Access expires when the trial does. If the customer converts, the
