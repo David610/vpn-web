@@ -114,26 +114,30 @@ export async function getLiveSubscription(supabaseAdmin, accountId, columns = "*
 
 
 /**
- * Returns the newest currently-valid admin grant for an account.
- * Expired/revoked grants remain in the table for audit but confer no access.
+ * Returns all currently-valid support grants for an account. Historical
+ * expired/revoked rows remain queryable for audit but never confer access.
  */
-export async function getActiveAdminEntitlement(supabaseAdmin, accountId) {
+export async function getActiveAdminEntitlements(supabaseAdmin, accountId) {
   const { data, error } = await supabaseAdmin
     .from("admin_entitlements")
-    .select("id, starts_at, expires_at, seat_limit, reason")
+    .select("id, starts_at, expires_at, seat_limit, reason, created_at")
     .eq("account_id", accountId)
-    .is("revoked_at", null)
+    .eq("status", "active")
     .order("created_at", { ascending: false });
   if (error) throw new Error(`admin_entitlements lookup failed: ${error.message}`);
 
   const now = Date.now();
-  return (
-    (data ?? []).find((row) => {
-      const starts = new Date(row.starts_at).getTime();
-      const expires = row.expires_at ? new Date(row.expires_at).getTime() : Infinity;
-      return Number.isFinite(starts) && starts <= now && expires > now;
-    }) ?? null
-  );
+  return (data ?? []).filter((row) => {
+    const starts = new Date(row.starts_at).getTime();
+    const expires = row.expires_at ? new Date(row.expires_at).getTime() : Infinity;
+    return Number.isFinite(starts) && starts <= now && expires > now;
+  });
+}
+
+/** Backward-compatible convenience for callers that only need one row. */
+export async function getActiveAdminEntitlement(supabaseAdmin, accountId) {
+  const grants = await getActiveAdminEntitlements(supabaseAdmin, accountId);
+  return grants[0] ?? null;
 }
 
 function laterIso(a, b) {
@@ -145,33 +149,42 @@ function laterIso(a, b) {
 /**
  * Effective service entitlement. Billing and support grants remain distinct
  * records; this helper only answers whether service is available and at what
- * capacity. A support grant may extend access beyond a paid period without
- * mutating Stripe state or pretending revenue was collected.
+ * capacity. Multiple support grants compose safely: the largest seat limit
+ * wins and access lasts until the latest finite expiry, while any valid
+ * no-expiry grant clears the VPN expiry entirely.
  */
 export async function getEffectiveEntitlement(supabaseAdmin, accountId) {
-  const [subscription, grant] = await Promise.all([
+  const [subscription, grants] = await Promise.all([
     getLiveSubscription(
       supabaseAdmin,
       accountId,
       "id, status, current_period_end, cancel_at_period_end, extra_seats"
     ),
-    getActiveAdminEntitlement(supabaseAdmin, accountId),
+    getActiveAdminEntitlements(supabaseAdmin, accountId),
   ]);
 
-  if (!subscription && !grant) return null;
+  if (!subscription && grants.length === 0) return null;
 
   const stripeSeatLimit = subscription
     ? INCLUDED_SEATS + (subscription.extra_seats ?? 0)
     : 0;
-  const grantSeatLimit = grant?.seat_limit ?? 0;
+  const grantSeatLimit = grants.reduce(
+    (max, grant) => Math.max(max, grant.seat_limit ?? 0),
+    0
+  );
   const seatLimit = Math.max(INCLUDED_SEATS, stripeSeatLimit, grantSeatLimit);
 
-  // A no-expiry support grant explicitly means the VPN user's expiry should
-  // be cleared. Otherwise whichever entitlement ends later controls service.
-  const clearExpiry = Boolean(grant && grant.expires_at === null);
-  const serviceExpiresAt = clearExpiry
-    ? null
-    : laterIso(subscription?.current_period_end ?? null, grant?.expires_at ?? null);
+  const clearExpiry = grants.some((grant) => grant.expires_at === null);
+  let serviceExpiresAt = subscription?.current_period_end ?? null;
+  if (!clearExpiry) {
+    for (const grant of grants) {
+      serviceExpiresAt = laterIso(serviceExpiresAt, grant.expires_at ?? null);
+    }
+  } else {
+    serviceExpiresAt = null;
+  }
+
+  const newestGrant = grants[0] ?? null;
 
   if (subscription) {
     return {
@@ -184,20 +197,22 @@ export async function getEffectiveEntitlement(supabaseAdmin, accountId) {
       serviceExpiresAt,
       clearExpiry,
       subscription,
-      grant,
+      grant: newestGrant,
+      grants,
     };
   }
 
   return {
     source: "admin_grant",
     status: "active",
-    currentPeriodEnd: grant.expires_at ?? null,
+    currentPeriodEnd: serviceExpiresAt,
     cancelAtPeriodEnd: false,
     seatLimit,
     extraSeats: Math.max(0, seatLimit - INCLUDED_SEATS),
     serviceExpiresAt,
     clearExpiry,
     subscription: null,
-    grant,
+    grant: newestGrant,
+    grants,
   };
 }
