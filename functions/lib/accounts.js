@@ -76,7 +76,7 @@ export async function getMemberVpnAccounts(supabaseAdmin, accountId, nodeId) {
 
   const { data, error } = await supabaseAdmin
     .from("vpn_accounts")
-    .select("id, vpn_user_id, user_id")
+    .select("id, vpn_user_id, user_id, enabled")
     .in(
       "user_id",
       members.map((m) => m.userId)
@@ -88,6 +88,7 @@ export async function getMemberVpnAccounts(supabaseAdmin, accountId, nodeId) {
     id: r.id,
     vpnUserId: r.vpn_user_id,
     userId: r.user_id,
+    enabled: r.enabled,
   }));
 }
 
