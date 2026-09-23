@@ -92,6 +92,10 @@ export function MembersCard({
         body: JSON.stringify({ email }),
       });
       const data = await res.json().catch(() => ({}));
+      if (res.status === 403 && data.code === "reauth_required") {
+        window.location.href = "/login/?next=/dashboard/&reauth=1";
+        return;
+      }
       if (!res.ok) throw new Error(data.error || "Could not send the invitation.");
       setNotice(`Invitation sent to ${data.invite.email}.`);
       setEmail("");
@@ -148,6 +152,10 @@ export function MembersCard({
         headers: { Authorization: `Bearer ${session.access_token}` },
       });
       const data = await res.json().catch(() => ({}));
+      if (res.status === 403 && data.code === "reauth_required") {
+        window.location.href = "/login/?next=/dashboard/&reauth=1";
+        return;
+      }
       if (!res.ok) throw new Error(data.error || "Could not withdraw the invitation.");
       await load();
     } catch (err) {
