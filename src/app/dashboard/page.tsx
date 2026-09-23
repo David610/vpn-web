@@ -8,6 +8,7 @@ import { useSession } from "@/hooks/useSession";
 import { MembersCard } from "@/components/MembersCard";
 import { AccountActionsCard } from "@/components/AccountActionsCard";
 import { UsageCard } from "@/components/UsageCard";
+import { SecurityCard } from "@/components/SecurityCard";
 
 type ConfigState =
   | { phase: "loading" }
