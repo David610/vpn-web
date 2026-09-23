@@ -76,7 +76,7 @@ export async function getMemberVpnAccounts(supabaseAdmin, accountId, nodeId) {
 
   const { data, error } = await supabaseAdmin
     .from("vpn_accounts")
-    .select("id, vpn_user_id, user_id")
+    .select("id, vpn_user_id, user_id, enabled")
     .in(
       "user_id",
       members.map((m) => m.userId)
@@ -88,6 +88,7 @@ export async function getMemberVpnAccounts(supabaseAdmin, accountId, nodeId) {
     id: r.id,
     vpnUserId: r.vpn_user_id,
     userId: r.user_id,
+    enabled: r.enabled,
   }));
 }
 
@@ -110,4 +111,109 @@ export async function getLiveSubscription(supabaseAdmin, accountId, columns = "*
     .maybeSingle();
   if (error) throw new Error(`subscriptions lookup failed: ${error.message}`);
   return data ?? null;
+}
+
+
+/**
+ * Returns all currently-valid support grants for an account. Historical
+ * expired/revoked rows remain queryable for audit but never confer access.
+ */
+export async function getActiveAdminEntitlements(supabaseAdmin, accountId) {
+  const { data, error } = await supabaseAdmin
+    .from("admin_entitlements")
+    .select("id, starts_at, expires_at, seat_limit, reason, created_at")
+    .eq("account_id", accountId)
+    .eq("status", "active")
+    .order("created_at", { ascending: false });
+  if (error) throw new Error(`admin_entitlements lookup failed: ${error.message}`);
+
+  const now = Date.now();
+  return (data ?? []).filter((row) => {
+    const starts = new Date(row.starts_at).getTime();
+    const expires = row.expires_at ? new Date(row.expires_at).getTime() : Infinity;
+    return Number.isFinite(starts) && starts <= now && expires > now;
+  });
+}
+
+/** Backward-compatible convenience for callers that only need one row. */
+export async function getActiveAdminEntitlement(supabaseAdmin, accountId) {
+  const grants = await getActiveAdminEntitlements(supabaseAdmin, accountId);
+  return grants[0] ?? null;
+}
+
+function laterIso(a, b) {
+  if (!a) return b ?? null;
+  if (!b) return a;
+  return new Date(a).getTime() >= new Date(b).getTime() ? a : b;
+}
+
+/**
+ * Effective service entitlement. Billing and support grants remain distinct
+ * records; this helper only answers whether service is available and at what
+ * capacity. Multiple support grants compose safely: the largest seat limit
+ * wins and access lasts until the latest finite expiry, while any valid
+ * no-expiry grant clears the VPN expiry entirely.
+ */
+export async function getEffectiveEntitlement(supabaseAdmin, accountId) {
+  const [subscription, grants] = await Promise.all([
+    getLiveSubscription(
+      supabaseAdmin,
+      accountId,
+      "id, status, current_period_end, cancel_at_period_end, extra_seats"
+    ),
+    getActiveAdminEntitlements(supabaseAdmin, accountId),
+  ]);
+
+  if (!subscription && grants.length === 0) return null;
+
+  const stripeSeatLimit = subscription
+    ? INCLUDED_SEATS + (subscription.extra_seats ?? 0)
+    : 0;
+  const grantSeatLimit = grants.reduce(
+    (max, grant) => Math.max(max, grant.seat_limit ?? 0),
+    0
+  );
+  const seatLimit = Math.max(INCLUDED_SEATS, stripeSeatLimit, grantSeatLimit);
+
+  const clearExpiry = grants.some((grant) => grant.expires_at === null);
+  let serviceExpiresAt = subscription?.current_period_end ?? null;
+  if (!clearExpiry) {
+    for (const grant of grants) {
+      serviceExpiresAt = laterIso(serviceExpiresAt, grant.expires_at ?? null);
+    }
+  } else {
+    serviceExpiresAt = null;
+  }
+
+  const newestGrant = grants[0] ?? null;
+
+  if (subscription) {
+    return {
+      source: "stripe",
+      status: subscription.status,
+      currentPeriodEnd: subscription.current_period_end ?? null,
+      cancelAtPeriodEnd: Boolean(subscription.cancel_at_period_end),
+      seatLimit,
+      extraSeats: Math.max(0, seatLimit - INCLUDED_SEATS),
+      serviceExpiresAt,
+      clearExpiry,
+      subscription,
+      grant: newestGrant,
+      grants,
+    };
+  }
+
+  return {
+    source: "admin_grant",
+    status: "active",
+    currentPeriodEnd: serviceExpiresAt,
+    cancelAtPeriodEnd: false,
+    seatLimit,
+    extraSeats: Math.max(0, seatLimit - INCLUDED_SEATS),
+    serviceExpiresAt,
+    clearExpiry,
+    subscription: null,
+    grant: newestGrant,
+    grants,
+  };
 }
