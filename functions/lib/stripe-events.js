@@ -193,6 +193,7 @@ export async function handleInvoicePaid(supabaseAdmin, invoice) {
     .update({
       trial_used_at: trialAccount?.trial_used_at ?? new Date().toISOString(),
       trial_reserved_at: null,
+      trial_checkout_session_id: null,
     })
     .eq("id", sub.account_id);
   if (trialConsumeError) {
@@ -399,6 +400,7 @@ export async function handleSubscriptionTrialing(supabaseAdmin, subscription) {
     .update({
       trial_used_at: trialAccount?.trial_used_at ?? new Date().toISOString(),
       trial_reserved_at: null,
+      trial_checkout_session_id: null,
     })
     .eq("id", sub.account_id);
   if (trialConsumeError) {
