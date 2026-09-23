@@ -36,8 +36,8 @@ describe("GET /api/admin/nodes", () => {
     expect(body.nodes[0].status).toBe("online");
   });
 
-  it("classifies a node seen 90s ago as degraded", async () => {
-    const stale = new Date(Date.now() - 90_000).toISOString();
+  it("classifies a node seen 120s ago as degraded", async () => {
+    const stale = new Date(Date.now() - 120_000).toISOString();
     nodesSelect = vi.fn().mockResolvedValue({ data: [{ node_id: "node-1", last_seen_at: stale, revoked_at: null }], error: null });
     const res = await onRequestGet({ env, request: makeRequest() });
     const body = await res.json();
