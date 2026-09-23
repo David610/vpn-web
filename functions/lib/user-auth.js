@@ -60,12 +60,10 @@ export async function requireRecentUser(
     .map((entry) => Number(entry.timestamp))
     .filter(Number.isFinite);
 
-  // Older projects/tokens may not carry AMR. Fall back to iat, which is
-  // still a signed claim and is conservative for a newly established
-  // session. It is intentionally NOT refreshed client-side here.
-  const latestAuth = authTimestamps.length
-    ? Math.max(...authTimestamps)
-    : Number(claims.iat);
+  // If AMR is absent, fail closed for sensitive actions. Falling back to
+  // JWT iat would be unsafe because a refreshed access token gets a fresh iat
+  // even when the human has not authenticated again.
+  const latestAuth = authTimestamps.length ? Math.max(...authTimestamps) : null;
 
   const nowSeconds = Math.floor(Date.now() / 1000);
   if (!Number.isFinite(latestAuth) || nowSeconds - latestAuth > maxAgeSeconds) {
