@@ -18,6 +18,7 @@ import {
   getSubscriptionPeriodEnd,
   getInvoiceSubscriptionId,
   getInvoiceLinePeriodEnd,
+  getExtraSeatCount,
 } from "./stripe-fields.js";
 import { resolveNodeForUser } from "./resolve-node.js";
 import {
@@ -309,7 +310,7 @@ async function enqueueDisableForAccount(supabaseAdmin, accountId, subscriptionId
  * @param {import('@supabase/supabase-js').SupabaseClient} supabaseAdmin
  * @param {object} subscription - a Stripe Subscription object
  */
-export async function handleSubscriptionUpdated(supabaseAdmin, subscription) {
+export async function handleSubscriptionUpdated(supabaseAdmin, subscription, seatPriceId) {
   const periodEndUnix = getSubscriptionPeriodEnd(subscription);
   const currentPeriodEnd =
     typeof periodEndUnix === "number" ? new Date(periodEndUnix * 1000).toISOString() : null;
@@ -320,6 +321,11 @@ export async function handleSubscriptionUpdated(supabaseAdmin, subscription) {
       status: subscription.status,
       current_period_end: currentPeriodEnd,
       cancel_at_period_end: Boolean(subscription.cancel_at_period_end),
+      // Stripe is the source of truth for how many seats are paid for; this
+      // column is only ever a mirror of the per-seat item's quantity. Every
+      // seat change — bought here, or refunded/adjusted in the Stripe
+      // dashboard — arrives as this event, so syncing here covers both.
+      extra_seats: getExtraSeatCount(subscription, seatPriceId),
       updated_at: new Date().toISOString(),
     })
     .eq("stripe_subscription_id", subscription.id)

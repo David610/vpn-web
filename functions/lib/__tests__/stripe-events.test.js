@@ -212,6 +212,75 @@ describe("handleSubscriptionUpdated", () => {
     expect(jobs.map((j) => j.payload.vpn_user_id).sort()).toEqual(["vpn-1", "vpn-2"]);
   });
 
+  it("mirrors the per-seat item quantity into extra_seats", async () => {
+    // Stripe owns the seat count; this column is only ever a mirror. Seats
+    // bought through our API and seats adjusted in the Stripe dashboard both
+    // arrive as this event, so syncing here covers both.
+    const db = makeFakeSupabase(seedAccount({}));
+
+    await handleSubscriptionUpdated(
+      db,
+      {
+        id: "sub_123",
+        status: "active",
+        cancel_at_period_end: false,
+        current_period_end: PERIOD_END_UNIX,
+        items: {
+          data: [
+            { id: "si_base", price: { id: "price_base" }, quantity: 1 },
+            { id: "si_seat", price: { id: "price_seat" }, quantity: 4 },
+          ],
+        },
+      },
+      "price_seat"
+    );
+
+    expect(db._tables.subscriptions[0].extra_seats).toBe(4);
+  });
+
+  it("records zero extra seats when the seat item is gone", async () => {
+    const db = makeFakeSupabase({
+      ...seedAccount({}),
+      subscriptions: [
+        { id: 1, account_id: "acct-1", stripe_subscription_id: "sub_123", status: "active", extra_seats: 3 },
+      ],
+    });
+
+    await handleSubscriptionUpdated(
+      db,
+      {
+        id: "sub_123",
+        status: "active",
+        cancel_at_period_end: false,
+        current_period_end: PERIOD_END_UNIX,
+        items: { data: [{ id: "si_base", price: { id: "price_base" }, quantity: 1 }] },
+      },
+      "price_seat"
+    );
+
+    // Must fall back to 0, not leave the stale 3 in place — otherwise a
+    // released seat keeps granting capacity nobody is paying for.
+    expect(db._tables.subscriptions[0].extra_seats).toBe(0);
+  });
+
+  it("does not mistake the base item for the seat item", async () => {
+    const db = makeFakeSupabase(seedAccount({}));
+
+    await handleSubscriptionUpdated(
+      db,
+      {
+        id: "sub_123",
+        status: "active",
+        cancel_at_period_end: false,
+        current_period_end: PERIOD_END_UNIX,
+        items: { data: [{ id: "si_base", price: { id: "price_base" }, quantity: 7 }] },
+      },
+      "price_seat"
+    );
+
+    expect(db._tables.subscriptions[0].extra_seats).toBe(0);
+  });
+
   it("leaves seats alone while the subscription is merely active", async () => {
     const db = makeFakeSupabase(
       seedAccount({ provisioned: [{ userId: "user-1", vpnUserId: "vpn-1" }] })

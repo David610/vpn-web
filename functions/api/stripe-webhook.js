@@ -91,7 +91,7 @@ export async function onRequestPost({ env, request }) {
         await handleInvoicePaid(supabaseAdmin, event.data.object);
         break;
       case "customer.subscription.updated":
-        await handleSubscriptionUpdated(supabaseAdmin, event.data.object);
+        await handleSubscriptionUpdated(supabaseAdmin, event.data.object, env.STRIPE_SEAT_PRICE_ID);
         break;
       case "customer.subscription.deleted":
         await handleSubscriptionDeleted(supabaseAdmin, event.data.object);

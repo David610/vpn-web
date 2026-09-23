@@ -97,6 +97,37 @@ export function MembersCard({ session }: { session: Session }) {
     }
   }
 
+  async function changeSeats(nextExtra: number) {
+    if (!account) return;
+    setActionError(null);
+    setNotice(null);
+    setBusyId("seats");
+    try {
+      const res = await fetch("/api/account/seats", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+          "Content-Type": "application/json",
+        },
+        // Absolute, not a delta: a double-click sets the same total rather
+        // than buying twice.
+        body: JSON.stringify({ quantity: nextExtra }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Could not change your seats.");
+      setNotice(
+        nextExtra > account.seats.extra
+          ? "Seat added. Your next invoice is prorated."
+          : "Seat released. Your next invoice is prorated."
+      );
+      await load();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Something went wrong.");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   async function revokeInvite(invite: Invite) {
     setActionError(null);
     setNotice(null);
@@ -282,10 +313,54 @@ export function MembersCard({ session }: { session: Session }) {
             </div>
             {seats.available === 0 && (
               <p className="text-tiny" style={{ marginTop: "var(--space-2)" }}>
-                All seats are in use. Remove a member or withdraw an invitation to free one.
+                All seats are in use. Add a seat below, or free one by removing a member
+                or withdrawing an invitation.
               </p>
             )}
           </form>
+        )}
+
+        {isOwner && (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: "var(--space-3)",
+              marginTop: "var(--space-4)",
+              paddingTop: "var(--space-4)",
+              borderTop: "1px solid var(--border-soft)",
+            }}
+          >
+            <div>
+              <p className="text-tiny" style={{ margin: 0, color: "var(--fg)" }}>
+                Extra seats
+              </p>
+              <span className="tag" style={{ marginTop: "var(--space-1)" }}>
+                {seats.extra} beyond the {seats.included} included
+              </span>
+            </div>
+            <div style={{ display: "flex", gap: "var(--space-2)" }}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                disabled={busyId === "seats" || seats.extra === 0}
+                onClick={() => changeSeats(seats.extra - 1)}
+                aria-label="Release a seat"
+              >
+                −
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                disabled={busyId === "seats"}
+                onClick={() => changeSeats(seats.extra + 1)}
+                aria-label="Add a seat"
+              >
+                +
+              </button>
+            </div>
+          </div>
         )}
 
         {actionError && (
