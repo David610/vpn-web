@@ -53,13 +53,18 @@ export async function onRequestGet({ env, request }) {
     if (membersError) throw new Error(`account_members query failed: ${membersError.message}`);
     if (invitesError) throw new Error(`member_invites query failed: ${invitesError.message}`);
 
-    // Emails come from auth.users, which has no foreign-key join through
-    // PostgREST, so resolve them in one admin call rather than per member.
-    const { data: usersPage, error: usersError } = await supabaseAdmin.auth.admin.listUsers({
-      perPage: 1000,
-    });
-    if (usersError) throw new Error(`listUsers failed: ${usersError.message}`);
-    const emailByUserId = new Map(usersPage.users.map((u) => [u.id, u.email]));
+    // Email is denormalized into profiles by a DB trigger, so this stays a
+    // single indexed PostgREST query instead of listing the entire GoTrue
+    // user directory on every account read.
+    const memberIds = memberRows.map((m) => m.user_id);
+    const { data: profileRows, error: profilesError } = memberIds.length
+      ? await supabaseAdmin
+          .from("profiles")
+          .select("id, email")
+          .in("id", memberIds)
+      : { data: [], error: null };
+    if (profilesError) throw new Error(`profiles query failed: ${profilesError.message}`);
+    const emailByUserId = new Map((profileRows ?? []).map((p) => [p.id, p.email]));
 
     const seatLimit = entitlement?.seatLimit ?? INCLUDED_SEATS;
     // A pending invite is a reserved seat. Counting only accepted members
