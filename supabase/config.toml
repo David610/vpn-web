@@ -201,7 +201,7 @@ sms_sent = 30
 # Number of anonymous sign-ins that can be made per hour per IP address. Requires enable_anonymous_sign_ins = true.
 anonymous_users = 30
 # Number of sessions that can be refreshed in a 5 minute interval per IP address.
-token_refresh = 150
+token_refresh = 600
 # Number of sign up and sign-in requests that can be made in a 5 minute interval per IP address (excludes anonymous users).
 sign_in_sign_ups = 30
 # Number of OTP / Magic link verifications that can be made in a 5 minute interval per IP address.
@@ -224,7 +224,7 @@ double_confirm_changes = true
 # If enabled, users need to confirm their email address before signing in.
 enable_confirmations = true
 # If enabled, users will need to reauthenticate or have logged in recently to change their password.
-secure_password_change = false
+secure_password_change = true
 # Controls the minimum amount of time that must pass before sending another signup confirmation or password reset email.
 max_frequency = "1s"
 # Number of characters used in the email OTP.
@@ -267,12 +267,13 @@ max_frequency = "5s"
 # [auth.sms.test_otp]
 # 4152127777 = "123456"
 
-# Configure logged in session timeouts.
-# [auth.sessions]
-# Force log out after the specified duration.
-# timebox = "24h"
-# Force log out if the user has been inactive longer than the specified duration.
-# inactivity_timeout = "8h"
+# Customer convenience with bounded exposure on lost/shared devices.
+# Mirror these values in the hosted Supabase Auth session settings.
+[auth.sessions]
+# Absolute lifetime: users authenticate again roughly monthly.
+timebox = "720h"
+# Active customers can stay signed in for days; an unused browser expires.
+inactivity_timeout = "168h"
 
 # This hook runs before a new user is created and allows developers to reject the request based on the incoming user object.
 # [auth.hook.before_user_created]

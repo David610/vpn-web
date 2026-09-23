@@ -18,6 +18,7 @@ import { vi } from "vitest";
 export function makeFakeSupabase(seed = {}, options = {}) {
   const tables = {
     customer_accounts: [],
+    profiles: [],
     account_members: [],
     subscriptions: [],
     vpn_accounts: [],
@@ -147,8 +148,125 @@ export function makeFakeSupabase(seed = {}, options = {}) {
     from: vi.fn(from),
     rpc: vi.fn(async (name, args) => {
       const handler = rpcHandlers[name];
-      if (!handler) throw new Error(`unstubbed rpc ${name}`);
-      return handler(args, tables);
+      if (handler) return handler(args, tables);
+
+      if (name === "customer_dashboard_state") {
+        const membership = tables.account_members.find(
+          (row) => row.user_id === args.p_user_id
+        );
+        if (!membership) return { data: null, error: null };
+
+        const account = tables.customer_accounts.find(
+          (row) => row.id === membership.account_id
+        ) ?? { id: membership.account_id };
+        const liveStatuses = new Set(["trialing", "active", "past_due"]);
+        const subscription =
+          tables.subscriptions.find(
+            (row) =>
+              row.account_id === membership.account_id &&
+              liveStatuses.has(row.status)
+          ) ?? null;
+
+        const now = Date.now();
+        const grants = tables.admin_entitlements
+          .filter((row) => {
+            if (row.account_id !== membership.account_id || row.status !== "active") {
+              return false;
+            }
+            const starts = new Date(row.starts_at).getTime();
+            const expires = row.expires_at
+              ? new Date(row.expires_at).getTime()
+              : Infinity;
+            return starts <= now && expires > now;
+          })
+          .sort(
+            (a, b) =>
+              new Date(b.created_at ?? 0).getTime() -
+              new Date(a.created_at ?? 0).getTime()
+          );
+
+        const members = tables.account_members
+          .filter((row) => row.account_id === membership.account_id)
+          .map((row) => ({
+            user_id: row.user_id,
+            role: row.role,
+            created_at: row.created_at,
+            email:
+              tables.profiles.find((profile) => profile.id === row.user_id)?.email ??
+              null,
+          }));
+
+        const invites = tables.member_invites
+          .filter(
+            (row) =>
+              row.account_id === membership.account_id &&
+              (row.accepted_at ?? null) === null &&
+              (row.revoked_at ?? null) === null &&
+              new Date(row.expires_at).getTime() > now
+          )
+          .map((row) => ({
+            id: row.id,
+            email: row.email,
+            expires_at: row.expires_at,
+            created_at: row.created_at,
+          }));
+
+        const vpnRows = tables.vpn_accounts.filter(
+          (row) => row.user_id === args.p_user_id
+        );
+        const vpn = vpnRows.at(-1) ?? null;
+
+        return {
+          data: {
+            account: {
+              account_id: membership.account_id,
+              role: membership.role,
+              trial_used_at: account.trial_used_at ?? null,
+              trial_reserved_at: account.trial_reserved_at ?? null,
+              trial_checkout_session_id: account.trial_checkout_session_id ?? null,
+            },
+            subscription,
+            grants,
+            members,
+            invites,
+            vpn_account: vpn
+              ? {
+                  id: vpn.id,
+                  enabled: vpn.enabled,
+                  vpn_user_id: vpn.vpn_user_id,
+                  node_id: vpn.node_id,
+                }
+              : null,
+          },
+          error: null,
+        };
+      }
+
+      if (name === "vpn_usage_month_total") {
+        const start = new Date(args.p_month_start).getTime();
+        const rows = tables.vpn_usage_hourly.filter(
+          (row) =>
+            row.vpn_account_id === args.p_vpn_account_id &&
+            new Date(row.hour).getTime() >= start
+        );
+        return {
+          data: [
+            {
+              download_bytes: rows.reduce(
+                (sum, row) => sum + (Number(row.download_bytes) || 0),
+                0
+              ),
+              upload_bytes: rows.reduce(
+                (sum, row) => sum + (Number(row.upload_bytes) || 0),
+                0
+              ),
+            },
+          ],
+          error: null,
+        };
+      }
+
+      throw new Error(`unstubbed rpc ${name}`);
     }),
     auth: {
       getUser: vi.fn(async () => ({
@@ -166,6 +284,8 @@ export function makeFakeSupabase(seed = {}, options = {}) {
               options.claims ??
               {
                 sub: user.id,
+                email: user.email,
+                role: "authenticated",
                 amr: [
                   {
                     method: "password",

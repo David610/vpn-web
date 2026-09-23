@@ -1,12 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const getUser = vi.fn();
+const getClaims = vi.fn();
 const maybeSingle = vi.fn();
 const subscriptionsUpdate = vi.fn();
 
 vi.mock("@supabase/supabase-js", () => ({
   createClient: vi.fn(() => ({
-    auth: { getUser },
+    auth: { getClaims },
     from: vi.fn(() => ({
       select: vi.fn().mockReturnThis(),
       eq: vi.fn().mockReturnThis(),
@@ -42,14 +42,23 @@ const env = {
 };
 
 beforeEach(() => {
-  getUser.mockReset();
+  getClaims.mockReset().mockResolvedValue({
+    data: {
+      claims: {
+        sub: "user-1",
+        email: "user@example.com",
+        role: "authenticated",
+        amr: [{ method: "password", timestamp: Math.floor(Date.now() / 1000) }],
+      },
+    },
+    error: null,
+  });
   maybeSingle.mockReset();
   subscriptionsUpdate.mockReset();
 });
 
 describe("resume-subscription", () => {
   it("returns 404 when the user has no active subscription", async () => {
-    getUser.mockResolvedValue({ data: { user: { id: "user-1" } }, error: null });
     maybeSingle.mockResolvedValue({ data: null, error: null });
 
     const res = await onRequestPost({ env, request: makeRequest() });
@@ -59,7 +68,6 @@ describe("resume-subscription", () => {
   });
 
   it("clears cancel_at_period_end on Stripe when an active subscription exists", async () => {
-    getUser.mockResolvedValue({ data: { user: { id: "user-1" } }, error: null });
     maybeSingle.mockResolvedValue({ data: { stripe_subscription_id: "sub_123" }, error: null });
     subscriptionsUpdate.mockResolvedValue({ id: "sub_123", cancel_at_period_end: false });
 

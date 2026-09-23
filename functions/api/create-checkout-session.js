@@ -1,6 +1,7 @@
 import Stripe from "stripe";
 import { createClient } from "@supabase/supabase-js";
 import { getAccountForUser } from "../lib/accounts.js";
+import { requireRecentUser } from "../lib/user-auth.js";
 
 const TRIAL_DAYS = 3;
 const TRIAL_RESERVATION_MS = 24 * 60 * 60 * 1000;
@@ -102,10 +103,6 @@ async function resumeReservedTrial(stripe, supabaseAdmin, accountId, accountRow)
  * (trial=true); the dashboard explicitly sends true/false for its two CTAs.
  */
 export async function onRequestPost({ env, request }) {
-  const authHeader = request.headers.get("Authorization");
-  const accessToken = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
-  if (!accessToken) return json({ error: "Authorization required" }, 401);
-
   let wantsTrial = true;
   try {
     const raw = await request.text();
@@ -121,11 +118,8 @@ export async function onRequestPost({ env, request }) {
     const supabaseAdmin = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
       auth: { autoRefreshToken: false, persistSession: false },
     });
-    const {
-      data: { user },
-      error: tokenError,
-    } = await supabaseAdmin.auth.getUser(accessToken);
-    if (tokenError || !user) return json({ error: "Invalid or expired token" }, 401);
+    const { user, response } = await requireRecentUser(request, supabaseAdmin);
+    if (!user) return response;
 
     const account = await getAccountForUser(supabaseAdmin, user.id);
     if (!account) {

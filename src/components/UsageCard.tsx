@@ -43,11 +43,26 @@ export function UsageCard({ session }: { session: Session }) {
     }
   }, [session.access_token]);
 
+  // Initial load once. If per-user telemetry is unavailable (the normal
+  // state on standard sing-box builds), do not keep waking an old phone and
+  // hitting the Worker every 15 seconds for the same "unavailable" answer.
   useEffect(() => {
     load();
-    const timer = window.setInterval(load, 15_000);
-    return () => window.clearInterval(timer);
   }, [load]);
+
+  useEffect(() => {
+    if (!usage?.available) return;
+
+    const refresh = () => {
+      if (document.visibilityState === "visible") load();
+    };
+    const timer = window.setInterval(refresh, 30_000);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, [load, usage?.available]);
 
   return (
     <div className="dm-card" style={{ maxWidth: "26rem", marginTop: "var(--space-6)" }}>

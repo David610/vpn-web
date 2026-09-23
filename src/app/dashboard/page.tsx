@@ -2,13 +2,28 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import dynamic from "next/dynamic";
 import Nav from "@/components/Nav";
 import Footer from "@/components/Footer";
 import { useSession } from "@/hooks/useSession";
-import { MembersCard } from "@/components/MembersCard";
-import { AccountActionsCard } from "@/components/AccountActionsCard";
-import { UsageCard } from "@/components/UsageCard";
-import { SecurityCard } from "@/components/SecurityCard";
+import type { AccountInfo } from "@/components/MembersCard";
+
+const MembersCard = dynamic(
+  () => import("@/components/MembersCard").then((mod) => mod.MembersCard),
+  { loading: () => null }
+);
+const UsageCard = dynamic(
+  () => import("@/components/UsageCard").then((mod) => mod.UsageCard),
+  { loading: () => null }
+);
+const AccountActionsCard = dynamic(
+  () => import("@/components/AccountActionsCard").then((mod) => mod.AccountActionsCard),
+  { loading: () => null }
+);
+const SecurityCard = dynamic(
+  () => import("@/components/SecurityCard").then((mod) => mod.SecurityCard),
+  { loading: () => null }
+);
 
 type ConfigState =
   | { phase: "loading" }
@@ -23,6 +38,7 @@ type ConfigState =
       status: string;
       currentPeriodEnd: string | null;
       cancelAtPeriodEnd: boolean;
+      account: AccountInfo;
     }
   | { phase: "error" };
 
@@ -66,6 +82,7 @@ export default function DashboardPage() {
             status: data.status,
             currentPeriodEnd: data.current_period_end,
             cancelAtPeriodEnd: data.cancel_at_period_end,
+            account: data.account,
           });
           return;
         }
@@ -108,6 +125,10 @@ export default function DashboardPage() {
         body: JSON.stringify({ trial }),
       });
       const data = await res.json().catch(() => ({}));
+      if (res.status === 403 && data.code === "reauth_required") {
+        window.location.href = "/login/?next=/dashboard/&reauth=1";
+        return;
+      }
       if (!res.ok || !data.url) {
         throw new Error(data.error || "Could not start checkout");
       }
@@ -140,6 +161,10 @@ export default function DashboardPage() {
         headers: { Authorization: `Bearer ${session.access_token}` },
       });
       const data = await res.json().catch(() => ({}));
+      if (res.status === 403 && data.code === "reauth_required") {
+        window.location.href = "/login/?next=/dashboard/&reauth=1";
+        return;
+      }
       if (!res.ok) {
         throw new Error(data.error || "Could not cancel subscription");
       }
@@ -163,6 +188,10 @@ export default function DashboardPage() {
         headers: { Authorization: `Bearer ${session.access_token}` },
       });
       const data = await res.json().catch(() => ({}));
+      if (res.status === 403 && data.code === "reauth_required") {
+        window.location.href = "/login/?next=/dashboard/&reauth=1";
+        return;
+      }
       if (!res.ok) {
         throw new Error(data.error || "Could not resume subscription");
       }
@@ -352,9 +381,9 @@ export default function DashboardPage() {
             )}
           </div>
         </div>
-        <MembersCard session={session} />
         {config.phase === "ready" && (
           <>
+            <MembersCard session={session} initialAccount={config.account} />
             <UsageCard session={session} />
             <AccountActionsCard
               session={session}

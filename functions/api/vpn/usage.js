@@ -21,31 +21,29 @@ export async function onRequestGet({ env, request }) {
 
     const now = new Date();
     const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
-    const [{ data: current, error: currentError }, { data: hourly, error: hourlyError }] =
-      await Promise.all([
-        supabaseAdmin
-          .from("vpn_usage_current")
-          .select("sampled_at, download_bps, upload_bps, last_seen_at")
-          .eq("vpn_account_id", vpnAccount.id)
-          .maybeSingle(),
-        supabaseAdmin
-          .from("vpn_usage_hourly")
-          .select("download_bytes, upload_bytes")
-          .eq("vpn_account_id", vpnAccount.id)
-          .gte("hour", monthStart),
-      ]);
+    const [
+      { data: current, error: currentError },
+      { data: totalsRows, error: totalsError },
+    ] = await Promise.all([
+      supabaseAdmin
+        .from("vpn_usage_current")
+        .select("sampled_at, download_bps, upload_bps, last_seen_at")
+        .eq("vpn_account_id", vpnAccount.id)
+        .maybeSingle(),
+      supabaseAdmin.rpc("vpn_usage_month_total", {
+        p_vpn_account_id: vpnAccount.id,
+        p_month_start: monthStart,
+      }),
+    ]);
     if (currentError) throw new Error(`usage current lookup failed: ${currentError.message}`);
-    if (hourlyError) throw new Error(`usage hourly lookup failed: ${hourlyError.message}`);
+    if (totalsError) throw new Error(`usage monthly aggregate failed: ${totalsError.message}`);
     if (!current) return jsonResponse({ available: false, reason: "no_samples" });
 
-    const totals = (hourly ?? []).reduce(
-      (acc, row) => {
-        acc.download += Number(row.download_bytes) || 0;
-        acc.upload += Number(row.upload_bytes) || 0;
-        return acc;
-      },
-      { download: 0, upload: 0 }
-    );
+    const totalsRow = totalsRows?.[0] ?? { download_bytes: 0, upload_bytes: 0 };
+    const totals = {
+      download: Number(totalsRow.download_bytes) || 0,
+      upload: Number(totalsRow.upload_bytes) || 0,
+    };
 
     return jsonResponse({
       available: true,

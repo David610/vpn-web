@@ -37,6 +37,13 @@ export const supabase = createClient(
     auth: {
       flowType: "pkce",
       detectSessionInUrl: false,
+      // Make the intended UX explicit instead of relying on SDK defaults:
+      // sessions survive browser restarts and refresh automatically while
+      // the app is in the foreground. Sensitive operations still enforce
+      // the separate 15-minute recent-auth window on the server.
+      persistSession: true,
+      autoRefreshToken: true,
+      storageKey: "arcana-auth-v1",
     },
   }
 );

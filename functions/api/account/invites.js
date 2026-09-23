@@ -1,5 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
-import { requireUser, jsonResponse } from "../../lib/user-auth.js";
+import { requireRecentUser, jsonResponse } from "../../lib/user-auth.js";
 import {
   getAccountForUser,
   getEffectiveEntitlement,
@@ -26,7 +26,7 @@ export async function onRequestPost({ env, request }) {
     auth: { autoRefreshToken: false, persistSession: false },
   });
 
-  const { user, response } = await requireUser(request, supabaseAdmin);
+  const { user, response } = await requireRecentUser(request, supabaseAdmin);
   if (!user) return response;
 
   try {

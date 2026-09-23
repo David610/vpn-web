@@ -2,26 +2,19 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const getClaims = vi.fn();
 const adminMaybeSingle = vi.fn();
-const listUsers = vi.fn();
-let membersResult = { data: [], error: null };
-let subsResult = { data: [], error: null };
-let vpnResult = { data: [], error: null };
+const rpc = vi.fn();
 
 vi.mock("@supabase/supabase-js", () => ({
   createClient: vi.fn(() => ({
-    auth: { getClaims, admin: { listUsers } },
+    auth: { getClaims },
+    rpc,
     from: vi.fn((table) => {
       if (table === "admin_users") {
-        return { select: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(), maybeSingle: adminMaybeSingle };
-      }
-      if (table === "account_members") {
-        return { select: vi.fn(() => Promise.resolve(membersResult)) };
-      }
-      if (table === "subscriptions") {
-        return { select: vi.fn(() => ({ order: vi.fn(() => Promise.resolve(subsResult)) })) };
-      }
-      if (table === "vpn_accounts") {
-        return { select: vi.fn(() => Promise.resolve(vpnResult)) };
+        return {
+          select: vi.fn().mockReturnThis(),
+          eq: vi.fn().mockReturnThis(),
+          maybeSingle: adminMaybeSingle,
+        };
       }
       throw new Error(`unexpected table ${table}`);
     }),
@@ -37,25 +30,31 @@ function makeRequest(query = "") {
   });
 }
 
+function row(overrides = {}) {
+  return {
+    user_id: "user-1",
+    account_id: "acct-1",
+    account_role: "owner",
+    member_count: 1,
+    email: "alice@example.com",
+    subscription_status: "active",
+    current_period_end: "2026-10-21T00:00:00Z",
+    vpn_account_id: 1,
+    vpn_user_id: "vpn-abc",
+    node_id: "node-1",
+    enabled: true,
+    total_count: 1,
+    ...overrides,
+  };
+}
+
 beforeEach(() => {
-  getClaims.mockReset().mockResolvedValue({ data: { claims: { sub: "admin-1", aal: "aal2" } }, error: null });
-  adminMaybeSingle.mockReset().mockResolvedValue({ data: { role: "owner" }, error: null });
-  listUsers.mockReset().mockResolvedValue({
-    data: { users: [{ id: "user-1", email: "alice@example.com" }] },
+  getClaims.mockReset().mockResolvedValue({
+    data: { claims: { sub: "admin-1", aal: "aal2" } },
     error: null,
   });
-  membersResult = {
-    data: [{ account_id: "acct-1", user_id: "user-1", role: "owner" }],
-    error: null,
-  };
-  subsResult = {
-    data: [{ account_id: "acct-1", status: "active", current_period_end: "2026-10-21T00:00:00Z" }],
-    error: null,
-  };
-  vpnResult = {
-    data: [{ id: 1, user_id: "user-1", vpn_user_id: "vpn-abc", node_id: "node-1", enabled: true }],
-    error: null,
-  };
+  adminMaybeSingle.mockReset().mockResolvedValue({ data: { role: "owner" }, error: null });
+  rpc.mockReset().mockResolvedValue({ data: [row()], error: null });
 });
 
 describe("GET /api/admin/customers", () => {
@@ -63,11 +62,13 @@ describe("GET /api/admin/customers", () => {
     adminMaybeSingle.mockResolvedValue({ data: null, error: null });
     const res = await onRequestGet({ env, request: makeRequest() });
     expect(res.status).toBe(401);
+    expect(rpc).not.toHaveBeenCalled();
   });
 
-  it("merges members, subscriptions, vpn_accounts and auth emails into one row per person", async () => {
+  it("maps the paginated DB directory response", async () => {
     const res = await onRequestGet({ env, request: makeRequest() });
     const body = await res.json();
+
     expect(res.status).toBe(200);
     expect(body.customers).toEqual([
       {
@@ -84,61 +85,40 @@ describe("GET /api/admin/customers", () => {
         enabled: true,
       },
     ]);
+    expect(body).toMatchObject({ page: 1, perPage: 50, total: 1, totalPages: 1 });
   });
 
-  it("filters by the q query param against email/vpn_user_id", async () => {
-    const res = await onRequestGet({ env, request: makeRequest("?q=bob") });
-    const body = await res.json();
-    expect(body.customers).toEqual([]);
-  });
-
-  it("lists a resubscriber once, showing the most recent subscription", async () => {
-    // An account that lapsed and resubscribed keeps its old canceled rows.
-    // Listing is driven by membership, so the person appears once, and the
-    // created_at-descending order makes the live row the one reported.
-    subsResult = {
-      data: [
-        { account_id: "acct-1", status: "active", current_period_end: "2026-12-01T00:00:00Z" },
-        { account_id: "acct-1", status: "canceled", current_period_end: "2026-06-01T00:00:00Z" },
-      ],
-      error: null,
-    };
-    const res = await onRequestGet({ env, request: makeRequest() });
-    const body = await res.json();
-    expect(body.customers).toHaveLength(1);
-    expect(body.customers[0].subscriptionStatus).toBe("active");
-    expect(body.customers[0].currentPeriodEnd).toBe("2026-12-01T00:00:00Z");
-  });
-
-  it("lists every seat on a shared account, each with that account's status", async () => {
-    membersResult = {
-      data: [
-        { account_id: "acct-1", user_id: "user-1", role: "owner" },
-        { account_id: "acct-1", user_id: "user-2", role: "member" },
-      ],
-      error: null,
-    };
-    listUsers.mockResolvedValue({
-      data: {
-        users: [
-          { id: "user-1", email: "alice@example.com" },
-          { id: "user-2", email: "bob@example.com" },
-        ],
-      },
+  it("passes search and pagination to Postgres rather than filtering in memory", async () => {
+    rpc.mockResolvedValue({
+      data: [row({ total_count: 121 })],
       error: null,
     });
-    const res = await onRequestGet({ env, request: makeRequest() });
+    const res = await onRequestGet({
+      env,
+      request: makeRequest("?q=alice&page=3&per_page=40"),
+    });
     const body = await res.json();
-    expect(body.customers).toHaveLength(2);
-    expect(body.customers.map((c) => c.email)).toEqual([
-      "alice@example.com",
-      "bob@example.com",
-    ]);
-    // The member inherits the owner's billing status and both report the
-    // same seat count.
-    expect(body.customers.every((c) => c.subscriptionStatus === "active")).toBe(true);
-    expect(body.customers.every((c) => c.memberCount === 2)).toBe(true);
-    // The member has no VPN account provisioned yet.
-    expect(body.customers[1].vpnUserId).toBeNull();
+
+    expect(rpc).toHaveBeenCalledWith("admin_customer_directory", {
+      p_query: "alice",
+      p_limit: 40,
+      p_offset: 80,
+    });
+    expect(body).toMatchObject({ page: 3, perPage: 40, total: 121, totalPages: 4 });
+  });
+
+  it("caps page size at 100", async () => {
+    await onRequestGet({ env, request: makeRequest("?per_page=999") });
+    expect(rpc).toHaveBeenCalledWith(
+      "admin_customer_directory",
+      expect.objectContaining({ p_limit: 100 })
+    );
+  });
+
+  it("returns an empty page without inventing a count", async () => {
+    rpc.mockResolvedValue({ data: [], error: null });
+    const body = await (await onRequestGet({ env, request: makeRequest("?page=2") })).json();
+    expect(body.customers).toEqual([]);
+    expect(body.total).toBe(0);
   });
 });

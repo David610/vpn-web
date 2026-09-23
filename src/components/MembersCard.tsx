@@ -18,7 +18,7 @@ type Invite = {
   createdAt: string;
 };
 
-type AccountInfo = {
+export type AccountInfo = {
   accountId: string;
   role: string;
   subscription: { status: string; source?: "stripe" | "admin_grant" } | null;
@@ -45,8 +45,14 @@ const ROW: React.CSSProperties = {
  * the invite form and the remove controls, mirroring what the API enforces
  * rather than relying on the UI to be the gate.
  */
-export function MembersCard({ session }: { session: Session }) {
-  const [account, setAccount] = useState<AccountInfo | null>(null);
+export function MembersCard({
+  session,
+  initialAccount,
+}: {
+  session: Session;
+  initialAccount?: AccountInfo | null;
+}) {
+  const [account, setAccount] = useState<AccountInfo | null>(initialAccount ?? null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [email, setEmail] = useState("");
   const [inviting, setInviting] = useState(false);
@@ -68,8 +74,8 @@ export function MembersCard({ session }: { session: Session }) {
   }, [session.access_token]);
 
   useEffect(() => {
-    load();
-  }, [load]);
+    if (!initialAccount) load();
+  }, [initialAccount, load]);
 
   async function handleInvite(e: FormEvent) {
     e.preventDefault();
@@ -86,6 +92,10 @@ export function MembersCard({ session }: { session: Session }) {
         body: JSON.stringify({ email }),
       });
       const data = await res.json().catch(() => ({}));
+      if (res.status === 403 && data.code === "reauth_required") {
+        window.location.href = "/login/?next=/dashboard/&reauth=1";
+        return;
+      }
       if (!res.ok) throw new Error(data.error || "Could not send the invitation.");
       setNotice(`Invitation sent to ${data.invite.email}.`);
       setEmail("");
@@ -142,6 +152,10 @@ export function MembersCard({ session }: { session: Session }) {
         headers: { Authorization: `Bearer ${session.access_token}` },
       });
       const data = await res.json().catch(() => ({}));
+      if (res.status === 403 && data.code === "reauth_required") {
+        window.location.href = "/login/?next=/dashboard/&reauth=1";
+        return;
+      }
       if (!res.ok) throw new Error(data.error || "Could not withdraw the invitation.");
       await load();
     } catch (err) {

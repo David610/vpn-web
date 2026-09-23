@@ -1,6 +1,7 @@
 import { createClient } from "@supabase/supabase-js";
 import { decryptSecret } from "../../lib/crypto.js";
-import { getAccountForUser, getEffectiveEntitlement } from "../../lib/accounts.js";
+import { requireUser } from "../../lib/user-auth.js";
+import { loadCustomerDashboardState } from "../../lib/dashboard-state.js";
 
 export async function onRequestGet({ env, request }) {
   const noStoreJson = (body, status) =>
@@ -9,60 +10,34 @@ export async function onRequestGet({ env, request }) {
       headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
     });
 
-  const authHeader = request.headers.get("Authorization");
-  const accessToken = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
-  if (!accessToken) return noStoreJson({ error: "Authorization required" }, 401);
-
   const supabaseAdmin = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
     auth: { autoRefreshToken: false, persistSession: false },
   });
 
+  const { user, response } = await requireUser(request, supabaseAdmin);
+  if (!user) return response;
+
   try {
-    const {
-      data: { user },
-      error: tokenError,
-    } = await supabaseAdmin.auth.getUser(accessToken);
-    if (tokenError || !user) return noStoreJson({ error: "Invalid or expired token" }, 401);
+    const state = await loadCustomerDashboardState(supabaseAdmin, user);
+    if (!state) return noStoreJson({ error: "No active subscription" }, 403);
 
-    const account = await getAccountForUser(supabaseAdmin, user.id);
-    if (!account) return noStoreJson({ error: "No active subscription" }, 403);
-
-    const entitlement = await getEffectiveEntitlement(supabaseAdmin, account.accountId);
-    if (!entitlement) {
-      const { data: accountRow, error: trialError } = await supabaseAdmin
-        .from("customer_accounts")
-        .select("trial_used_at, trial_reserved_at, trial_checkout_session_id")
-        .eq("id", account.accountId)
-        .maybeSingle();
-      if (trialError) throw new Error(`trial eligibility lookup failed: ${trialError.message}`);
+    if (!state.entitlement) {
       const reservationFresh =
-        accountRow?.trial_reserved_at &&
-        Date.now() - new Date(accountRow.trial_reserved_at).getTime() < 24 * 60 * 60 * 1000;
+        state.trial.reservedAt &&
+        Date.now() - new Date(state.trial.reservedAt).getTime() < 24 * 60 * 60 * 1000;
       return noStoreJson(
         {
           error: "No active subscription",
           code: "no_subscription",
-          // A fresh reservation with an attached Checkout Session is still
-          // available: create-checkout-session will resume that same Stripe
-          // session rather than minting a second trial.
           trial_available:
-            !accountRow?.trial_used_at &&
-            (!reservationFresh || Boolean(accountRow?.trial_checkout_session_id)),
+            !state.trial.usedAt &&
+            (!reservationFresh || Boolean(state.trial.checkoutSessionId)),
         },
         403
       );
     }
 
-    const { data: vpnAccount, error: vpnAccountError } = await supabaseAdmin
-      .from("vpn_accounts")
-      .select("id, enabled")
-      .eq("user_id", user.id)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (vpnAccountError) {
-      throw new Error(`vpn_accounts lookup failed: ${vpnAccountError.message}`);
-    }
+    const vpnAccount = state.vpnAccount;
     if (!vpnAccount) return noStoreJson({ error: "Provisioning still in progress" }, 404);
     if (!vpnAccount.enabled) return noStoreJson({ error: "VPN access is disabled" }, 403);
 
@@ -96,10 +71,11 @@ export async function onRequestGet({ env, request }) {
         subscription_url: subscriptionUrl,
         provisioning_url: provisioningUrl,
         preferred_setup_url: provisioningUrl ?? subscriptionUrl,
-        entitlement_source: entitlement.source,
-        status: entitlement.status,
-        current_period_end: entitlement.currentPeriodEnd,
-        cancel_at_period_end: entitlement.cancelAtPeriodEnd,
+        entitlement_source: state.entitlement.source,
+        status: state.entitlement.status,
+        current_period_end: state.entitlement.currentPeriodEnd,
+        cancel_at_period_end: state.entitlement.cancelAtPeriodEnd,
+        account: state.overview,
       },
       200
     );

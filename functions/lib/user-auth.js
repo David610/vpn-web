@@ -21,17 +21,29 @@ function unauthorized(message) {
   };
 }
 
+function userFromClaims(claims) {
+  if (!claims?.sub) return null;
+  return {
+    id: claims.sub,
+    email: typeof claims.email === "string" ? claims.email : null,
+    role: typeof claims.role === "string" ? claims.role : null,
+  };
+}
+
 export async function requireUser(request, supabaseAdmin) {
   const accessToken = accessTokenFrom(request);
   if (!accessToken) return unauthorized("Authorization required");
 
-  const {
-    data: { user },
-    error,
-  } = await supabaseAdmin.auth.getUser(accessToken);
+  // getClaims verifies the JWT signature against Supabase's JWKS. With
+  // asymmetric signing keys this avoids a network trip to GoTrue on every
+  // customer API request; Supabase falls back to server verification for
+  // legacy symmetric projects, so the security model does not weaken.
+  const { data: claimsData, error } = await supabaseAdmin.auth.getClaims(accessToken);
+  const claims = claimsData?.claims;
+  const user = userFromClaims(claims);
   if (error || !user) return unauthorized("Invalid or expired token");
 
-  return { user, claims: null, response: null };
+  return { user, claims, response: null };
 }
 
 /**
@@ -80,13 +92,8 @@ export async function requireRecentUser(
     };
   }
 
-  const {
-    data: { user },
-    error: userError,
-  } = await supabaseAdmin.auth.getUser(accessToken);
-  if (userError || !user || user.id !== claims.sub) {
-    return unauthorized("Invalid or expired token");
-  }
+  const user = userFromClaims(claims);
+  if (!user) return unauthorized("Invalid or expired token");
 
   return { user, claims, response: null };
 }

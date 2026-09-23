@@ -27,6 +27,10 @@ function seed({
   return makeFakeSupabase(
     {
       customer_accounts: [{ id: "acct-1" }],
+      profiles: members.map((m) => ({
+        id: m.id,
+        email: `${m.id}@example.com`,
+      })),
       account_members: members.map((m, i) => ({
         id: i + 1,
         account_id: "acct-1",

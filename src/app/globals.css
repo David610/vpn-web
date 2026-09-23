@@ -93,6 +93,17 @@
     --text-h2:           1.75rem;
     --text-h2-sub:       1.5rem;
   }
+
+  /* Backdrop blur on a sticky element is disproportionately expensive on
+     older mobile GPUs. The opaque header preserves readability at zero blur
+     cost and reduces scroll jank/battery usage. */
+  .dm-nav {
+    background: var(--bg);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
+  body { text-rendering: auto; }
 }
 @media (max-width: 480px) {
   :root { --container-pad: min(1.25rem, 20px); }
