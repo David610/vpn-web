@@ -122,7 +122,7 @@ export async function getActiveAdminEntitlement(supabaseAdmin, accountId) {
     .from("admin_entitlements")
     .select("id, starts_at, expires_at, seat_limit, reason")
     .eq("account_id", accountId)
-    .eq("status", "active")
+    .is("revoked_at", null)
     .order("created_at", { ascending: false });
   if (error) throw new Error(`admin_entitlements lookup failed: ${error.message}`);
 
@@ -131,16 +131,22 @@ export async function getActiveAdminEntitlement(supabaseAdmin, accountId) {
     (data ?? []).find((row) => {
       const starts = new Date(row.starts_at).getTime();
       const expires = row.expires_at ? new Date(row.expires_at).getTime() : Infinity;
-      return starts <= now && expires > now;
+      return Number.isFinite(starts) && starts <= now && expires > now;
     }) ?? null
   );
+}
+
+function laterIso(a, b) {
+  if (!a) return b ?? null;
+  if (!b) return a;
+  return new Date(a).getTime() >= new Date(b).getTime() ? a : b;
 }
 
 /**
  * Effective service entitlement. Billing and support grants remain distinct
  * records; this helper only answers whether service is available and at what
- * capacity. When both exist, paid status remains the displayed source while
- * the larger seat limit wins.
+ * capacity. A support grant may extend access beyond a paid period without
+ * mutating Stripe state or pretending revenue was collected.
  */
 export async function getEffectiveEntitlement(supabaseAdmin, accountId) {
   const [subscription, grant] = await Promise.all([
@@ -160,6 +166,13 @@ export async function getEffectiveEntitlement(supabaseAdmin, accountId) {
   const grantSeatLimit = grant?.seat_limit ?? 0;
   const seatLimit = Math.max(INCLUDED_SEATS, stripeSeatLimit, grantSeatLimit);
 
+  // A no-expiry support grant explicitly means the VPN user's expiry should
+  // be cleared. Otherwise whichever entitlement ends later controls service.
+  const clearExpiry = Boolean(grant && grant.expires_at === null);
+  const serviceExpiresAt = clearExpiry
+    ? null
+    : laterIso(subscription?.current_period_end ?? null, grant?.expires_at ?? null);
+
   if (subscription) {
     return {
       source: "stripe",
@@ -168,6 +181,8 @@ export async function getEffectiveEntitlement(supabaseAdmin, accountId) {
       cancelAtPeriodEnd: Boolean(subscription.cancel_at_period_end),
       seatLimit,
       extraSeats: Math.max(0, seatLimit - INCLUDED_SEATS),
+      serviceExpiresAt,
+      clearExpiry,
       subscription,
       grant,
     };
@@ -180,6 +195,8 @@ export async function getEffectiveEntitlement(supabaseAdmin, accountId) {
     cancelAtPeriodEnd: false,
     seatLimit,
     extraSeats: Math.max(0, seatLimit - INCLUDED_SEATS),
+    serviceExpiresAt,
+    clearExpiry,
     subscription: null,
     grant,
   };
