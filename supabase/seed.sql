@@ -16,10 +16,32 @@ values
 -- public.profiles rows for both are created automatically by the
 -- on_auth_user_created trigger from the migration.
 
-insert into public.subscriptions (user_id, stripe_customer_id, stripe_subscription_id, status, current_period_end)
-values
-  ('11111111-1111-1111-1111-111111111111', 'cus_test_a', 'sub_test_a', 'active', now() + interval '30 days'),
-  ('22222222-2222-2222-2222-222222222222', 'cus_test_b', 'sub_test_b', 'active', now() + interval '30 days');
+update public.customer_accounts a
+set stripe_customer_id = case m.user_id
+  when '11111111-1111-1111-1111-111111111111'::uuid then 'cus_test_a'
+  when '22222222-2222-2222-2222-222222222222'::uuid then 'cus_test_b'
+end
+from public.account_members m
+where m.account_id = a.id
+  and m.user_id in (
+    '11111111-1111-1111-1111-111111111111'::uuid,
+    '22222222-2222-2222-2222-222222222222'::uuid
+  );
+
+insert into public.subscriptions (account_id, stripe_subscription_id, status, current_period_end)
+select
+  m.account_id,
+  case m.user_id
+    when '11111111-1111-1111-1111-111111111111'::uuid then 'sub_test_a'
+    when '22222222-2222-2222-2222-222222222222'::uuid then 'sub_test_b'
+  end,
+  'active',
+  now() + interval '30 days'
+from public.account_members m
+where m.user_id in (
+  '11111111-1111-1111-1111-111111111111'::uuid,
+  '22222222-2222-2222-2222-222222222222'::uuid
+);
 
 insert into public.vpn_accounts (id, user_id, vpn_user_id, node_id)
 overriding system value
