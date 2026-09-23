@@ -148,22 +148,11 @@ function laterIso(a, b) {
 }
 
 /**
- * Effective service entitlement. Billing and support grants remain distinct
- * records; this helper only answers whether service is available and at what
- * capacity. Multiple support grants compose safely: the largest seat limit
- * wins and access lasts until the latest finite expiry, while any valid
- * no-expiry grant clears the VPN expiry entirely.
+ * Pure entitlement composition. Callers may obtain the live Stripe row and
+ * valid support grants through ordinary PostgREST queries or through the
+ * one-round-trip dashboard RPC; the business rule lives only here.
  */
-export async function getEffectiveEntitlement(supabaseAdmin, accountId) {
-  const [subscription, grants] = await Promise.all([
-    getLiveSubscription(
-      supabaseAdmin,
-      accountId,
-      "id, status, current_period_end, cancel_at_period_end, extra_seats"
-    ),
-    getActiveAdminEntitlements(supabaseAdmin, accountId),
-  ]);
-
+export function resolveEffectiveEntitlement(subscription, grants = []) {
   if (!subscription && grants.length === 0) return null;
 
   const stripeSeatLimit = subscription
@@ -216,4 +205,22 @@ export async function getEffectiveEntitlement(supabaseAdmin, accountId) {
     grant: newestGrant,
     grants,
   };
+}
+
+/**
+ * Effective service entitlement for mutation/event code using normal table
+ * queries. Read-heavy dashboard paths use the same pure resolver with the
+ * batched snapshot RPC.
+ */
+export async function getEffectiveEntitlement(supabaseAdmin, accountId) {
+  const [subscription, grants] = await Promise.all([
+    getLiveSubscription(
+      supabaseAdmin,
+      accountId,
+      "id, status, current_period_end, cancel_at_period_end, extra_seats"
+    ),
+    getActiveAdminEntitlements(supabaseAdmin, accountId),
+  ]);
+
+  return resolveEffectiveEntitlement(subscription, grants);
 }
