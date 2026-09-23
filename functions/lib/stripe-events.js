@@ -25,7 +25,9 @@ import {
   getAccountForUser,
   getAccountMembers,
   getMemberVpnAccounts,
+  getEffectiveEntitlement,
 } from "./accounts.js";
+import { syncAccountProvisioningToEntitlement } from "./provision-entitlement.js";
 
 /**
  * @param {import('@supabase/supabase-js').SupabaseClient} supabaseAdmin
@@ -378,6 +380,20 @@ export async function handleSubscriptionTrialing(supabaseAdmin, subscription) {
  * vpn_accounts row is a real race against the agent and must be retried.
  */
 async function enqueueDisableForAccount(supabaseAdmin, accountId, subscriptionId, eventLabel) {
+  // The Stripe subscription that triggered this event is no longer an
+  // entitlement, but a support grant (or a newer paid subscription) may
+  // still be. Reconcile to that instead of blindly disabling the account.
+  const remainingEntitlement = await getEffectiveEntitlement(supabaseAdmin, accountId);
+  if (remainingEntitlement) {
+    await syncAccountProvisioningToEntitlement(
+      supabaseAdmin,
+      accountId,
+      remainingEntitlement,
+      `stripe-ended:${subscriptionId}:${remainingEntitlement.source}`
+    );
+    return;
+  }
+
   const nodeId = resolveNodeForUser();
   const vpnAccounts = await getMemberVpnAccounts(supabaseAdmin, accountId, nodeId);
 
