@@ -74,7 +74,9 @@ export async function onRequestPost({ env, request }) {
     if (entitlement) {
       const nodeId = resolveNodeForUser();
       const payload = { user_id: user.id };
-      if (entitlement.currentPeriodEnd) payload.expires_at = entitlement.currentPeriodEnd;
+      if (!entitlement.clearExpiry && entitlement.serviceExpiresAt) {
+        payload.expires_at = entitlement.serviceExpiresAt;
+      }
       const { error: jobError } = await supabaseAdmin.from("provisioning_jobs").insert({
         // Keyed on the member, so a retried acceptance cannot enqueue a
         // second CREATE_USER for the same person.
