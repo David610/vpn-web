@@ -1,7 +1,7 @@
 import Stripe from "stripe";
 import { createClient } from "@supabase/supabase-js";
 import { getAccountForUser } from "../lib/accounts.js";
-import { requireUser } from "../lib/user-auth.js";
+import { requireRecentUser } from "../lib/user-auth.js";
 
 const TRIAL_DAYS = 3;
 const TRIAL_RESERVATION_MS = 24 * 60 * 60 * 1000;
@@ -118,7 +118,7 @@ export async function onRequestPost({ env, request }) {
     const supabaseAdmin = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
       auth: { autoRefreshToken: false, persistSession: false },
     });
-    const { user, response } = await requireUser(request, supabaseAdmin);
+    const { user, response } = await requireRecentUser(request, supabaseAdmin);
     if (!user) return response;
 
     const account = await getAccountForUser(supabaseAdmin, user.id);
