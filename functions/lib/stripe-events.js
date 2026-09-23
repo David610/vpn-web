@@ -279,16 +279,18 @@ export async function handleInvoicePaid(supabaseAdmin, invoice) {
     }
 
     // A legitimately late payment can recover an account that dunning
-    // already disabled. Extending its expiry alone would leave it unusable.
-    const { error: enableError } = await supabaseAdmin.from("provisioning_jobs").insert({
-      idempotency_key: `enable-user:invoice-paid:${invoice.id}:${vpnAccount.id}`,
-      node_id: nodeId,
-      job_type: "ENABLE_USER",
-      vpn_account_id: vpnAccount.id,
-      payload: { vpn_user_id: vpnAccount.vpnUserId, user_id: vpnAccount.userId },
-    });
-    if (enableError && enableError.code !== "23505") {
-      throw new Error(`provisioning_jobs insert failed: ${enableError.message}`);
+    // already disabled. Normal renewals stay one-job-per-seat.
+    if (vpnAccount.enabled === false) {
+      const { error: enableError } = await supabaseAdmin.from("provisioning_jobs").insert({
+        idempotency_key: `enable-user:invoice-paid:${invoice.id}:${vpnAccount.id}`,
+        node_id: nodeId,
+        job_type: "ENABLE_USER",
+        vpn_account_id: vpnAccount.id,
+        payload: { vpn_user_id: vpnAccount.vpnUserId, user_id: vpnAccount.userId },
+      });
+      if (enableError && enableError.code !== "23505") {
+        throw new Error(`provisioning_jobs insert failed: ${enableError.message}`);
+      }
     }
   }
 }
