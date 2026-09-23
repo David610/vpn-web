@@ -11,7 +11,7 @@ import { UsageCard } from "@/components/UsageCard";
 
 type ConfigState =
   | { phase: "loading" }
-  | { phase: "none" }
+  | { phase: "none"; trialAvailable: boolean }
   | { phase: "provisioning" }
   | {
       phase: "ready";
@@ -74,7 +74,8 @@ export default function DashboardPage() {
           return;
         }
         if (res.status === 403) {
-          setConfig({ phase: "none" });
+          const data = await res.json().catch(() => ({}));
+          setConfig({ phase: "none", trialAvailable: data.trial_available === true });
           return;
         }
         setConfig({ phase: "error" });
@@ -309,19 +310,23 @@ export default function DashboardPage() {
                 <p className="section-sub">
                   {checkoutStatus === "cancel"
                     ? "Checkout was canceled."
-                    : "No active subscription yet. Try Arcana free for 3 days — cancel any time before it ends and you won't be charged."}
+                    : config.trialAvailable
+                      ? "No active subscription yet. Try Arcana free for 3 days — cancel any time before it ends and you won't be charged."
+                      : "No active subscription yet. Subscribe whenever you're ready."}
                 </p>
                 {checkoutError && <p className="field-error">{checkoutError}</p>}
                 <div style={{ display: "grid", gap: "var(--space-2)", marginTop: "var(--space-4)" }}>
-                  <button
-                    type="button"
-                    className="btn btn-primary"
-                    onClick={() => handleSubscribe(true)}
-                    disabled={checkoutLoading}
-                    style={{ width: "100%" }}
-                  >
-                    {checkoutLoading ? "Redirecting…" : "Start 3-day free trial"}
-                  </button>
+                  {config.trialAvailable && (
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={() => handleSubscribe(true)}
+                      disabled={checkoutLoading}
+                      style={{ width: "100%" }}
+                    >
+                      {checkoutLoading ? "Redirecting…" : "Start 3-day free trial"}
+                    </button>
+                  )}
                   <button
                     type="button"
                     className="btn btn-secondary"
