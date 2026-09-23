@@ -2,19 +2,42 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const getClaims = vi.fn();
 const adminMaybeSingle = vi.fn();
-const countQueries = {};
+let tableResults = {};
 
-// A minimal chainable + thenable stand-in for the Supabase query builder.
-// It supports being awaited directly (no further chaining, as with the
-// plain `.select(...)` count queries and the `nodes` row query), and also
-// supports `.eq(...)` / `.in(...)` being chained onto it, resolving to a
-// value that depends on the filter actually applied.
-function chainable(resolveFn) {
-  return {
-    eq: vi.fn((column, value) => Promise.resolve(resolveFn({ eq: [column, value] }))),
-    in: vi.fn((column, values) => Promise.resolve(resolveFn({ in: [column, values] }))),
-    then: (onFulfilled, onRejected) => Promise.resolve(resolveFn({})).then(onFulfilled, onRejected),
+function queryFor(table) {
+  const state = { filters: [] };
+  const query = {
+    select: vi.fn(() => query),
+    eq: vi.fn((column, value) => {
+      state.filters.push(["eq", column, value]);
+      return query;
+    }),
+    in: vi.fn((column, value) => {
+      state.filters.push(["in", column, value]);
+      return query;
+    }),
+    is: vi.fn((column, value) => {
+      state.filters.push(["is", column, value]);
+      return query;
+    }),
+    gt: vi.fn((column, value) => {
+      state.filters.push(["gt", column, value]);
+      return query;
+    }),
+    gte: vi.fn((column, value) => {
+      state.filters.push(["gte", column, value]);
+      return query;
+    }),
+    then(onFulfilled, onRejected) {
+      const resolver = tableResults[table];
+      const result =
+        typeof resolver === "function"
+          ? resolver(state.filters)
+          : resolver ?? { data: [], count: 0, error: null };
+      return Promise.resolve(result).then(onFulfilled, onRejected);
+    },
   };
+  return query;
 }
 
 vi.mock("@supabase/supabase-js", () => ({
@@ -22,9 +45,13 @@ vi.mock("@supabase/supabase-js", () => ({
     auth: { getClaims },
     from: vi.fn((table) => {
       if (table === "admin_users") {
-        return { select: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(), maybeSingle: adminMaybeSingle };
+        return {
+          select: vi.fn().mockReturnThis(),
+          eq: vi.fn().mockReturnThis(),
+          maybeSingle: adminMaybeSingle,
+        };
       }
-      return countQueries[table]();
+      return queryFor(table);
     }),
   })),
 }));
@@ -38,9 +65,74 @@ function makeRequest() {
   });
 }
 
+function eqValue(filters, wanted) {
+  return filters.find(([op, column]) => op === "eq" && column === wanted)?.[2];
+}
+
 beforeEach(() => {
-  getClaims.mockReset().mockResolvedValue({ data: { claims: { sub: "admin-1", aal: "aal2" } }, error: null });
+  getClaims.mockReset().mockResolvedValue({
+    data: { claims: { sub: "admin-1", aal: "aal2" } },
+    error: null,
+  });
   adminMaybeSingle.mockReset().mockResolvedValue({ data: { role: "owner" }, error: null });
+
+  const now = Date.now();
+  tableResults = {
+    customer_accounts: { data: null, count: 10, error: null },
+    subscriptions: (filters) => {
+      const status = eqValue(filters, "status");
+      if (status === "active") return { data: null, count: 7, error: null };
+      if (status === "trialing") return { data: null, count: 2, error: null };
+      if (status === "past_due") return { data: null, count: 1, error: null };
+      if (status === "canceled") return { data: null, count: 3, error: null };
+      if (filters.some(([op, column]) => op === "in" && column === "status")) {
+        return { data: [{ extra_seats: 1 }, { extra_seats: 2 }], count: null, error: null };
+      }
+      return { data: [], count: 0, error: null };
+    },
+    account_members: { data: null, count: 18, error: null },
+    member_invites: { data: null, count: 2, error: null },
+    admin_entitlements: { data: null, count: 1, error: null },
+    vpn_accounts: (filters) => {
+      const enabled = eqValue(filters, "enabled");
+      if (enabled === true) return { data: null, count: 13, error: null };
+      if (enabled === false) return { data: null, count: 2, error: null };
+      return { data: null, count: 15, error: null };
+    },
+    provisioning_jobs: (filters) => {
+      const status = eqValue(filters, "status");
+      const counts = { pending: 4, claimed: 1, failed: 2 };
+      return { data: null, count: counts[status] ?? 0, error: null };
+    },
+    nodes: {
+      data: [
+        { last_seen_at: new Date(now - 30_000).toISOString(), revoked_at: null },
+        { last_seen_at: new Date(now - 5 * 60_000).toISOString(), revoked_at: null },
+        { last_seen_at: new Date(now - 10_000).toISOString(), revoked_at: new Date(now).toISOString() },
+        { last_seen_at: null, revoked_at: null },
+      ],
+      count: null,
+      error: null,
+    },
+    vpn_usage_current: {
+      data: [
+        { download_bps: 8_000_000, upload_bps: 2_000_000 },
+        { download_bps: 4_000_000, upload_bps: 1_000_000 },
+      ],
+      count: null,
+      error: null,
+    },
+    vpn_usage_hourly: {
+      data: [
+        { download_bytes: 1000, upload_bytes: 200 },
+        { download_bytes: 3000, upload_bytes: 800 },
+      ],
+      count: null,
+      error: null,
+    },
+    operational_alerts: { data: null, count: 2, error: null },
+    abuse_signals: { data: null, count: 1, error: null },
+  };
 });
 
 describe("GET /api/admin/overview", () => {
@@ -50,100 +142,42 @@ describe("GET /api/admin/overview", () => {
     expect(res.status).toBe(401);
   });
 
-  it("returns aggregate counts for an admin", async () => {
-    // subscriptions: three .eq/.in-filtered count queries plus one
-    // unfiltered total, all against the same table.
-    countQueries.subscriptions = () => ({
-      select: vi.fn(() =>
-        chainable(({ in: inArgs, eq: eqArgs }) => {
-          if (inArgs && inArgs[0] === "status") return { count: 12, data: null, error: null }; // active/trialing
-          if (eqArgs && eqArgs[1] === "past_due") return { count: 3, data: null, error: null };
-          if (eqArgs && eqArgs[1] === "canceled") return { count: 2, data: null, error: null };
-          return { count: 20, data: null, error: null }; // total, no filter chained
-        })
-      ),
-    });
-
-    // vpn_accounts: single unfiltered count query.
-    countQueries.vpn_accounts = () => ({
-      select: vi.fn(() => chainable(() => ({ count: 15, data: null, error: null }))),
-    });
-
-    // provisioning_jobs: three .eq-filtered count queries.
-    countQueries.provisioning_jobs = () => ({
-      select: vi.fn(() =>
-        chainable(({ eq: eqArgs }) => {
-          if (eqArgs && eqArgs[1] === "pending") return { count: 4, data: null, error: null };
-          if (eqArgs && eqArgs[1] === "claimed") return { count: 1, data: null, error: null };
-          if (eqArgs && eqArgs[1] === "failed") return { count: 2, data: null, error: null };
-          return { count: 0, data: null, error: null };
-        })
-      ),
-    });
-
-    // nodes: plain `.select("last_seen_at, revoked_at")`, no filters,
-    // returns row data used to classify online/offline (45s threshold).
-    const now = Date.now();
-    const nodeRows = [
-      { last_seen_at: new Date(now - 30_000).toISOString(), revoked_at: null }, // online (<45s)
-      { last_seen_at: new Date(now - 5 * 60_000).toISOString(), revoked_at: null }, // offline (stale)
-      { last_seen_at: new Date(now - 10_000).toISOString(), revoked_at: new Date(now).toISOString() }, // revoked, excluded entirely
-      { last_seen_at: null, revoked_at: null }, // offline (never seen)
-    ];
-    countQueries.nodes = () => ({
-      select: vi.fn(() => chainable(() => ({ count: null, data: nodeRows, error: null }))),
-    });
-
+  it("returns expanded business and operations metrics", async () => {
     const res = await onRequestGet({ env, request: makeRequest() });
     expect(res.status).toBe(200);
     const body = await res.json();
 
     expect(body).toEqual({
-      customers: { total: 20, active: 12, past_due: 3, canceled: 2 },
-      vpn: { accounts: 15 },
+      customers: { total: 10, active: 7, trialing: 2, past_due: 1, canceled: 3 },
+      members: {
+        active: 18,
+        pending_invites: 2,
+        admin_grants: 1,
+        paid_extra_seats: 3,
+      },
+      vpn: { accounts: 15, enabled: 13, disabled: 2 },
       jobs: { pending: 4, claimed: 1, failed: 2 },
       nodes: { online: 1, offline: 2 },
+      usage: {
+        download_bps: 12_000_000,
+        upload_bps: 3_000_000,
+        month_download_bytes: 4000,
+        month_upload_bytes: 1000,
+        month_total_bytes: 5000,
+      },
+      alerts: { open: 2 },
+      abuse: { open: 1 },
     });
   });
 
-  it("returns 500 (not a zeroed/empty success response) when one query errors", async () => {
-    // subscriptions: three .eq/.in-filtered count queries plus one
-    // unfiltered total — all succeed here.
-    countQueries.subscriptions = () => ({
-      select: vi.fn(() =>
-        chainable(({ in: inArgs, eq: eqArgs }) => {
-          if (inArgs && inArgs[0] === "status") return { count: 12, data: null, error: null };
-          if (eqArgs && eqArgs[1] === "past_due") return { count: 3, data: null, error: null };
-          if (eqArgs && eqArgs[1] === "canceled") return { count: 2, data: null, error: null };
-          return { count: 20, data: null, error: null };
-        })
-      ),
-    });
-
-    // vpn_accounts: simulate a PostgREST-level failure — resolves with
-    // { data: null, error } rather than rejecting, as the real client does.
-    countQueries.vpn_accounts = () => ({
-      select: vi.fn(() => chainable(() => ({ count: null, data: null, error: { message: "connection reset" } }))),
-    });
-
-    countQueries.provisioning_jobs = () => ({
-      select: vi.fn(() =>
-        chainable(({ eq: eqArgs }) => {
-          if (eqArgs && eqArgs[1] === "pending") return { count: 4, data: null, error: null };
-          if (eqArgs && eqArgs[1] === "claimed") return { count: 1, data: null, error: null };
-          if (eqArgs && eqArgs[1] === "failed") return { count: 2, data: null, error: null };
-          return { count: 0, data: null, error: null };
-        })
-      ),
-    });
-
-    countQueries.nodes = () => ({
-      select: vi.fn(() => chainable(() => ({ count: null, data: [], error: null }))),
-    });
-
+  it("returns 500 instead of zeroed metrics when any query fails", async () => {
+    tableResults.vpn_accounts = {
+      data: null,
+      count: null,
+      error: { message: "connection reset" },
+    };
     const res = await onRequestGet({ env, request: makeRequest() });
     expect(res.status).toBe(500);
-    const body = await res.json();
-    expect(body).toEqual({ error: "Internal error" });
+    expect(await res.json()).toEqual({ error: "Internal error" });
   });
 });
