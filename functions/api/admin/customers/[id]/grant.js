@@ -3,7 +3,7 @@ import { requireAdmin } from "../../../../lib/admin-auth.js";
 import { writeAdminAudit } from "../../../../lib/admin-audit.js";
 import {
   getAccountForUser,
-  getLiveSubscription,
+  getEffectiveEntitlement,
   INCLUDED_SEATS,
 } from "../../../../lib/accounts.js";
 import { syncAccountProvisioningToEntitlement } from "../../../../lib/provision-entitlement.js";
@@ -77,28 +77,17 @@ export async function onRequestPost({ env, request, params }) {
       .single();
     if (grantError) throw new Error(`admin entitlement insert failed: ${grantError.message}`);
 
-    // Never shorten an already-paid service period. An indefinite support
-    // grant wins; otherwise use the later of paid-period-end and grant-end.
-    const liveSub = await getLiveSubscription(
-      supabaseAdmin,
-      account.accountId,
-      "current_period_end"
-    );
-    let effectiveEnd = expiresAt;
-    if (expiresAt && liveSub?.current_period_end) {
-      effectiveEnd = new Date(expiresAt) > new Date(liveSub.current_period_end)
-        ? expiresAt
-        : liveSub.current_period_end;
-    } else if (!expiresAt) {
-      effectiveEnd = null;
-    } else if (!expiresAt && liveSub?.current_period_end) {
-      effectiveEnd = null;
+    // Recompute from all trusted sources after the insert. This preserves a
+    // longer paid period or another support grant, and correctly maps a
+    // no-expiry grant to CLEAR_EXPIRY rather than a fake far-future date.
+    const entitlement = await getEffectiveEntitlement(supabaseAdmin, account.accountId);
+    if (!entitlement) {
+      throw new Error("grant was inserted but no effective entitlement could be resolved");
     }
-
     await syncAccountProvisioningToEntitlement(
       supabaseAdmin,
       account.accountId,
-      { currentPeriodEnd: effectiveEnd },
+      entitlement,
       `admin-grant:${grant.id}`
     );
 
