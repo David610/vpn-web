@@ -1,31 +1,15 @@
 import Stripe from "stripe";
 import { createClient } from "@supabase/supabase-js";
 import { getAccountForUser } from "../lib/accounts.js";
+import { requireRecentUser } from "../lib/user-auth.js";
 
 export async function onRequestPost({ env, request }) {
-  const authHeader = request.headers.get("Authorization");
-  const accessToken = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
-  if (!accessToken) {
-    return new Response(JSON.stringify({ error: "Authorization required" }), {
-      status: 401,
-      headers: { "Content-Type": "application/json" },
-    });
-  }
-
   try {
     const supabaseAdmin = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
       auth: { autoRefreshToken: false, persistSession: false },
     });
-    const {
-      data: { user },
-      error: tokenError,
-    } = await supabaseAdmin.auth.getUser(accessToken);
-    if (tokenError || !user) {
-      return new Response(JSON.stringify({ error: "Invalid or expired token" }), {
-        status: 401,
-        headers: { "Content-Type": "application/json" },
-      });
-    }
+    const { user, response } = await requireRecentUser(request, supabaseAdmin);
+    if (!user) return response;
 
     const account = await getAccountForUser(supabaseAdmin, user.id);
     if (!account) {
