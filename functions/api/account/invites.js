@@ -2,7 +2,7 @@ import { createClient } from "@supabase/supabase-js";
 import { requireUser, jsonResponse } from "../../lib/user-auth.js";
 import {
   getAccountForUser,
-  getLiveSubscription,
+  getEffectiveEntitlement,
   INCLUDED_SEATS,
 } from "../../lib/accounts.js";
 import { generateInviteToken, hashInviteToken } from "../../lib/invite-token.js";
@@ -53,12 +53,8 @@ export async function onRequestPost({ env, request }) {
       return jsonResponse({ error: "Only the account owner can invite members." }, 403);
     }
 
-    const subscription = await getLiveSubscription(
-      supabaseAdmin,
-      account.accountId,
-      "extra_seats"
-    );
-    if (!subscription) {
+    const entitlement = await getEffectiveEntitlement(supabaseAdmin, account.accountId);
+    if (!entitlement) {
       return jsonResponse(
         { error: "You need an active subscription before inviting members." },
         403
@@ -84,7 +80,7 @@ export async function onRequestPost({ env, request }) {
     if (inviteListError) throw new Error(`member_invites query failed: ${inviteListError.message}`);
 
     const alreadyInvited = liveInvites.find((i) => i.email.toLowerCase() === email);
-    const seatLimit = INCLUDED_SEATS + (subscription.extra_seats ?? 0);
+    const seatLimit = entitlement.seatLimit;
     // Re-inviting an address replaces its outstanding invite rather than
     // consuming a second seat, so it does not count toward the total here.
     const seatsUsed = memberCount + liveInvites.length - (alreadyInvited ? 1 : 0);
