@@ -2,6 +2,7 @@ import { createClient } from "@supabase/supabase-js";
 import { decryptSecret } from "../../lib/crypto.js";
 import { getAccountForUser, getEffectiveEntitlement } from "../../lib/accounts.js";
 import { requireUser } from "../../lib/user-auth.js";
+import { buildAccountOverview } from "../../lib/account-overview.js";
 
 export async function onRequestGet({ env, request }) {
   const noStoreJson = (body, status) =>
@@ -48,13 +49,17 @@ export async function onRequestGet({ env, request }) {
       );
     }
 
-    const { data: vpnAccount, error: vpnAccountError } = await supabaseAdmin
-      .from("vpn_accounts")
-      .select("id, enabled")
-      .eq("user_id", user.id)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+    const [accountOverview, vpnAccountResult] = await Promise.all([
+      buildAccountOverview(supabaseAdmin, user, account, entitlement),
+      supabaseAdmin
+        .from("vpn_accounts")
+        .select("id, enabled")
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+    ]);
+    const { data: vpnAccount, error: vpnAccountError } = vpnAccountResult;
     if (vpnAccountError) {
       throw new Error(`vpn_accounts lookup failed: ${vpnAccountError.message}`);
     }
@@ -95,6 +100,7 @@ export async function onRequestGet({ env, request }) {
         status: entitlement.status,
         current_period_end: entitlement.currentPeriodEnd,
         cancel_at_period_end: entitlement.cancelAtPeriodEnd,
+        account: accountOverview,
       },
       200
     );
