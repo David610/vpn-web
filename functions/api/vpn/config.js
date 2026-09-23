@@ -28,7 +28,25 @@ export async function onRequestGet({ env, request }) {
     if (!account) return noStoreJson({ error: "No active subscription" }, 403);
 
     const entitlement = await getEffectiveEntitlement(supabaseAdmin, account.accountId);
-    if (!entitlement) return noStoreJson({ error: "No active subscription" }, 403);
+    if (!entitlement) {
+      const { data: accountRow, error: trialError } = await supabaseAdmin
+        .from("customer_accounts")
+        .select("trial_used_at, trial_reserved_at")
+        .eq("id", account.accountId)
+        .maybeSingle();
+      if (trialError) throw new Error(`trial eligibility lookup failed: ${trialError.message}`);
+      const reservationFresh =
+        accountRow?.trial_reserved_at &&
+        Date.now() - new Date(accountRow.trial_reserved_at).getTime() < 24 * 60 * 60 * 1000;
+      return noStoreJson(
+        {
+          error: "No active subscription",
+          code: "no_subscription",
+          trial_available: !accountRow?.trial_used_at && !reservationFresh,
+        },
+        403
+      );
+    }
 
     const { data: vpnAccount, error: vpnAccountError } = await supabaseAdmin
       .from("vpn_accounts")
