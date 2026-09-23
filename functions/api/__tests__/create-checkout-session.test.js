@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const getUser = vi.fn();
+const getClaims = vi.fn();
 const memberMaybeSingle = vi.fn();
 const subscriptionMaybeSingle = vi.fn();
 const accountMaybeSingle = vi.fn();
@@ -11,7 +11,7 @@ const sessionsExpire = vi.fn();
 
 vi.mock("@supabase/supabase-js", () => ({
   createClient: vi.fn(() => ({
-    auth: { getUser },
+    auth: { getClaims },
     rpc: reserveTrial,
     from: vi.fn((table) => {
       if (table === "account_members") {
@@ -86,8 +86,15 @@ const env = {
 };
 
 beforeEach(() => {
-  getUser.mockReset().mockResolvedValue({
-    data: { user: { id: "user-1", email: "a@test.dev" } },
+  getClaims.mockReset().mockResolvedValue({
+    data: {
+      claims: {
+        sub: "user-1",
+        email: "a@test.dev",
+        role: "authenticated",
+        amr: [{ method: "password", timestamp: Math.floor(Date.now() / 1000) }],
+      },
+    },
     error: null,
   });
   memberMaybeSingle.mockReset().mockResolvedValue({
@@ -113,6 +120,23 @@ beforeEach(() => {
 });
 
 describe("create-checkout-session", () => {
+  it("requires a recent authentication event before starting billing", async () => {
+    getClaims.mockResolvedValue({
+      data: {
+        claims: {
+          sub: "user-1",
+          email: "a@test.dev",
+          amr: [{ method: "password", timestamp: Math.floor(Date.now() / 1000) - 3600 }],
+        },
+      },
+      error: null,
+    });
+    const res = await onRequestPost({ env, request: makeRequest({ trial: false }) });
+    expect(res.status).toBe(403);
+    expect((await res.json()).code).toBe("reauth_required");
+    expect(sessionsCreate).not.toHaveBeenCalled();
+  });
+
   it("returns 409 without Stripe when a live/recent subscription exists", async () => {
     subscriptionMaybeSingle.mockResolvedValue({ data: { status: "active" }, error: null });
     const res = await onRequestPost({ env, request: makeRequest() });
