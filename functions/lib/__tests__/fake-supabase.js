@@ -23,6 +23,12 @@ export function makeFakeSupabase(seed = {}, options = {}) {
     vpn_accounts: [],
     provisioning_jobs: [],
     member_invites: [],
+    admin_entitlements: [],
+    vpn_usage_current: [],
+    vpn_usage_hourly: [],
+    operational_alerts: [],
+    abuse_signals: [],
+    nodes: [],
     ...structuredClone(seed),
   };
 
@@ -149,6 +155,28 @@ export function makeFakeSupabase(seed = {}, options = {}) {
         data: { user: options.user ?? { id: "user-1", email: "owner@example.com" } },
         error: options.user === null ? { message: "bad token" } : null,
       })),
+      getClaims: vi.fn(async () => {
+        if (options.user === null) {
+          return { data: { claims: null }, error: { message: "bad token" } };
+        }
+        const user = options.user ?? { id: "user-1", email: "owner@example.com" };
+        return {
+          data: {
+            claims:
+              options.claims ??
+              {
+                sub: user.id,
+                amr: [
+                  {
+                    method: "password",
+                    timestamp: Math.floor(Date.now() / 1000),
+                  },
+                ],
+              },
+          },
+          error: null,
+        };
+      }),
       admin: {
         listUsers: vi.fn(async () => ({
           data: { users: options.users ?? [] },
