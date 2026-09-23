@@ -39,6 +39,7 @@ export async function onRequestGet({ env, request, params }) {
     let sub = null;
     let stripeCustomerId = null;
     let memberCount = 0;
+    let grants = [];
     if (account) {
       // Narrowed to the live statuses before maybeSingle(): an account that
       // lapsed and resubscribed keeps its old canceled rows, and only the
@@ -50,7 +51,11 @@ export async function onRequestGet({ env, request, params }) {
         "status, current_period_end, cancel_at_period_end, stripe_subscription_id"
       );
 
-      const [{ data: accountRow }, { count }] = await Promise.all([
+      const [
+        { data: accountRow, error: accountError },
+        { count, error: memberCountError },
+        { data: grantRows, error: grantError },
+      ] = await Promise.all([
         supabaseAdmin
           .from("customer_accounts")
           .select("stripe_customer_id")
@@ -60,9 +65,27 @@ export async function onRequestGet({ env, request, params }) {
           .from("account_members")
           .select("id", { count: "exact", head: true })
           .eq("account_id", account.accountId),
+        supabaseAdmin
+          .from("admin_entitlements")
+          .select("id, status, starts_at, expires_at, seat_limit, reason, revoked_at, created_at")
+          .eq("account_id", account.accountId)
+          .order("created_at", { ascending: false }),
       ]);
+      if (accountError) throw new Error(`customer_accounts query failed: ${accountError.message}`);
+      if (memberCountError) throw new Error(`account_members count failed: ${memberCountError.message}`);
+      if (grantError) throw new Error(`admin_entitlements query failed: ${grantError.message}`);
       stripeCustomerId = accountRow?.stripe_customer_id ?? null;
       memberCount = count ?? 0;
+      grants = (grantRows ?? []).map((g) => ({
+        id: g.id,
+        status: g.status,
+        startsAt: g.starts_at,
+        expiresAt: g.expires_at,
+        seatLimit: g.seat_limit,
+        reason: g.reason,
+        revokedAt: g.revoked_at,
+        createdAt: g.created_at,
+      }));
     }
 
     let jobs = [];
@@ -99,6 +122,7 @@ export async function onRequestGet({ env, request, params }) {
             stripeSubscriptionId: sub.stripe_subscription_id,
           }
         : null,
+      grants,
       vpnAccount: vpnAccount
         ? { id: vpnAccount.id, vpnUserId: vpnAccount.vpn_user_id, nodeId: vpnAccount.node_id, enabled: vpnAccount.enabled }
         : null,
