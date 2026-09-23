@@ -33,9 +33,16 @@ export default function AdminAlertsPage() {
   }, [session]);
 
   useEffect(() => {
+    const refresh = () => {
+      if (document.visibilityState === "visible") load();
+    };
     load();
-    const timer = window.setInterval(load, 30_000);
-    return () => window.clearInterval(timer);
+    const timer = window.setInterval(refresh, 30_000);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", refresh);
+    };
   }, [load]);
 
   async function resolve(id: string) {
