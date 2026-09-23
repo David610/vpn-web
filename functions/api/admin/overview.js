@@ -37,7 +37,7 @@ export async function onRequestGet({ env, request }) {
         .gt("expires_at", nowIso),
       supabaseAdmin
         .from("admin_entitlements")
-        .select("id", { count: "exact", head: true })
+        .select("expires_at")
         .eq("status", "active"),
       supabaseAdmin
         .from("subscriptions")
@@ -99,7 +99,9 @@ export async function onRequestGet({ env, request }) {
       members: {
         active: members.count ?? 0,
         pending_invites: invites.count ?? 0,
-        admin_grants: grants.count ?? 0,
+        admin_grants: (grants.data ?? []).filter(
+          (g) => !g.expires_at || new Date(g.expires_at).getTime() > now
+        ).length,
         paid_extra_seats: sum(seatRows.data, "extra_seats"),
       },
       vpn: {
