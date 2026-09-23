@@ -92,7 +92,14 @@ beforeEach(() => {
     },
     account_members: { data: null, count: 18, error: null },
     member_invites: { data: null, count: 2, error: null },
-    admin_entitlements: { data: null, count: 1, error: null },
+    admin_entitlements: {
+      data: [
+        { expires_at: new Date(now + 86_400_000).toISOString() },
+        { expires_at: new Date(now - 86_400_000).toISOString() },
+      ],
+      count: null,
+      error: null,
+    },
     vpn_accounts: (filters) => {
       const enabled = eqValue(filters, "enabled");
       if (enabled === true) return { data: null, count: 13, error: null };
