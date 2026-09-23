@@ -14,6 +14,10 @@ STRIPE_API_KEY=sk_test_placeholder_not_a_real_key
 # customer.subscription.updated, customer.subscription.deleted
 STRIPE_SIGNING_SECRET=whsec_test_local_secret_for_synthetic_events_only
 STRIPE_PRICE_ID=price_placeholder_not_real
+# Licensed recurring price for seats beyond the 3 included in the base
+# price. Without it, /api/account/seats returns 503 and every account is
+# capped at 3 seats.
+STRIPE_SEAT_PRICE_ID=price_seat_xxx
 SITE_URL=http://127.0.0.1:8788
 
 # VPS provisioning agent (docs/superpowers/specs/2026-09-21-vpn-provisioning-agent-design.md)

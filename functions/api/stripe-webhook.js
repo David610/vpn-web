@@ -5,6 +5,7 @@ import {
   handleInvoicePaid,
   handleSubscriptionUpdated,
   handleSubscriptionDeleted,
+  handleSubscriptionTrialing,
 } from "../lib/stripe-events.js";
 
 export async function onRequestPost({ env, request }) {
@@ -90,8 +91,22 @@ export async function onRequestPost({ env, request }) {
       case "invoice.paid":
         await handleInvoicePaid(supabaseAdmin, event.data.object);
         break;
+      case "customer.subscription.created":
+        // Only trials are acted on here. A normal subscription is created
+        // in "incomplete" and provisions off invoice.paid; a trial never
+        // produces a payment to wait for.
+        if (event.data.object.status === "trialing") {
+          await handleSubscriptionTrialing(supabaseAdmin, event.data.object);
+        }
+        break;
       case "customer.subscription.updated":
-        await handleSubscriptionUpdated(supabaseAdmin, event.data.object);
+        if (event.data.object.status === "trialing") {
+          // Covers a trial that starts via an update rather than at
+          // creation, and redeliveries of either; provisioning is keyed so
+          // the duplicate is a no-op.
+          await handleSubscriptionTrialing(supabaseAdmin, event.data.object);
+        }
+        await handleSubscriptionUpdated(supabaseAdmin, event.data.object, env.STRIPE_SEAT_PRICE_ID);
         break;
       case "customer.subscription.deleted":
         await handleSubscriptionDeleted(supabaseAdmin, event.data.object);

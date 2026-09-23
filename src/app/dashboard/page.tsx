@@ -5,12 +5,19 @@ import { useRouter } from "next/navigation";
 import Nav from "@/components/Nav";
 import Footer from "@/components/Footer";
 import { useSession } from "@/hooks/useSession";
+import { MembersCard } from "@/components/MembersCard";
 
 type ConfigState =
   | { phase: "loading" }
   | { phase: "none" }
   | { phase: "provisioning" }
-  | { phase: "ready"; subscriptionUrl: string; currentPeriodEnd: string | null; cancelAtPeriodEnd: boolean }
+  | {
+      phase: "ready";
+      subscriptionUrl: string;
+      status: string;
+      currentPeriodEnd: string | null;
+      cancelAtPeriodEnd: boolean;
+    }
   | { phase: "error" };
 
 export default function DashboardPage() {
@@ -47,6 +54,7 @@ export default function DashboardPage() {
           setConfig({
             phase: "ready",
             subscriptionUrl: data.subscription_url,
+            status: data.status,
             currentPeriodEnd: data.current_period_end,
             cancelAtPeriodEnd: data.cancel_at_period_end,
           });
@@ -206,6 +214,16 @@ export default function DashboardPage() {
           <div style={{ padding: "var(--space-6)" }}>
             {config.phase === "ready" ? (
               <>
+                {config.status === "trialing" && !config.cancelAtPeriodEnd && (
+                  <p className="section-sub" style={{ marginBottom: "var(--space-3)" }}>
+                    You&apos;re on a free trial
+                    {config.currentPeriodEnd
+                      ? ` until ${new Date(config.currentPeriodEnd).toLocaleDateString()}`
+                      : ""}
+                    . Billing starts automatically when it ends — cancel before then
+                    and you won&apos;t be charged.
+                  </p>
+                )}
                 <p className="section-sub">Your VPN is ready. Import this URL into your client:</p>
                 <div
                   style={{
@@ -281,7 +299,7 @@ export default function DashboardPage() {
                 <p className="section-sub">
                   {checkoutStatus === "cancel"
                     ? "Checkout was canceled."
-                    : "No active subscription yet."}
+                    : "No active subscription yet. Try Arcana free for 3 days — cancel any time before it ends and you won't be charged."}
                 </p>
                 {checkoutError && <p className="field-error">{checkoutError}</p>}
                 <button
@@ -291,12 +309,13 @@ export default function DashboardPage() {
                   disabled={checkoutLoading}
                   style={{ width: "100%", marginTop: "var(--space-4)" }}
                 >
-                  {checkoutLoading ? "Redirecting…" : "Subscribe"}
+                  {checkoutLoading ? "Redirecting…" : "Start 3-day free trial"}
                 </button>
               </>
             )}
           </div>
         </div>
+        <MembersCard session={session} />
       </main>
       <Footer />
     </>

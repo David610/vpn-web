@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import Nav from "@/components/Nav";
 import Footer from "@/components/Footer";
 import { supabase } from "@/lib/supabase";
+import { safeNextPath } from "@/lib/next-path";
 
 export default function SignupPage() {
   const router = useRouter();
@@ -47,9 +48,10 @@ export default function SignupPage() {
     }
     if (data.session) {
       // Confirmation is off (or already satisfied) and signUp() returned a
-      // live session directly — go straight to the dashboard instead of
-      // telling an already-logged-in user to check their email.
-      router.replace("/dashboard/");
+      // live session directly — go straight on instead of telling an
+      // already-logged-in user to check their email. An invitee signing up
+      // to accept a seat returns to the invite via ?next=.
+      router.replace(safeNextPath(window.location.search));
       return;
     }
     setSubmitted(true);
@@ -68,7 +70,10 @@ export default function SignupPage() {
             {submitted ? (
               <p className="section-sub">
                 Check your email for a confirmation link, then{" "}
-                <Link href="/login" className="text-link">
+                <Link
+                  href={`/login/${typeof window !== "undefined" ? window.location.search : ""}`}
+                  className="text-link"
+                >
                   log in
                 </Link>
                 .

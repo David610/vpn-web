@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import Nav from "@/components/Nav";
 import Footer from "@/components/Footer";
 import { supabase } from "@/lib/supabase";
+import { safeNextPath } from "@/lib/next-path";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -32,7 +33,10 @@ export default function LoginPage() {
       setError("Invalid email or password.");
       return;
     }
-    router.replace("/dashboard/");
+    // An invitee arrives here from an invite link and must land back on
+    // it, not on the dashboard. safeNextPath rejects anything that is not
+    // a same-origin path.
+    router.replace(safeNextPath(window.location.search));
   }
 
   return (

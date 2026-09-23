@@ -44,6 +44,43 @@ export function getInvoiceSubscriptionId(invoice) {
 }
 
 /**
+ * The per-seat line item on a subscription, if one has been added.
+ *
+ * A subscription carries the flat base price (which includes the first
+ * INCLUDED_SEATS) and, once the owner buys extra capacity, a second licensed
+ * item whose quantity is the number of seats beyond that. Matching on the
+ * configured price id rather than on position is what keeps this from
+ * mistaking the base item for the seat item when Stripe reorders them.
+ *
+ * @param {object} subscription - a Stripe Subscription object
+ * @param {string | undefined} seatPriceId - env.STRIPE_SEAT_PRICE_ID
+ * @returns {object | null} the subscription item, or null if no seats
+ */
+export function getSeatSubscriptionItem(subscription, seatPriceId) {
+  if (!seatPriceId) return null;
+  const items = subscription.items?.data;
+  if (!Array.isArray(items)) return null;
+  return (
+    items.find((item) => {
+      const priceId = typeof item.price === "string" ? item.price : item.price?.id;
+      return priceId === seatPriceId;
+    }) ?? null
+  );
+}
+
+/**
+ * How many seats beyond the included ones a subscription is paying for.
+ * Absent a seat item — the common case — that is zero, not unknown.
+ *
+ * @returns {number}
+ */
+export function getExtraSeatCount(subscription, seatPriceId) {
+  const item = getSeatSubscriptionItem(subscription, seatPriceId);
+  const quantity = item?.quantity;
+  return Number.isInteger(quantity) && quantity > 0 ? quantity : 0;
+}
+
+/**
  * @param {object} invoice - a Stripe Invoice object
  * @returns {number | null} unix seconds of the paid service period's end,
  *   from the most specific source available
