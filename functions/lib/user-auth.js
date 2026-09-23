@@ -8,6 +8,23 @@
 
 const DEFAULT_RECENT_AUTH_SECONDS = 15 * 60;
 
+// Supabase AMR methods that represent a human-controlled authentication or
+// account-verification event. Do not use a negative list here: new passive
+// session mechanisms must fail closed for sensitive actions until reviewed.
+const HUMAN_AUTH_METHODS = new Set([
+  "password",
+  "otp",
+  "totp",
+  "oauth",
+  "magiclink",
+  "sso/saml",
+  "recovery",
+  "invite",
+  "email/signup",
+  "email_change",
+  "webauthn",
+]);
+
 function accessTokenFrom(request) {
   const authHeader = request.headers.get("Authorization");
   return authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
@@ -49,9 +66,9 @@ export async function requireUser(request, supabaseAdmin) {
 /**
  * Requires a real authentication event within maxAgeSeconds.
  *
- * Token refreshes deliberately do not count: refreshing a long-lived session
- * is not the same thing as the user proving possession of an authentication
- * factor again. Password / OTP / WebAuthn entries in the signed AMR list do.
+ * Passive/session AMR methods deliberately do not count: refreshing a
+ * long-lived session (or an anonymous session) is not the same thing as the
+ * user proving possession of an authentication factor again.
  */
 export async function requireRecentUser(
   request,
@@ -68,7 +85,7 @@ export async function requireRecentUser(
 
   const amr = Array.isArray(claims.amr) ? claims.amr : [];
   const authTimestamps = amr
-    .filter((entry) => entry && entry.method !== "token_refresh")
+    .filter((entry) => entry && HUMAN_AUTH_METHODS.has(entry.method))
     .map((entry) => Number(entry.timestamp))
     .filter(Number.isFinite);
 
