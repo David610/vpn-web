@@ -166,6 +166,15 @@ export async function onRequestPost({ env, request, params }) {
       .eq("id", jobId);
     if (updateError) throw new Error(`provisioning_jobs update failed: ${updateError.message}`);
 
+    const { error: resolveAlertError } = await supabaseAdmin
+      .from("operational_alerts")
+      .update({ status: "resolved", resolved_at: new Date().toISOString() })
+      .eq("dedup_key", `job-failed:${jobId}`)
+      .eq("status", "open");
+    if (resolveAlertError) {
+      console.error("agent/complete: failed to resolve prior alert:", resolveAlertError.message);
+    }
+
     return new Response(JSON.stringify({ ok: true }), {
       status: 200,
       headers: { "Content-Type": "application/json" },
