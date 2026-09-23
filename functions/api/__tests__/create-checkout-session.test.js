@@ -6,6 +6,8 @@ const subscriptionMaybeSingle = vi.fn();
 const accountMaybeSingle = vi.fn();
 const reserveTrial = vi.fn();
 const sessionsCreate = vi.fn();
+const sessionsRetrieve = vi.fn();
+const sessionsExpire = vi.fn();
 
 vi.mock("@supabase/supabase-js", () => ({
   createClient: vi.fn(() => ({
@@ -48,7 +50,15 @@ vi.mock("@supabase/supabase-js", () => ({
 
 vi.mock("stripe", () => {
   function StripeMock() {
-    return { checkout: { sessions: { create: sessionsCreate } } };
+    return {
+      checkout: {
+        sessions: {
+          create: sessionsCreate,
+          retrieve: sessionsRetrieve,
+          expire: sessionsExpire,
+        },
+      },
+    };
   }
   StripeMock.createFetchHttpClient = vi.fn();
   return { default: StripeMock };
@@ -94,8 +104,12 @@ beforeEach(() => {
     error: null,
   });
   sessionsCreate.mockReset().mockResolvedValue({
+    id: "cs_new",
+    status: "open",
     url: "https://checkout.stripe.test/session",
   });
+  sessionsRetrieve.mockReset();
+  sessionsExpire.mockReset().mockResolvedValue({ id: "cs_new", status: "expired" });
 });
 
 describe("create-checkout-session", () => {
@@ -115,6 +129,7 @@ describe("create-checkout-session", () => {
     expect(body).toEqual({
       url: "https://checkout.stripe.test/session",
       trial: true,
+      resumed: false,
     });
     expect(reserveTrial).toHaveBeenCalledWith("reserve_free_trial", {
       p_account_id: "acct-1",
@@ -126,8 +141,56 @@ describe("create-checkout-session", () => {
     );
   });
 
-  it("fails cleanly when the account has already used/reserved its trial", async () => {
+  it("resumes an existing open trial Checkout instead of creating another", async () => {
+    const reservedAt = new Date().toISOString();
+    accountMaybeSingle.mockResolvedValue({
+      data: {
+        stripe_customer_id: null,
+        trial_used_at: null,
+        trial_reserved_at: reservedAt,
+        trial_checkout_session_id: "cs_existing",
+      },
+      error: null,
+    });
+    sessionsRetrieve.mockResolvedValue({
+      id: "cs_existing",
+      status: "open",
+      url: "https://checkout.stripe.test/existing",
+    });
+
+    const res = await onRequestPost({ env, request: makeRequest({ trial: true }) });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      url: "https://checkout.stripe.test/existing",
+      trial: true,
+      resumed: true,
+    });
+    expect(sessionsRetrieve).toHaveBeenCalledWith("cs_existing");
+    expect(reserveTrial).not.toHaveBeenCalled();
+    expect(sessionsCreate).not.toHaveBeenCalled();
+  });
+
+  it("fails cleanly when the account has already used its trial", async () => {
     reserveTrial.mockResolvedValue({ data: null, error: null });
+    accountMaybeSingle
+      .mockResolvedValueOnce({
+        data: {
+          stripe_customer_id: null,
+          trial_used_at: null,
+          trial_reserved_at: null,
+          trial_checkout_session_id: null,
+        },
+        error: null,
+      })
+      .mockResolvedValueOnce({
+        data: {
+          trial_used_at: "2026-09-22T12:00:00.000Z",
+          trial_reserved_at: null,
+          trial_checkout_session_id: null,
+        },
+        error: null,
+      });
+
     const res = await onRequestPost({ env, request: makeRequest({ trial: true }) });
     expect(res.status).toBe(409);
     expect((await res.json()).code).toBe("trial_unavailable");
