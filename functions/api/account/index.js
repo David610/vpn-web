@@ -2,7 +2,7 @@ import { createClient } from "@supabase/supabase-js";
 import { requireUser, jsonResponse } from "../../lib/user-auth.js";
 import {
   getAccountForUser,
-  getLiveSubscription,
+  getEffectiveEntitlement,
   INCLUDED_SEATS,
 } from "../../lib/accounts.js";
 
@@ -34,11 +34,7 @@ export async function onRequestGet({ env, request }) {
       return jsonResponse({ error: "Internal error" }, 500);
     }
 
-    const subscription = await getLiveSubscription(
-      supabaseAdmin,
-      account.accountId,
-      "status, current_period_end, cancel_at_period_end, extra_seats"
-    );
+    const entitlement = await getEffectiveEntitlement(supabaseAdmin, account.accountId);
 
     const [{ data: memberRows, error: membersError }, { data: inviteRows, error: invitesError }] =
       await Promise.all([
@@ -65,7 +61,7 @@ export async function onRequestGet({ env, request }) {
     if (usersError) throw new Error(`listUsers failed: ${usersError.message}`);
     const emailByUserId = new Map(usersPage.users.map((u) => [u.id, u.email]));
 
-    const seatLimit = INCLUDED_SEATS + (subscription?.extra_seats ?? 0);
+    const seatLimit = entitlement?.seatLimit ?? INCLUDED_SEATS;
     // A pending invite is a reserved seat. Counting only accepted members
     // would let an owner issue invites past the cap and discover the
     // shortfall only when someone tries to accept.
@@ -74,16 +70,17 @@ export async function onRequestGet({ env, request }) {
     return jsonResponse({
       accountId: account.accountId,
       role: account.role,
-      subscription: subscription
+      subscription: entitlement
         ? {
-            status: subscription.status,
-            currentPeriodEnd: subscription.current_period_end,
-            cancelAtPeriodEnd: subscription.cancel_at_period_end,
+            source: entitlement.source,
+            status: entitlement.status,
+            currentPeriodEnd: entitlement.currentPeriodEnd,
+            cancelAtPeriodEnd: entitlement.cancelAtPeriodEnd,
           }
         : null,
       seats: {
         included: INCLUDED_SEATS,
-        extra: subscription?.extra_seats ?? 0,
+        extra: entitlement?.extraSeats ?? 0,
         limit: seatLimit,
         used: seatsUsed,
         available: Math.max(0, seatLimit - seatsUsed),
