@@ -191,3 +191,151 @@ revoke all on function public.vpn_usage_month_total(bigint, timestamptz)
   from public, anon, authenticated;
 grant execute on function public.vpn_usage_month_total(bigint, timestamptz)
   to service_role;
+
+
+-- One round-trip snapshot for customer dashboard/account reads. Keep
+-- entitlement composition in application code; this RPC only gathers raw,
+-- authorization-scoped state efficiently.
+create or replace function public.customer_dashboard_state(p_user_id uuid)
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+declare
+  v_account_id uuid;
+  v_role text;
+  v_trial_used_at timestamptz;
+  v_trial_reserved_at timestamptz;
+  v_trial_checkout_session_id text;
+  v_subscription jsonb;
+  v_grants jsonb;
+  v_members jsonb;
+  v_invites jsonb;
+  v_vpn_account jsonb;
+begin
+  select m.account_id, m.role
+  into v_account_id, v_role
+  from public.account_members m
+  where m.user_id = p_user_id;
+
+  if v_account_id is null then
+    return null;
+  end if;
+
+  select
+    a.trial_used_at,
+    a.trial_reserved_at,
+    a.trial_checkout_session_id
+  into
+    v_trial_used_at,
+    v_trial_reserved_at,
+    v_trial_checkout_session_id
+  from public.customer_accounts a
+  where a.id = v_account_id;
+
+  select to_jsonb(s)
+  into v_subscription
+  from (
+    select
+      s1.id,
+      s1.status,
+      s1.current_period_end,
+      s1.cancel_at_period_end,
+      s1.extra_seats
+    from public.subscriptions s1
+    where s1.account_id = v_account_id
+      and s1.status in ('trialing', 'active', 'past_due')
+    limit 1
+  ) s;
+
+  select coalesce(
+    jsonb_agg(
+      jsonb_build_object(
+        'id', e.id,
+        'starts_at', e.starts_at,
+        'expires_at', e.expires_at,
+        'seat_limit', e.seat_limit,
+        'reason', e.reason,
+        'created_at', e.created_at
+      )
+      order by e.created_at desc
+    ),
+    '[]'::jsonb
+  )
+  into v_grants
+  from public.admin_entitlements e
+  where e.account_id = v_account_id
+    and e.status = 'active'
+    and e.starts_at <= now()
+    and (e.expires_at is null or e.expires_at > now());
+
+  select coalesce(
+    jsonb_agg(
+      jsonb_build_object(
+        'user_id', m.user_id,
+        'role', m.role,
+        'created_at', m.created_at,
+        'email', p.email
+      )
+      order by (m.role = 'owner') desc, m.created_at asc
+    ),
+    '[]'::jsonb
+  )
+  into v_members
+  from public.account_members m
+  left join public.profiles p on p.id = m.user_id
+  where m.account_id = v_account_id;
+
+  select coalesce(
+    jsonb_agg(
+      jsonb_build_object(
+        'id', i.id,
+        'email', i.email,
+        'expires_at', i.expires_at,
+        'created_at', i.created_at
+      )
+      order by i.created_at asc
+    ),
+    '[]'::jsonb
+  )
+  into v_invites
+  from public.member_invites i
+  where i.account_id = v_account_id
+    and i.accepted_at is null
+    and i.revoked_at is null
+    and i.expires_at > now();
+
+  select to_jsonb(v)
+  into v_vpn_account
+  from (
+    select v1.id, v1.enabled, v1.vpn_user_id, v1.node_id
+    from public.vpn_accounts v1
+    where v1.user_id = p_user_id
+    order by v1.created_at desc
+    limit 1
+  ) v;
+
+  return jsonb_build_object(
+    'account',
+    jsonb_build_object(
+      'account_id', v_account_id,
+      'role', v_role,
+      'trial_used_at', v_trial_used_at,
+      'trial_reserved_at', v_trial_reserved_at,
+      'trial_checkout_session_id', v_trial_checkout_session_id
+    ),
+    'subscription', v_subscription,
+    'grants', v_grants,
+    'members', v_members,
+    'invites', v_invites,
+    'vpn_account', v_vpn_account
+  );
+end;
+$$;
+
+revoke all on function public.customer_dashboard_state(uuid)
+  from public, anon, authenticated;
+grant execute on function public.customer_dashboard_state(uuid)
+  to service_role;
