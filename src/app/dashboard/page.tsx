@@ -7,6 +7,7 @@ import Footer from "@/components/Footer";
 import { useSession } from "@/hooks/useSession";
 import { MembersCard } from "@/components/MembersCard";
 import { AccountActionsCard } from "@/components/AccountActionsCard";
+import { UsageCard } from "@/components/UsageCard";
 
 type ConfigState =
   | { phase: "loading" }
@@ -337,7 +338,10 @@ export default function DashboardPage() {
         </div>
         <MembersCard session={session} />
         {config.phase === "ready" && (
-          <AccountActionsCard session={session} setupUrl={config.preferredSetupUrl} />
+          <>
+            <UsageCard session={session} />
+            <AccountActionsCard session={session} setupUrl={config.preferredSetupUrl} />
+          </>
         )}
       </main>
       <Footer />
