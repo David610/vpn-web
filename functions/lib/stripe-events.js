@@ -25,7 +25,9 @@ import {
   getAccountForUser,
   getAccountMembers,
   getMemberVpnAccounts,
+  getEffectiveEntitlement,
 } from "./accounts.js";
+import { syncAccountProvisioningToEntitlement } from "./provision-entitlement.js";
 
 /**
  * @param {import('@supabase/supabase-js').SupabaseClient} supabaseAdmin
@@ -175,6 +177,33 @@ export async function handleInvoicePaid(supabaseAdmin, invoice) {
     );
   }
 
+  // A customer who chooses "Subscribe now" has received the product
+  // without using a trial, so they must not be able to cancel later and
+  // claim a first-time trial. Preserve the original first-use timestamp.
+  const { data: trialAccount, error: trialReadError } = await supabaseAdmin
+    .from("customer_accounts")
+    .select("trial_used_at")
+    .eq("id", sub.account_id)
+    .maybeSingle();
+  if (trialReadError) {
+    throw new Error(`customer_accounts trial lookup failed: ${trialReadError.message}`);
+  }
+  const { error: trialConsumeError } = await supabaseAdmin
+    .from("customer_accounts")
+    .update({
+      trial_used_at: trialAccount?.trial_used_at ?? new Date().toISOString(),
+      trial_reserved_at: null,
+    })
+    .eq("id", sub.account_id);
+  if (trialConsumeError) {
+    throw new Error(`customer_accounts trial update failed: ${trialConsumeError.message}`);
+  }
+
+  const entitlement = await getEffectiveEntitlement(supabaseAdmin, sub.account_id);
+  if (!entitlement) {
+    throw new Error(`invoice.paid ${invoice.id} produced no effective entitlement`);
+  }
+
   const nodeId = resolveNodeForUser();
 
   // billing_reason distinguishes a subscription's first invoice from every
@@ -195,7 +224,7 @@ export async function handleInvoicePaid(supabaseAdmin, invoice) {
       supabaseAdmin,
       sub.account_id,
       subscriptionId,
-      currentPeriodEnd
+      entitlement
     );
     return;
   }
@@ -219,15 +248,49 @@ export async function handleInvoicePaid(supabaseAdmin, invoice) {
   }
 
   for (const vpnAccount of vpnAccounts) {
-    const { error: jobError } = await supabaseAdmin.from("provisioning_jobs").insert({
-      idempotency_key: `set-expiry:${subscriptionId}:${currentPeriodEnd}:${vpnAccount.id}`,
-      node_id: nodeId,
-      job_type: "SET_EXPIRY",
-      vpn_account_id: vpnAccount.id,
-      payload: { vpn_user_id: vpnAccount.vpnUserId, expires_at: currentPeriodEnd },
-    });
-    if (jobError && jobError.code !== "23505") {
-      throw new Error(`provisioning_jobs insert failed: ${jobError.message}`);
+    const expiryJob = entitlement.clearExpiry
+      ? {
+          idempotency_key: `clear-expiry:${subscriptionId}:${invoice.id}:${vpnAccount.id}`,
+          node_id: nodeId,
+          job_type: "CLEAR_EXPIRY",
+          vpn_account_id: vpnAccount.id,
+          payload: { vpn_user_id: vpnAccount.vpnUserId },
+        }
+      : {
+          idempotency_key: `set-expiry:${subscriptionId}:${entitlement.serviceExpiresAt}:${vpnAccount.id}`,
+          node_id: nodeId,
+          job_type: "SET_EXPIRY",
+          vpn_account_id: vpnAccount.id,
+          payload: {
+            vpn_user_id: vpnAccount.vpnUserId,
+            expires_at: entitlement.serviceExpiresAt,
+          },
+        };
+
+    if (!entitlement.clearExpiry && !entitlement.serviceExpiresAt) {
+      throw new Error("finite effective entitlement is missing serviceExpiresAt");
+    }
+
+    const { error: expiryError } = await supabaseAdmin
+      .from("provisioning_jobs")
+      .insert(expiryJob);
+    if (expiryError && expiryError.code !== "23505") {
+      throw new Error(`provisioning_jobs insert failed: ${expiryError.message}`);
+    }
+
+    // A legitimately late payment can recover an account that dunning
+    // already disabled. Normal renewals stay one-job-per-seat.
+    if (vpnAccount.enabled === false) {
+      const { error: enableError } = await supabaseAdmin.from("provisioning_jobs").insert({
+        idempotency_key: `enable-user:invoice-paid:${invoice.id}:${vpnAccount.id}`,
+        node_id: nodeId,
+        job_type: "ENABLE_USER",
+        vpn_account_id: vpnAccount.id,
+        payload: { vpn_user_id: vpnAccount.vpnUserId, user_id: vpnAccount.userId },
+      });
+      if (enableError && enableError.code !== "23505") {
+        throw new Error(`provisioning_jobs insert failed: ${enableError.message}`);
+      }
     }
   }
 }
@@ -241,13 +304,22 @@ export async function handleInvoicePaid(supabaseAdmin, invoice) {
  * added without having to know whether Stripe emits a zero-amount invoice at
  * trial start.
  */
-async function enqueueCreateForMembers(supabaseAdmin, accountId, subscriptionId, expiresAt) {
+async function enqueueCreateForMembers(supabaseAdmin, accountId, subscriptionId, entitlement) {
   const members = await getAccountMembers(supabaseAdmin, accountId);
   if (members.length === 0) {
     throw new Error(`account ${accountId} has no members — cannot provision`);
   }
+  if (!entitlement.clearExpiry && !entitlement.serviceExpiresAt) {
+    throw new Error("finite effective entitlement is missing serviceExpiresAt");
+  }
+
   const nodeId = resolveNodeForUser();
   for (const member of members) {
+    const payload = { user_id: member.userId };
+    if (!entitlement.clearExpiry) {
+      payload.expires_at = entitlement.serviceExpiresAt;
+    }
+
     const { error: jobError } = await supabaseAdmin.from("provisioning_jobs").insert({
       // Keyed per member, not per subscription: an account provisions one
       // VPN user per seat, so the subscription id alone is not unique enough
@@ -256,7 +328,7 @@ async function enqueueCreateForMembers(supabaseAdmin, accountId, subscriptionId,
       node_id: nodeId,
       job_type: "CREATE_USER",
       vpn_account_id: null,
-      payload: { user_id: member.userId, expires_at: expiresAt },
+      payload,
     });
     if (jobError && jobError.code !== "23505") {
       throw new Error(`provisioning_jobs insert failed: ${jobError.message}`);
@@ -311,10 +383,40 @@ export async function handleSubscriptionTrialing(supabaseAdmin, subscription) {
     );
   }
 
-  // Access expires when the trial does. If the customer converts, the
-  // invoice for the first real period extends it via SET_EXPIRY; if they do
-  // not, it simply lapses, with no separate revocation needed.
-  await enqueueCreateForMembers(supabaseAdmin, sub.account_id, subscription.id, trialEnd);
+  // Stripe has now confirmed that the subscription really entered its
+  // trial, so consume the account's one-time eligibility and clear the
+  // short-lived Checkout reservation.
+  const { data: trialAccount, error: trialReadError } = await supabaseAdmin
+    .from("customer_accounts")
+    .select("trial_used_at")
+    .eq("id", sub.account_id)
+    .maybeSingle();
+  if (trialReadError) {
+    throw new Error(`customer_accounts trial lookup failed: ${trialReadError.message}`);
+  }
+  const { error: trialConsumeError } = await supabaseAdmin
+    .from("customer_accounts")
+    .update({
+      trial_used_at: trialAccount?.trial_used_at ?? new Date().toISOString(),
+      trial_reserved_at: null,
+    })
+    .eq("id", sub.account_id);
+  if (trialConsumeError) {
+    throw new Error(`customer_accounts trial update failed: ${trialConsumeError.message}`);
+  }
+
+  // Reconcile against all valid access sources. A longer/no-expiry support
+  // grant must not be shortened merely because a Stripe trial started.
+  const entitlement = await getEffectiveEntitlement(supabaseAdmin, sub.account_id);
+  if (!entitlement) {
+    throw new Error(`trialing subscription ${subscription.id} produced no effective entitlement`);
+  }
+  await enqueueCreateForMembers(
+    supabaseAdmin,
+    sub.account_id,
+    subscription.id,
+    entitlement
+  );
 }
 
 /**
@@ -334,6 +436,20 @@ export async function handleSubscriptionTrialing(supabaseAdmin, subscription) {
  * vpn_accounts row is a real race against the agent and must be retried.
  */
 async function enqueueDisableForAccount(supabaseAdmin, accountId, subscriptionId, eventLabel) {
+  // The Stripe subscription that triggered this event is no longer an
+  // entitlement, but a support grant (or a newer paid subscription) may
+  // still be. Reconcile to that instead of blindly disabling the account.
+  const remainingEntitlement = await getEffectiveEntitlement(supabaseAdmin, accountId);
+  if (remainingEntitlement) {
+    await syncAccountProvisioningToEntitlement(
+      supabaseAdmin,
+      accountId,
+      remainingEntitlement,
+      `stripe-ended:${subscriptionId}:${remainingEntitlement.source}`
+    );
+    return;
+  }
+
   const nodeId = resolveNodeForUser();
   const vpnAccounts = await getMemberVpnAccounts(supabaseAdmin, accountId, nodeId);
 
