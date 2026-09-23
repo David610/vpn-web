@@ -167,6 +167,8 @@ export function makeFakeSupabase(seed = {}, options = {}) {
               options.claims ??
               {
                 sub: user.id,
+                email: user.email,
+                role: "authenticated",
                 amr: [
                   {
                     method: "password",
