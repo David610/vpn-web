@@ -3,6 +3,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const getClaims = vi.fn();
 const adminMaybeSingle = vi.fn();
 let nodesSelect;
+let samplesResult;
+let dailyResult;
 
 vi.mock("@supabase/supabase-js", () => ({
   createClient: vi.fn(() => ({
@@ -10,6 +12,19 @@ vi.mock("@supabase/supabase-js", () => ({
     from: vi.fn((table) => {
       if (table === "admin_users") return { select: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(), maybeSingle: adminMaybeSingle };
       if (table === "nodes") return { select: nodesSelect };
+      if (table === "node_traffic_samples") {
+        return {
+          select: vi.fn().mockReturnThis(),
+          order: vi.fn().mockReturnThis(),
+          limit: vi.fn(() => Promise.resolve(samplesResult)),
+        };
+      }
+      if (table === "node_traffic_daily") {
+        return {
+          select: vi.fn().mockReturnThis(),
+          eq: vi.fn(() => Promise.resolve(dailyResult)),
+        };
+      }
       throw new Error(`unexpected table ${table}`);
     }),
   })),
@@ -25,7 +40,21 @@ function makeRequest() {
 beforeEach(() => {
   getClaims.mockReset().mockResolvedValue({ data: { claims: { sub: "admin-1", aal: "aal2" } }, error: null });
   adminMaybeSingle.mockReset().mockResolvedValue({ data: { role: "owner" }, error: null });
+  samplesResult = { data: [], error: null };
+  dailyResult = { data: [], error: null };
 });
+
+/** A traffic sample `agoMs` in the past covering `interval` seconds. */
+function sample({ agoMs = 5_000, deltaUp = 0, deltaDown = 0, interval = 15, connections = 0 } = {}) {
+  return {
+    node_id: "node-1",
+    delta_up: deltaUp,
+    delta_down: deltaDown,
+    interval_seconds: interval,
+    connections_open: connections,
+    sampled_at: new Date(Date.now() - agoMs).toISOString(),
+  };
+}
 
 describe("GET /api/admin/nodes", () => {
   it("classifies a node seen 10s ago as online", async () => {
@@ -66,5 +95,64 @@ describe("GET /api/admin/nodes", () => {
     const res = await onRequestGet({ env, request: makeRequest() });
     const body = await res.json();
     expect(body.nodes[0].status).toBe("revoked");
+  });
+
+  it("derives throughput in bits per second from the latest sample", async () => {
+    const recent = new Date(Date.now() - 10_000).toISOString();
+    nodesSelect = vi.fn().mockResolvedValue({ data: [{ node_id: "node-1", last_seen_at: recent, revoked_at: null }], error: null });
+    // 1,500,000 bytes over 15s = 100,000 B/s = 800,000 bit/s.
+    samplesResult = { data: [sample({ deltaDown: 1_500_000, interval: 15, connections: 7 })], error: null };
+
+    const body = await (await onRequestGet({ env, request: makeRequest() })).json();
+    expect(body.nodes[0].traffic.bpsDown).toBe(800_000);
+    expect(body.nodes[0].traffic.connectionsOpen).toBe(7);
+  });
+
+  it("reports null throughput for a stale sample rather than zero", async () => {
+    // "Unknown" and "idle" are different states for an operator; a stale
+    // figure that looks live is worse than no figure.
+    const recent = new Date(Date.now() - 10_000).toISOString();
+    nodesSelect = vi.fn().mockResolvedValue({ data: [{ node_id: "node-1", last_seen_at: recent, revoked_at: null }], error: null });
+    samplesResult = { data: [sample({ agoMs: 300_000, deltaDown: 1_500_000 })], error: null };
+
+    const body = await (await onRequestGet({ env, request: makeRequest() })).json();
+    expect(body.nodes[0].traffic.bpsDown).toBeNull();
+    expect(body.nodes[0].traffic.connectionsOpen).toBeNull();
+  });
+
+  it("reports null throughput for a node that has never reported", async () => {
+    const recent = new Date(Date.now() - 10_000).toISOString();
+    nodesSelect = vi.fn().mockResolvedValue({ data: [{ node_id: "node-1", last_seen_at: recent, revoked_at: null }], error: null });
+    samplesResult = { data: [], error: null };
+
+    const body = await (await onRequestGet({ env, request: makeRequest() })).json();
+    expect(body.nodes[0].traffic.bpsDown).toBeNull();
+    expect(body.nodes[0].traffic.todayBytesDown).toBe(0);
+  });
+
+  it("uses only the most recent sample per node", async () => {
+    const recent = new Date(Date.now() - 10_000).toISOString();
+    nodesSelect = vi.fn().mockResolvedValue({ data: [{ node_id: "node-1", last_seen_at: recent, revoked_at: null }], error: null });
+    // Ordered newest-first by the query, so the first row wins.
+    samplesResult = {
+      data: [
+        sample({ agoMs: 5_000, deltaDown: 150_000, interval: 15 }),
+        sample({ agoMs: 20_000, deltaDown: 999_999, interval: 15 }),
+      ],
+      error: null,
+    };
+
+    const body = await (await onRequestGet({ env, request: makeRequest() })).json();
+    expect(body.nodes[0].traffic.bpsDown).toBe(80_000);
+  });
+
+  it("includes today's rollup totals", async () => {
+    const recent = new Date(Date.now() - 10_000).toISOString();
+    nodesSelect = vi.fn().mockResolvedValue({ data: [{ node_id: "node-1", last_seen_at: recent, revoked_at: null }], error: null });
+    dailyResult = { data: [{ node_id: "node-1", bytes_up: 111, bytes_down: 222 }], error: null };
+
+    const body = await (await onRequestGet({ env, request: makeRequest() })).json();
+    expect(body.nodes[0].traffic.todayBytesUp).toBe(111);
+    expect(body.nodes[0].traffic.todayBytesDown).toBe(222);
   });
 });
