@@ -6,9 +6,11 @@ import type { Session } from "@supabase/supabase-js";
 export function AccountActionsCard({
   session,
   setupUrl,
+  canManageBilling,
 }: {
   session: Session;
   setupUrl: string;
+  canManageBilling: boolean;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -119,14 +121,16 @@ export function AccountActionsCard({
         </details>
 
         <div style={{ display: "grid", gap: "var(--space-2)", marginTop: "var(--space-5)" }}>
-          <button
-            type="button"
-            className="btn btn-secondary"
-            disabled={busy === "billing"}
-            onClick={openBilling}
-          >
-            {busy === "billing" ? "Opening…" : "Manage billing"}
-          </button>
+          {canManageBilling && (
+            <button
+              type="button"
+              className="btn btn-secondary"
+              disabled={busy === "billing"}
+              onClick={openBilling}
+            >
+              {busy === "billing" ? "Opening…" : "Manage billing"}
+            </button>
+          )}
           <button
             type="button"
             className="btn btn-secondary"
