@@ -138,9 +138,9 @@ export default function AdminNodesPage() {
                     {percent(node.cpuPercent)} / {percent(node.memoryPercent)} / {percent(node.diskPercent)}
                   </td>
                   <td>
-                    {formatBits(node.networkRxBps == null ? null : node.networkRxBps * 8)}
+                    {formatBits(node.networkRxBps)}
                     {" / "}
-                    {formatBits(node.networkTxBps == null ? null : node.networkTxBps * 8)}
+                    {formatBits(node.networkTxBps)}
                   </td>
                   <td>
                     {node.configuredUsers ?? "—"}
