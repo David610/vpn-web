@@ -61,5 +61,45 @@ export async function onRequestPost({ env, request }) {
     return json({ error: "Internal error" }, 500);
   }
 
+  async function reconcileAlert(kind, active, severity, message) {
+    const dedupKey = `node:${nodeId}:${kind}`;
+    if (active) {
+      const { error: alertError } = await supabaseAdmin.from("operational_alerts").insert({
+        alert_type: kind,
+        severity,
+        dedup_key: dedupKey,
+        node_id: nodeId,
+        message,
+      });
+      if (alertError && alertError.code !== "23505") {
+        console.error("agent/heartbeat: alert insert failed:", alertError.message);
+      }
+    } else {
+      const { error: resolveError } = await supabaseAdmin
+        .from("operational_alerts")
+        .update({ status: "resolved", resolved_at: new Date().toISOString() })
+        .eq("dedup_key", dedupKey)
+        .eq("status", "open");
+      if (resolveError) {
+        console.error("agent/heartbeat: alert resolve failed:", resolveError.message);
+      }
+    }
+  }
+
+  await Promise.all([
+    reconcileAlert(
+      "disk_high",
+      update.disk_percent != null && update.disk_percent >= 90,
+      "critical",
+      `Node ${nodeId} disk usage is at or above 90%`
+    ),
+    reconcileAlert(
+      "memory_high",
+      update.memory_percent != null && update.memory_percent >= 95,
+      "warning",
+      `Node ${nodeId} memory usage is at or above 95%`
+    ),
+  ]);
+
   return json({ ok: true, node_id: nodeId });
 }
