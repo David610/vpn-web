@@ -47,8 +47,8 @@ export default function ResetPasswordPage() {
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setFieldError(null);
-    if (password.length < 6) {
-      setFieldError("Password must be at least 6 characters.");
+    if (password.length < 12) {
+      setFieldError("Password must be at least 12 characters.");
       return;
     }
     if (password !== confirm) {
@@ -135,6 +135,7 @@ export default function ResetPasswordPage() {
                     id="password"
                     type="password"
                     required
+                    minLength={12}
                     autoComplete="new-password"
                     className="field"
                     value={password}
@@ -149,6 +150,7 @@ export default function ResetPasswordPage() {
                     id="confirm"
                     type="password"
                     required
+                    minLength={12}
                     autoComplete="new-password"
                     className="field"
                     aria-invalid={fieldError ? "true" : undefined}
