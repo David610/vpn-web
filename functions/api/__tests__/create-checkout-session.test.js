@@ -1,16 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const getUser = vi.fn();
-const maybeSingle = vi.fn();
 const memberMaybeSingle = vi.fn();
+const subscriptionMaybeSingle = vi.fn();
+const accountMaybeSingle = vi.fn();
+const reserveTrial = vi.fn();
 const sessionsCreate = vi.fn();
 
 vi.mock("@supabase/supabase-js", () => ({
   createClient: vi.fn(() => ({
     auth: { getUser },
+    rpc: reserveTrial,
     from: vi.fn((table) => {
-      // getAccountForUser resolves the caller's account before the
-      // subscription dedup check, so the two tables need separate results.
       if (table === "account_members") {
         return {
           select: vi.fn().mockReturnThis(),
@@ -18,23 +19,36 @@ vi.mock("@supabase/supabase-js", () => ({
           maybeSingle: memberMaybeSingle,
         };
       }
-      return {
-        select: vi.fn().mockReturnThis(),
-        eq: vi.fn().mockReturnThis(),
-        in: vi.fn().mockReturnThis(),
-        or: vi.fn().mockReturnThis(),
-        limit: vi.fn().mockReturnThis(),
-        maybeSingle,
-      };
+      if (table === "subscriptions") {
+        return {
+          select: vi.fn().mockReturnThis(),
+          eq: vi.fn().mockReturnThis(),
+          or: vi.fn().mockReturnThis(),
+          limit: vi.fn().mockReturnThis(),
+          maybeSingle: subscriptionMaybeSingle,
+        };
+      }
+      if (table === "customer_accounts") {
+        const chain = {
+          select: vi.fn(() => chain),
+          update: vi.fn(() => chain),
+          eq: vi.fn(() => chain),
+          is: vi.fn(() => chain),
+          maybeSingle: accountMaybeSingle,
+          then(onFulfilled, onRejected) {
+            return Promise.resolve({ data: null, error: null }).then(onFulfilled, onRejected);
+          },
+        };
+        return chain;
+      }
+      throw new Error(`unexpected table ${table}`);
     }),
   })),
 }));
 
 vi.mock("stripe", () => {
   function StripeMock() {
-    return {
-      checkout: { sessions: { create: sessionsCreate } },
-    };
+    return { checkout: { sessions: { create: sessionsCreate } } };
   }
   StripeMock.createFetchHttpClient = vi.fn();
   return { default: StripeMock };
@@ -42,10 +56,14 @@ vi.mock("stripe", () => {
 
 const { onRequestPost } = await import("../create-checkout-session.js");
 
-function makeRequest() {
+function makeRequest(body) {
   return new Request("https://example.test/api/create-checkout-session", {
     method: "POST",
-    headers: { Authorization: "Bearer token-abc" },
+    headers: {
+      Authorization: "Bearer token-abc",
+      ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+    },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
 }
 
@@ -58,46 +76,81 @@ const env = {
 };
 
 beforeEach(() => {
-  getUser.mockReset();
-  maybeSingle.mockReset();
+  getUser.mockReset().mockResolvedValue({
+    data: { user: { id: "user-1", email: "a@test.dev" } },
+    error: null,
+  });
   memberMaybeSingle.mockReset().mockResolvedValue({
     data: { account_id: "acct-1", role: "owner" },
     error: null,
   });
-  sessionsCreate.mockReset();
+  subscriptionMaybeSingle.mockReset().mockResolvedValue({ data: null, error: null });
+  accountMaybeSingle.mockReset().mockResolvedValue({
+    data: { stripe_customer_id: null },
+    error: null,
+  });
+  reserveTrial.mockReset().mockResolvedValue({
+    data: "2026-09-23T15:00:00.000Z",
+    error: null,
+  });
+  sessionsCreate.mockReset().mockResolvedValue({
+    url: "https://checkout.stripe.test/session",
+  });
 });
 
 describe("create-checkout-session", () => {
-  it("returns 409 without calling Stripe when the user already has an active subscription", async () => {
-    getUser.mockResolvedValue({ data: { user: { id: "user-1", email: "a@test.dev" } }, error: null });
-    maybeSingle.mockResolvedValue({ data: { status: "active" }, error: null });
-
+  it("returns 409 without Stripe when a live/recent subscription exists", async () => {
+    subscriptionMaybeSingle.mockResolvedValue({ data: { status: "active" }, error: null });
     const res = await onRequestPost({ env, request: makeRequest() });
-
     expect(res.status).toBe(409);
     expect(sessionsCreate).not.toHaveBeenCalled();
+    expect(reserveTrial).not.toHaveBeenCalled();
   });
 
-  it("returns 409 without calling Stripe when the user has a recent incomplete subscription", async () => {
-    getUser.mockResolvedValue({ data: { user: { id: "user-1", email: "a@test.dev" } }, error: null });
-    maybeSingle.mockResolvedValue({ data: { status: "incomplete" }, error: null });
-
-    const res = await onRequestPost({ env, request: makeRequest() });
-
-    expect(res.status).toBe(409);
-    expect(sessionsCreate).not.toHaveBeenCalled();
-  });
-
-  it("creates a Checkout session when the user has no active subscription", async () => {
-    getUser.mockResolvedValue({ data: { user: { id: "user-1", email: "a@test.dev" } }, error: null });
-    maybeSingle.mockResolvedValue({ data: null, error: null });
-    sessionsCreate.mockResolvedValue({ url: "https://checkout.stripe.test/session" });
-
-    const res = await onRequestPost({ env, request: makeRequest() });
+  it("starts a one-time 3-day trial", async () => {
+    const res = await onRequestPost({ env, request: makeRequest({ trial: true }) });
     const body = await res.json();
 
     expect(res.status).toBe(200);
-    expect(body.url).toBe("https://checkout.stripe.test/session");
-    expect(sessionsCreate).toHaveBeenCalledTimes(1);
+    expect(body).toEqual({
+      url: "https://checkout.stripe.test/session",
+      trial: true,
+    });
+    expect(reserveTrial).toHaveBeenCalledWith("reserve_free_trial", {
+      p_account_id: "acct-1",
+    });
+    expect(sessionsCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        subscription_data: { trial_period_days: 3 },
+      })
+    );
+  });
+
+  it("fails cleanly when the account has already used/reserved its trial", async () => {
+    reserveTrial.mockResolvedValue({ data: null, error: null });
+    const res = await onRequestPost({ env, request: makeRequest({ trial: true }) });
+    expect(res.status).toBe(409);
+    expect((await res.json()).code).toBe("trial_unavailable");
+    expect(sessionsCreate).not.toHaveBeenCalled();
+  });
+
+  it("supports Subscribe now without reserving or attaching a trial", async () => {
+    const res = await onRequestPost({ env, request: makeRequest({ trial: false }) });
+    expect(res.status).toBe(200);
+    expect(reserveTrial).not.toHaveBeenCalled();
+    const params = sessionsCreate.mock.calls[0][0];
+    expect(params.subscription_data).toBeUndefined();
+  });
+
+  it("reuses an existing Stripe customer when known", async () => {
+    accountMaybeSingle.mockResolvedValue({
+      data: { stripe_customer_id: "cus_existing" },
+      error: null,
+    });
+    await onRequestPost({ env, request: makeRequest({ trial: false }) });
+    expect(sessionsCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ customer: "cus_existing" })
+    );
+    expect(sessionsCreate.mock.calls[0][0].customer_email).toBeUndefined();
   });
 });
