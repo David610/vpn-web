@@ -94,7 +94,8 @@ export async function onRequestGet({ env, request, params }) {
         .from("provisioning_jobs")
         .select("id, job_type, status, created_at, claimed_at, completed_at, result")
         .eq("vpn_account_id", vpnAccount.id)
-        .order("created_at", { ascending: false });
+        .order("created_at", { ascending: false })
+        .limit(100);
       if (jobsError) throw new Error(`provisioning_jobs query failed: ${jobsError.message}`);
       jobs = jobRows.map((j) => ({
         id: j.id,
