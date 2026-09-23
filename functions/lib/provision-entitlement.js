@@ -12,6 +12,10 @@ async function insertJob(supabaseAdmin, row) {
  * Reconciles every current account member with an already-resolved effective
  * entitlement. This is deliberately job-based: the web control plane never
  * mutates sing-box state directly.
+ *
+ * The entitlement carries serviceExpiresAt/clearExpiry rather than merely a
+ * Stripe period end, because a support grant may extend paid access or make
+ * it intentionally non-expiring.
  */
 export async function syncAccountProvisioningToEntitlement(
   supabaseAdmin,
@@ -41,8 +45,11 @@ export async function syncAccountProvisioningToEntitlement(
 
     if (!vpn) {
       const payload = { user_id: member.userId };
-      if (entitlement.currentPeriodEnd) {
-        payload.expires_at = entitlement.currentPeriodEnd;
+      if (!entitlement.clearExpiry) {
+        if (!entitlement.serviceExpiresAt) {
+          throw new Error("finite entitlement is missing serviceExpiresAt");
+        }
+        payload.expires_at = entitlement.serviceExpiresAt;
       }
       await insertJob(supabaseAdmin, {
         idempotency_key: `${idempotencyPrefix}:create:${member.userId}`,
@@ -54,18 +61,7 @@ export async function syncAccountProvisioningToEntitlement(
       continue;
     }
 
-    if (entitlement.currentPeriodEnd) {
-      await insertJob(supabaseAdmin, {
-        idempotency_key: `${idempotencyPrefix}:expiry:${vpn.id}`,
-        node_id: nodeId,
-        job_type: "SET_EXPIRY",
-        vpn_account_id: vpn.id,
-        payload: {
-          vpn_user_id: vpn.vpnUserId,
-          expires_at: entitlement.currentPeriodEnd,
-        },
-      });
-    } else {
+    if (entitlement.clearExpiry) {
       await insertJob(supabaseAdmin, {
         idempotency_key: `${idempotencyPrefix}:clear-expiry:${vpn.id}`,
         node_id: nodeId,
@@ -73,8 +69,24 @@ export async function syncAccountProvisioningToEntitlement(
         vpn_account_id: vpn.id,
         payload: { vpn_user_id: vpn.vpnUserId },
       });
+    } else {
+      if (!entitlement.serviceExpiresAt) {
+        throw new Error("finite entitlement is missing serviceExpiresAt");
+      }
+      await insertJob(supabaseAdmin, {
+        idempotency_key: `${idempotencyPrefix}:expiry:${vpn.id}:${entitlement.serviceExpiresAt}`,
+        node_id: nodeId,
+        job_type: "SET_EXPIRY",
+        vpn_account_id: vpn.id,
+        payload: {
+          vpn_user_id: vpn.vpnUserId,
+          expires_at: entitlement.serviceExpiresAt,
+        },
+      });
     }
 
+    // Enabling an already-enabled VPN user is harmless and keeps the helper
+    // independent of potentially stale desired-state UI data.
     await insertJob(supabaseAdmin, {
       idempotency_key: `${idempotencyPrefix}:enable:${vpn.id}`,
       node_id: nodeId,
