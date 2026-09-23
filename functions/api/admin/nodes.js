@@ -2,14 +2,19 @@ import { createClient } from "@supabase/supabase-js";
 import { requireAdmin } from "../../lib/admin-auth.js";
 
 function jsonResponse(body, status = 200) {
-  return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
 }
 
 function classify(lastSeenAt) {
   if (!lastSeenAt) return "offline";
   const ageMs = Date.now() - new Date(lastSeenAt).getTime();
-  if (ageMs < 45_000) return "online";
-  if (ageMs < 120_000) return "degraded";
+  // Heartbeats are every 60s. Give one missed heartbeat before degrading
+  // and two before declaring the node offline.
+  if (ageMs < 90_000) return "online";
+  if (ageMs < 180_000) return "degraded";
   return "offline";
 }
 
@@ -28,11 +33,11 @@ export async function onRequestGet({ env, request }) {
       { data: samples, error: samplesError },
       { data: daily, error: dailyError },
     ] = await Promise.all([
-      supabaseAdmin.from("nodes").select("node_id, last_seen_at, revoked_at"),
-      // Two most recent samples per node would need a lateral join, which
-      // PostgREST cannot express. The sample rate is one per node per poll
-      // interval, so a bounded recent window is cheap and is trimmed to the
-      // latest per node below.
+      supabaseAdmin
+        .from("nodes")
+        .select(
+          "node_id, last_seen_at, revoked_at, telemetry_at, agent_version, vpn_version, singbox_version, uptime_seconds, cpu_percent, memory_percent, disk_percent, network_rx_bps, network_tx_bps, configured_users, active_users_recent"
+        ),
       supabaseAdmin
         .from("node_traffic_samples")
         .select("node_id, delta_up, delta_down, interval_seconds, connections_open, sampled_at")
@@ -48,31 +53,53 @@ export async function onRequestGet({ env, request }) {
     if (dailyError) throw new Error(`node_traffic_daily query failed: ${dailyError.message}`);
 
     const latestByNode = new Map();
-    for (const s of samples ?? []) {
-      if (!latestByNode.has(s.node_id)) latestByNode.set(s.node_id, s);
+    for (const sample of samples ?? []) {
+      if (!latestByNode.has(sample.node_id)) latestByNode.set(sample.node_id, sample);
     }
-    const dailyByNode = new Map((daily ?? []).map((d) => [d.node_id, d]));
+    const dailyByNode = new Map((daily ?? []).map((row) => [row.node_id, row]));
 
-    const nodes = data.map((n) => {
-      const latest = latestByNode.get(n.node_id);
-      const today = dailyByNode.get(n.node_id);
-      // Throughput is the last sample's delta over the interval it covers.
-      // A stale sample would report a figure that looks live but is not, so
-      // anything older than two minutes reads as null rather than as zero —
-      // "unknown" and "idle" are different states for an operator.
-      const isFresh =
+    const nodes = (data ?? []).map((node) => {
+      const latest = latestByNode.get(node.node_id);
+      const today = dailyByNode.get(node.node_id);
+      const trafficFresh =
         latest && Date.now() - new Date(latest.sampled_at).getTime() < 120_000;
       const interval = latest?.interval_seconds;
+
       return {
-        nodeId: n.node_id,
-        status: n.revoked_at ? "revoked" : classify(n.last_seen_at),
-        lastSeenAt: n.last_seen_at,
-        revokedAt: n.revoked_at,
+        nodeId: node.node_id,
+        status: node.revoked_at ? "revoked" : classify(node.last_seen_at),
+        lastSeenAt: node.last_seen_at ?? null,
+        revokedAt: node.revoked_at ?? null,
+
+        // Host-level health from the authenticated 60-second heartbeat.
+        telemetryAt: node.telemetry_at ?? null,
+        agentVersion: node.agent_version ?? null,
+        vpnVersion: node.vpn_version ?? null,
+        singboxVersion: node.singbox_version ?? null,
+        uptimeSeconds: node.uptime_seconds == null ? null : Number(node.uptime_seconds),
+        cpuPercent: node.cpu_percent == null ? null : Number(node.cpu_percent),
+        memoryPercent: node.memory_percent == null ? null : Number(node.memory_percent),
+        diskPercent: node.disk_percent == null ? null : Number(node.disk_percent),
+        networkRxBps: node.network_rx_bps == null ? null : Number(node.network_rx_bps),
+        networkTxBps: node.network_tx_bps == null ? null : Number(node.network_tx_bps),
+        configuredUsers: node.configured_users == null ? null : Number(node.configured_users),
+        activeUsersRecent:
+          node.active_users_recent == null ? null : Number(node.active_users_recent),
+
+        // VPN data-plane totals from sing-box's Clash API. These are per-node
+        // because the official sing-box build exposes no reliable per-user
+        // attribution.
         traffic: {
           sampledAt: latest?.sampled_at ?? null,
-          connectionsOpen: isFresh ? latest.connections_open : null,
-          bpsUp: isFresh && interval ? Math.round((latest.delta_up * 8) / interval) : null,
-          bpsDown: isFresh && interval ? Math.round((latest.delta_down * 8) / interval) : null,
+          connectionsOpen: trafficFresh ? latest.connections_open : null,
+          bpsUp:
+            trafficFresh && interval
+              ? Math.round((latest.delta_up * 8) / interval)
+              : null,
+          bpsDown:
+            trafficFresh && interval
+              ? Math.round((latest.delta_down * 8) / interval)
+              : null,
           todayBytesUp: today?.bytes_up ?? 0,
           todayBytesDown: today?.bytes_down ?? 0,
         },
