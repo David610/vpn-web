@@ -58,7 +58,20 @@ jobs:
           version: latest
 
       - name: Start local Postgres and apply migrations
-        run: supabase db start
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4 5; do
+            if supabase db start; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 5 ]; then
+              echo "Supabase local database failed to start after 5 attempts." >&2
+              exit 1
+            fi
+            supabase stop --no-backup >/dev/null 2>&1 || true
+            sleep $((attempt * 15))
+          done
 
       - name: Replay migrations from a clean database
         run: supabase db reset
