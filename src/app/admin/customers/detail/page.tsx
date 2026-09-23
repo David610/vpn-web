@@ -135,10 +135,16 @@ function AdminCustomerDetailContent() {
                 onConfirm={() => callAction("enable", "Enable")}
               />
               <ConfirmButton
-                label="Rotate config"
-                confirmLabel="Click again to confirm rotate"
+                label="Rotate subscription link"
+                confirmLabel="Click again to rotate the subscription link"
                 className="rounded bg-blue-600 px-3 py-1.5 text-sm text-white"
-                onConfirm={() => callAction("rotate", "Rotate")}
+                onConfirm={() => callAction("rotate", "Subscription-link rotation")}
+              />
+              <ConfirmButton
+                label="Rotate VPN credentials"
+                confirmLabel="Confirm: existing imported VPN credentials will stop working"
+                className="rounded bg-amber-600 px-3 py-1.5 text-sm text-white"
+                onConfirm={() => callAction("rotate-credentials", "VPN credential rotation")}
               />
             </div>
           </>
