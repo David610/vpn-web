@@ -28,6 +28,8 @@ function queryFor(table) {
       state.filters.push(["gte", column, value]);
       return query;
     }),
+    order: vi.fn(() => query),
+    limit: vi.fn(() => query),
     then(onFulfilled, onRejected) {
       const resolver = tableResults[table];
       const result =
@@ -121,18 +123,30 @@ beforeEach(() => {
       count: null,
       error: null,
     },
-    vpn_usage_current: {
+    node_traffic_samples: {
       data: [
-        { download_bps: 8_000_000, upload_bps: 2_000_000 },
-        { download_bps: 4_000_000, upload_bps: 1_000_000 },
+        {
+          node_id: "node-1",
+          delta_down: 15_000_000,
+          delta_up: 3_750_000,
+          interval_seconds: 15,
+          sampled_at: new Date(now - 5_000).toISOString(),
+        },
+        {
+          node_id: "node-2",
+          delta_down: 7_500_000,
+          delta_up: 1_875_000,
+          interval_seconds: 15,
+          sampled_at: new Date(now - 5_000).toISOString(),
+        },
       ],
       count: null,
       error: null,
     },
-    vpn_usage_hourly: {
+    node_traffic_daily: {
       data: [
-        { download_bytes: 1000, upload_bytes: 200 },
-        { download_bytes: 3000, upload_bytes: 800 },
+        { bytes_down: 1000, bytes_up: 200 },
+        { bytes_down: 3000, bytes_up: 800 },
       ],
       count: null,
       error: null,
