@@ -18,7 +18,7 @@ type Invite = {
   createdAt: string;
 };
 
-export type AccountInfo = {
+export export type AccountInfo = {
   accountId: string;
   role: string;
   subscription: { status: string; source?: "stripe" | "admin_grant" } | null;
