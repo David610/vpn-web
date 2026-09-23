@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const getClaims = vi.fn();
 const adminMaybeSingle = vi.fn();
 const getUserById = vi.fn();
-let subMaybeSingle, vpnMaybeSingle, jobsOrder, memberMaybeSingle, accountMaybeSingle, memberCount;
+let subMaybeSingle, vpnMaybeSingle, jobsOrder, jobsLimit, memberMaybeSingle, accountMaybeSingle, memberCount;
 
 vi.mock("@supabase/supabase-js", () => ({
   createClient: vi.fn(() => ({
@@ -35,7 +35,16 @@ vi.mock("@supabase/supabase-js", () => ({
         return { select: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(), maybeSingle: vpnMaybeSingle };
       }
       if (table === "provisioning_jobs") {
-        return { select: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(), order: jobsOrder };
+        const chain = {
+          select: vi.fn(() => chain),
+          eq: vi.fn(() => chain),
+          order: vi.fn((...args) => {
+            jobsOrder(...args);
+            return chain;
+          }),
+          limit: (...args) => jobsLimit(...args),
+        };
+        return chain;
       }
       if (table === "admin_entitlements") {
         return {
@@ -70,7 +79,8 @@ beforeEach(() => {
     error: null,
   });
   vpnMaybeSingle = vi.fn().mockResolvedValue({ data: { id: 1, vpn_user_id: "vpn-abc", node_id: "node-1", enabled: true }, error: null });
-  jobsOrder = vi.fn().mockResolvedValue({
+  jobsOrder = vi.fn();
+  jobsLimit = vi.fn().mockResolvedValue({
     data: [{ id: 9, job_type: "CREATE_USER", status: "done", created_at: "t1", claimed_at: "t2", completed_at: "t3", result: { subscription_url: "https://secret" } }],
     error: null,
   });
@@ -88,6 +98,12 @@ describe("GET /api/admin/customers/:id", () => {
     const body = await res.json();
     expect(res.status).toBe(200);
     expect(body.jobs[0].result.subscription_url).toBe("[redacted]");
+  });
+
+  it("limits embedded provisioning history to 100 rows", async () => {
+    const res = await onRequestGet({ env, request: makeRequest(), params: { id: "user-1" } });
+    expect(res.status).toBe(200);
+    expect(jobsLimit).toHaveBeenCalledWith(100);
   });
 
   it("returns null vpnAccount when the user has none", async () => {

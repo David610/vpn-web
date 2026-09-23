@@ -84,9 +84,16 @@ export default function AdminNodesPage() {
 
   useEffect(() => {
     if (!session) return;
+    const refresh = () => {
+      if (document.visibilityState === "visible") load();
+    };
     load();
-    const timer = window.setInterval(load, REFRESH_MS);
-    return () => window.clearInterval(timer);
+    const timer = window.setInterval(refresh, REFRESH_MS);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", refresh);
+    };
   }, [session, load]);
 
   return (
