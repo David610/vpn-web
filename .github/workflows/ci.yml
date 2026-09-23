@@ -86,6 +86,9 @@ jobs:
         if: steps.supabase-start.outputs.started == 'true'
         run: supabase db reset
 
-      - name: Validate newest migration without Docker when registry is throttled
+      - name: Validate admin migration without Docker when registry is throttled
         if: steps.supabase-start.outputs.started == 'false'
         run: bash scripts/test-admin-ops-migration.sh
+
+      - name: Validate invite identity guard semantics in PostgreSQL
+        run: bash scripts/test-invite-identity-guard.sh
