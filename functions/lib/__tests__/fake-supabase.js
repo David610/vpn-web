@@ -18,6 +18,7 @@ import { vi } from "vitest";
 export function makeFakeSupabase(seed = {}, options = {}) {
   const tables = {
     customer_accounts: [],
+    profiles: [],
     account_members: [],
     subscriptions: [],
     vpn_accounts: [],
