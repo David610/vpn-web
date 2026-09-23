@@ -84,10 +84,29 @@ export async function onRequestPost({ env, request, params }) {
       if (acctError) throw new Error(`vpn_accounts upsert failed: ${acctError.message}`);
       vpnAccountId = account.id;
 
-      const { ciphertext, nonce } = await encryptSecret(subscription_url, env.VPN_SECRETS_ENCRYPTION_KEY);
+      const { ciphertext, nonce } = await encryptSecret(
+        subscription_url,
+        env.VPN_SECRETS_ENCRYPTION_KEY
+      );
+      let provisioningSecret = {};
+      if (result.provisioning_url) {
+        const encrypted = await encryptSecret(
+          result.provisioning_url,
+          env.VPN_SECRETS_ENCRYPTION_KEY
+        );
+        provisioningSecret = {
+          provisioning_ciphertext: encrypted.ciphertext,
+          provisioning_nonce: encrypted.nonce,
+        };
+      }
       const { error: secretError } = await supabaseAdmin
         .from("vpn_secrets")
-        .insert({ vpn_account_id: vpnAccountId, ciphertext, nonce });
+        .insert({
+          vpn_account_id: vpnAccountId,
+          ciphertext,
+          nonce,
+          ...provisioningSecret,
+        });
       if (secretError) throw new Error(`vpn_secrets insert failed: ${secretError.message}`);
     } else if (job.job_type === "ROTATE_SUBSCRIPTION_TOKEN") {
       const { subscription_url } = result;
@@ -100,10 +119,29 @@ export async function onRequestPost({ env, request, params }) {
       // Append-only: old ciphertext rows are left in place on purpose
       // (an append-only secret history costs nothing and means a bug
       // here can't silently destroy the only working config).
-      const { ciphertext, nonce } = await encryptSecret(subscription_url, env.VPN_SECRETS_ENCRYPTION_KEY);
+      const { ciphertext, nonce } = await encryptSecret(
+        subscription_url,
+        env.VPN_SECRETS_ENCRYPTION_KEY
+      );
+      let provisioningSecret = {};
+      if (result.provisioning_url) {
+        const encrypted = await encryptSecret(
+          result.provisioning_url,
+          env.VPN_SECRETS_ENCRYPTION_KEY
+        );
+        provisioningSecret = {
+          provisioning_ciphertext: encrypted.ciphertext,
+          provisioning_nonce: encrypted.nonce,
+        };
+      }
       const { error: secretError } = await supabaseAdmin
         .from("vpn_secrets")
-        .insert({ vpn_account_id: vpnAccountId, ciphertext, nonce });
+        .insert({
+          vpn_account_id: vpnAccountId,
+          ciphertext,
+          nonce,
+          ...provisioningSecret,
+        });
       if (secretError) throw new Error(`vpn_secrets insert failed: ${secretError.message}`);
     } else if (job.job_type === "DISABLE_USER" || job.job_type === "ENABLE_USER") {
       if (!vpnAccountId) {
