@@ -110,6 +110,10 @@ export default function DashboardPage() {
         body: JSON.stringify({ trial }),
       });
       const data = await res.json().catch(() => ({}));
+      if (res.status === 403 && data.code === "reauth_required") {
+        window.location.href = "/login/?next=/dashboard/&reauth=1";
+        return;
+      }
       if (!res.ok || !data.url) {
         throw new Error(data.error || "Could not start checkout");
       }
@@ -142,6 +146,10 @@ export default function DashboardPage() {
         headers: { Authorization: `Bearer ${session.access_token}` },
       });
       const data = await res.json().catch(() => ({}));
+      if (res.status === 403 && data.code === "reauth_required") {
+        window.location.href = "/login/?next=/dashboard/&reauth=1";
+        return;
+      }
       if (!res.ok) {
         throw new Error(data.error || "Could not cancel subscription");
       }
@@ -165,6 +173,10 @@ export default function DashboardPage() {
         headers: { Authorization: `Bearer ${session.access_token}` },
       });
       const data = await res.json().catch(() => ({}));
+      if (res.status === 403 && data.code === "reauth_required") {
+        window.location.href = "/login/?next=/dashboard/&reauth=1";
+        return;
+      }
       if (!res.ok) {
         throw new Error(data.error || "Could not resume subscription");
       }
