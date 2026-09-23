@@ -1,6 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import { requireUser, jsonResponse } from "../../lib/user-auth.js";
-import { getLiveSubscription } from "../../lib/accounts.js";
+import { getEffectiveEntitlement } from "../../lib/accounts.js";
 import { hashInviteToken } from "../../lib/invite-token.js";
 import { resolveNodeForUser } from "../../lib/resolve-node.js";
 
@@ -70,13 +70,11 @@ export async function onRequestPost({ env, request }) {
 
     // The seat is theirs regardless of what happens next; provisioning is a
     // separate concern and its own failure must not undo the membership.
-    const subscription = await getLiveSubscription(
-      supabaseAdmin,
-      accountId,
-      "current_period_end"
-    );
-    if (subscription?.current_period_end) {
+    const entitlement = await getEffectiveEntitlement(supabaseAdmin, accountId);
+    if (entitlement) {
       const nodeId = resolveNodeForUser();
+      const payload = { user_id: user.id };
+      if (entitlement.currentPeriodEnd) payload.expires_at = entitlement.currentPeriodEnd;
       const { error: jobError } = await supabaseAdmin.from("provisioning_jobs").insert({
         // Keyed on the member, so a retried acceptance cannot enqueue a
         // second CREATE_USER for the same person.
@@ -84,7 +82,7 @@ export async function onRequestPost({ env, request }) {
         node_id: nodeId,
         job_type: "CREATE_USER",
         vpn_account_id: null,
-        payload: { user_id: user.id, expires_at: subscription.current_period_end },
+        payload,
       });
       if (jobError && jobError.code !== "23505") {
         // Logged, not fatal: the membership is committed, and an admin can
@@ -94,7 +92,7 @@ export async function onRequestPost({ env, request }) {
       }
     }
 
-    return jsonResponse({ accountId, provisioning: Boolean(subscription) });
+    return jsonResponse({ accountId, provisioning: Boolean(entitlement) });
   } catch (err) {
     console.error("accept-invite: unexpected error:", err.message);
     return jsonResponse({ error: "Internal error" }, 500);
