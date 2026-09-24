@@ -35,6 +35,9 @@ export function makeFakeSupabase(seed = {}, options = {}) {
     device_profile_assignments: [],
     telegram_links: [],
     telegram_link_codes: [],
+    allowed_paths: [],
+    device_node_assignments: [],
+    locations: [],
     ...structuredClone(seed),
   };
 
@@ -54,6 +57,23 @@ export function makeFakeSupabase(seed = {}, options = {}) {
         const uniqueCol = UNIQUE[table];
         if (uniqueCol && tables[table].some((r) => r[uniqueCol] === state.payload[uniqueCol])) {
           return { data: null, error: { code: "23505", message: "duplicate key" } };
+        }
+        // Mirrors provisioning_jobs_one_inflight_create_per_device_node: at
+        // most one pending/claimed CREATE_USER per (device, node).
+        const p = state.payload;
+        if (
+          table === "provisioning_jobs" &&
+          p.job_type === "CREATE_USER" &&
+          p.device_id &&
+          tables.provisioning_jobs.some(
+            (r) =>
+              r.job_type === "CREATE_USER" &&
+              r.device_id === p.device_id &&
+              r.node_id === p.node_id &&
+              ["pending", "claimed"].includes(r.status ?? "pending")
+          )
+        ) {
+          return { data: null, error: { code: "23505", message: "duplicate in-flight create" } };
         }
         const row = { id: tables[table].length + 1, ...state.payload };
         tables[table].push(row);
@@ -77,19 +97,18 @@ export function makeFakeSupabase(seed = {}, options = {}) {
       }
 
       if (state.op === "upsert") {
-        const conflictCol = state.upsertConflictCol;
-        const existing = tables[table].find(
-          (r) => r[conflictCol] === state.payload[conflictCol]
-        );
-        if (existing) {
-          Object.assign(existing, state.payload);
-          return single
-            ? { data: existing, error: null }
-            : { data: [existing], error: null };
-        }
-        const row = { ...state.payload };
-        tables[table].push(row);
-        return single ? { data: row, error: null } : { data: [row], error: null };
+        // Composite conflict targets ("device_id,hop") and array payloads,
+        // both of which PostgREST supports.
+        const conflictCols = state.upsertConflictCol.split(",").map((c) => c.trim());
+        const payloads = Array.isArray(state.payload) ? state.payload : [state.payload];
+        const written = payloads.map((payload) => {
+          const existing = tables[table].find((r) => conflictCols.every((c) => r[c] === payload[c]));
+          if (existing) return Object.assign(existing, payload);
+          const row = { ...payload };
+          tables[table].push(row);
+          return row;
+        });
+        return single ? { data: written[0], error: null } : { data: written, error: null };
       }
 
       let rows = tables[table].filter(match);
@@ -142,6 +161,10 @@ export function makeFakeSupabase(seed = {}, options = {}) {
         // PostgREST .is(col, null) — the null checks the invite queries use
         // to mean "still outstanding".
         state.filters.push((r) => (r[col] ?? null) === val);
+        return chain;
+      },
+      neq(col, val) {
+        state.filters.push((r) => r[col] !== val);
         return chain;
       },
       gt(col, val) {
@@ -368,12 +391,23 @@ export function seedAccount({
     subscriptions: [
       { id: 1, account_id: accountId, stripe_subscription_id: subscriptionId, status },
     ],
+    // Post device_identities migration: every identity belongs to a device.
+    devices: provisioned
+      .filter((p, i, all) => all.findIndex((q) => (q.deviceId ?? `dev-${q.userId}`) === (p.deviceId ?? `dev-${p.userId}`)) === i)
+      .map((p) => ({
+        id: p.deviceId ?? `dev-${p.userId}`,
+        account_id: accountId,
+        user_id: p.userId,
+        name: "Legacy device",
+        status: p.deviceStatus ?? "ACTIVE",
+      })),
     vpn_accounts: provisioned.map((p, i) => ({
       id: i + 1,
       user_id: p.userId,
+      device_id: p.deviceId ?? `dev-${p.userId}`,
       vpn_user_id: p.vpnUserId,
       node_id: p.nodeId ?? "node-1",
-      enabled: true,
+      enabled: p.enabled ?? true,
     })),
     provisioning_jobs: [],
   };

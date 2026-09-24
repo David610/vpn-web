@@ -88,7 +88,8 @@ export async function onRequestPost({ env, request, params }) {
       supabaseAdmin,
       account.accountId,
       entitlement,
-      `admin-grant:${grant.id}`
+      `admin-grant:${grant.id}`,
+      env
     );
 
     await writeAdminAudit(supabaseAdmin, {

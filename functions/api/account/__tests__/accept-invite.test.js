@@ -28,7 +28,13 @@ function seed(rpc, { status = "active", periodEnd = "2030-01-01T00:00:00Z" } = {
   );
 }
 
-const ok = async () => ({ data: "acct-1", error: null });
+// Faithful to the real RPC: accepting commits the membership row.
+const ok = async (args, tables) => {
+  if (!tables.account_members.some((m) => m.user_id === args.p_user_id)) {
+    tables.account_members.push({ account_id: "acct-1", user_id: args.p_user_id, role: "member" });
+  }
+  return { data: "acct-1", error: null };
+};
 const refuses = (name) => async () => ({
   data: null,
   error: { message: `${name} CONTEXT: PL/pgSQL function accept_member_invite` },
@@ -55,11 +61,16 @@ describe("POST /api/account/accept-invite", () => {
     const res = await onRequestPost({ env, request: makeRequest() });
     expect(res.status).toBe(200);
 
+    // The new member gets their own device, and the job creates that
+    // device's identity -- never a credential shared with anyone else.
+    const devices = db._tables.devices.filter((d) => d.user_id === "invitee-1");
+    expect(devices).toHaveLength(1);
     const jobs = db._tables.provisioning_jobs;
     expect(jobs).toHaveLength(1);
     expect(jobs[0]).toMatchObject({
       job_type: "CREATE_USER",
-      payload: { user_id: "invitee-1", expires_at: "2030-01-01T00:00:00Z" },
+      device_id: devices[0].id,
+      payload: { user_id: "invitee-1", device_id: devices[0].id, expires_at: "2030-01-01T00:00:00Z" },
     });
   });
 
@@ -68,6 +79,7 @@ describe("POST /api/account/accept-invite", () => {
     await onRequestPost({ env, request: makeRequest() });
     await onRequestPost({ env, request: makeRequest() });
     expect(db._tables.provisioning_jobs).toHaveLength(1);
+    expect(db._tables.devices.filter((d) => d.user_id === "invitee-1")).toHaveLength(1);
   });
 
   it("still succeeds when provisioning cannot be enqueued", async () => {

@@ -3,6 +3,21 @@ import { decryptSecret } from "../../lib/crypto.js";
 import { requireUser } from "../../lib/user-auth.js";
 import { loadCustomerDashboardState } from "../../lib/dashboard-state.js";
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+async function newestEnabledIdentity(supabaseAdmin, column, value) {
+  const { data, error } = await supabaseAdmin
+    .from("vpn_accounts")
+    .select("id, enabled, vpn_user_id, node_id")
+    .eq(column, value)
+    .eq("enabled", true)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw new Error(`vpn_accounts lookup failed: ${error.message}`);
+  return data ? { id: data.id, enabled: data.enabled, vpnUserId: data.vpn_user_id, nodeId: data.node_id } : null;
+}
+
 export async function onRequestGet({ env, request }) {
   const noStoreJson = (body, status) =>
     new Response(JSON.stringify(body), {
@@ -37,7 +52,38 @@ export async function onRequestGet({ env, request }) {
       );
     }
 
-    const vpnAccount = state.vpnAccount;
+    // Per-device config: each device has its own identity (and credential)
+    // on the node it is placed on. Without ?deviceId= this stays backward
+    // compatible and returns the caller's newest ENABLED identity -- never a
+    // disabled one left behind on a node the device moved away from.
+    const deviceId = new URL(request.url).searchParams.get("deviceId");
+    let vpnAccount;
+    if (deviceId) {
+      if (!UUID.test(deviceId)) return noStoreJson({ error: "Invalid deviceId" }, 400);
+      const { data: device, error: deviceError } = await supabaseAdmin
+        .from("devices")
+        .select("id, account_id, user_id, status, placement_status, placement_error")
+        .eq("id", deviceId)
+        .maybeSingle();
+      if (deviceError) throw new Error(`devices lookup failed: ${deviceError.message}`);
+      if (!device || device.account_id !== state.account.accountId) {
+        return noStoreJson({ error: "Device not found" }, 404);
+      }
+      if (device.user_id !== user.id && state.account.role !== "owner") {
+        return noStoreJson({ error: "Device not found" }, 404);
+      }
+      if (device.status === "REVOKED") return noStoreJson({ error: "This device has been revoked" }, 403);
+      if (device.placement_status === "UNSCHEDULABLE") {
+        return noStoreJson(
+          { error: "No available route for this device", code: "unschedulable", reason: device.placement_error },
+          409
+        );
+      }
+      vpnAccount = await newestEnabledIdentity(supabaseAdmin, "device_id", deviceId);
+    } else {
+      vpnAccount =
+        (await newestEnabledIdentity(supabaseAdmin, "user_id", user.id)) ?? state.vpnAccount;
+    }
     if (!vpnAccount) return noStoreJson({ error: "Provisioning still in progress" }, 404);
     if (!vpnAccount.enabled) return noStoreJson({ error: "VPN access is disabled" }, 403);
 

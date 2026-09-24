@@ -1,6 +1,7 @@
 import { createClient } from "@supabase/supabase-js";
 import { authenticateNode } from "../../../../lib/node-auth.js";
 import { encryptSecret } from "../../../../lib/crypto.js";
+import { finalizeCreatedIdentity, resolveLegacyDeviceForJob } from "../../../../lib/identity-lifecycle.js";
 
 // Cross-repo idempotency contract (for the provisioning agent in the
 // sibling singbox-vpn repo): on a 5xx response from this endpoint, the
@@ -65,6 +66,7 @@ export async function onRequestPost({ env, request, params }) {
     }
 
     let vpnAccountId = job.vpn_account_id;
+    let createdIdentity = null;
 
     if (job.job_type === "CREATE_USER") {
       const { vpn_user_id, subscription_url } = result;
@@ -73,16 +75,23 @@ export async function onRequestPost({ env, request, params }) {
       }
       // upsert, not insert: a retried completion (same job, same
       // user_id+node_id) must not fail on the unique index.
+      // Identities are per (device, node). Jobs enqueued before devices were
+      // canonical carry no device_id: attach those to the user's oldest
+      // device that has no identity on this node yet.
+      const deviceId =
+        job.payload.device_id ??
+        (await resolveLegacyDeviceForJob(supabaseAdmin, job.payload.user_id, job.node_id));
       const { data: account, error: acctError } = await supabaseAdmin
         .from("vpn_accounts")
         .upsert(
-          { user_id: job.payload.user_id, vpn_user_id, node_id: job.node_id },
-          { onConflict: "user_id,node_id" }
+          { user_id: job.payload.user_id, device_id: deviceId, vpn_user_id, node_id: job.node_id },
+          { onConflict: "device_id,node_id" }
         )
         .select("id")
         .single();
       if (acctError) throw new Error(`vpn_accounts upsert failed: ${acctError.message}`);
       vpnAccountId = account.id;
+      createdIdentity = { id: account.id, deviceId, vpnUserId: vpn_user_id };
 
       const { ciphertext, nonce } = await encryptSecret(
         subscription_url,
@@ -154,6 +163,16 @@ export async function onRequestPost({ env, request, params }) {
       if (enabledError) throw new Error(`vpn_accounts enabled-update failed: ${enabledError.message}`);
     }
     // SET_EXPIRY: no additional writes here.
+
+    // Must run BEFORE the job is marked done: if it fails, the agent's retry
+    // has to re-run it, and a done job short-circuits as a duplicate above.
+    if (createdIdentity) {
+      await finalizeCreatedIdentity(supabaseAdmin, {
+        identity: createdIdentity,
+        nodeId: job.node_id,
+        userId: job.payload.user_id,
+      });
+    }
 
     const { error: updateError } = await supabaseAdmin
       .from("provisioning_jobs")
