@@ -12,9 +12,12 @@ import { getSeatSubscriptionItem, getSeatPackQuantity } from "../../lib/stripe-f
 /**
  * Upper bound on purchasable seat packs. Not a business rule so much as a
  * fat-finger guard: a mistyped quantity here bills real money immediately,
- * since Stripe prorates the change on the spot.
+ * since Stripe prorates the change on the spot. Chosen so the effective
+ * extra-seat ceiling (MAX_SEAT_PACKS * SEAT_PACK_SIZE = 51) stays at or
+ * above the pre-pack MAX_EXTRA_SEATS of 50, rather than quietly shrinking
+ * it as a side effect of switching to packs.
  */
-const MAX_SEAT_PACKS = 16;
+const MAX_SEAT_PACKS = 17;
 
 /**
  * Sets how many extra seat packs (SEAT_PACK_SIZE seats each) beyond the

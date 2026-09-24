@@ -35,7 +35,15 @@ export type AccountInfo = {
   invites: Invite[];
 };
 
-/** Extra seats are sold in packs of this size — mirrors SEAT_PACK_SIZE. */
+/**
+ * Client-side fallback only. The API always includes `seats.packSize` /
+ * `seats.packQuantity` in every response as of this change, so this
+ * constant is never actually used in practice — it exists purely so a
+ * stale cached response (or a type that hasn't been refetched yet) still
+ * renders something sane instead of NaN. It intentionally mirrors
+ * SEAT_PACK_SIZE in functions/lib/accounts.js; if that value ever changes,
+ * update this one too.
+ */
 const SEAT_PACK_SIZE = 3;
 
 const ROW: React.CSSProperties = {
