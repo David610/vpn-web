@@ -400,6 +400,9 @@ export function seedAccount({
         user_id: p.userId,
         name: "Legacy device",
         status: p.deviceStatus ?? "ACTIVE",
+        // subscription_devices migration: existing devices join the live
+        // subscription.
+        subscription_id: p.subscriptionRowId === undefined ? 1 : p.subscriptionRowId,
       })),
     vpn_accounts: provisioned.map((p, i) => ({
       id: i + 1,

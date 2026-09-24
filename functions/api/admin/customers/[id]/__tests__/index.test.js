@@ -29,7 +29,17 @@ vi.mock("@supabase/supabase-js", () => ({
         return { select: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(), maybeSingle: () => accountMaybeSingle() };
       }
       if (table === "subscriptions") {
-        return { select: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(), in: vi.fn().mockReturnThis(), maybeSingle: subMaybeSingle };
+        // getLiveSubscription lists every live row (an account may hold
+        // several) and picks the longest-running one.
+        return {
+          select: vi.fn().mockReturnThis(),
+          eq: vi.fn().mockReturnThis(),
+          in: () =>
+            Promise.resolve(subMaybeSingle()).then((r) => ({
+              data: r?.data ? [r.data] : [],
+              error: r?.error ?? null,
+            })),
+        };
       }
       if (table === "vpn_accounts") {
         return { select: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(), maybeSingle: vpnMaybeSingle };

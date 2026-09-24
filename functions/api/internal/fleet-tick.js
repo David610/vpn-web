@@ -1,6 +1,7 @@
 import { createClient } from "@supabase/supabase-js";
 import { advanceOperation } from "../../lib/fleet-operations.js";
 import { fleetContext, isValidFleetTickSecret } from "../../lib/fleet-context.js";
+import { finalizeAccountDeletions } from "../../lib/account-service.js";
 
 function json(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -51,5 +52,13 @@ export async function onRequestPost({ env, request }) {
       results.push({ id: op.id, type: op.type, nodeId: op.node_id, status: "ERROR" });
     }
   }
-  return json({ leased: results.length, results });
+  // Account deletions complete here, once every VPN identity of the
+  // account is confirmed disabled (see account-service.js).
+  let deletedAccounts = 0;
+  try {
+    deletedAccounts = (await finalizeAccountDeletions(supabaseAdmin)).length;
+  } catch (err) {
+    console.error("fleet-tick: account deletion finalize failed:", err.message);
+  }
+  return json({ leased: results.length, results, deletedAccounts });
 }
