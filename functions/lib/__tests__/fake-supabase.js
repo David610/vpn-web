@@ -30,6 +30,9 @@ export function makeFakeSupabase(seed = {}, options = {}) {
     operational_alerts: [],
     abuse_signals: [],
     nodes: [],
+    devices: [],
+    connection_profiles: [],
+    device_profile_assignments: [],
     ...structuredClone(seed),
   };
 
@@ -63,6 +66,22 @@ export function makeFakeSupabase(seed = {}, options = {}) {
           : { data: hit, error: null };
       }
 
+      if (state.op === "upsert") {
+        const conflictCol = state.upsertConflictCol;
+        const existing = tables[table].find(
+          (r) => r[conflictCol] === state.payload[conflictCol]
+        );
+        if (existing) {
+          Object.assign(existing, state.payload);
+          return single
+            ? { data: existing, error: null }
+            : { data: [existing], error: null };
+        }
+        const row = { ...state.payload };
+        tables[table].push(row);
+        return single ? { data: row, error: null } : { data: [row], error: null };
+      }
+
       let rows = tables[table].filter(match);
       if (state.limit !== null) rows = rows.slice(0, state.limit);
       if (single) {
@@ -89,6 +108,12 @@ export function makeFakeSupabase(seed = {}, options = {}) {
       update(payload) {
         state.op = "update";
         state.payload = payload;
+        return chain;
+      },
+      upsert(payload, opts) {
+        state.op = "upsert";
+        state.payload = payload;
+        state.upsertConflictCol = opts?.onConflict ?? "id";
         return chain;
       },
       eq(col, val) {
