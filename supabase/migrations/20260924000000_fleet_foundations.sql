@@ -59,7 +59,13 @@ values ('00000000-0000-4000-8000-000000000000', 'XX', null, 'Legacy (unassigned)
 alter table public.nodes
   add column location_id uuid references public.locations (id),
   add column role text not null default 'EXIT' check (role in ('EXIT', 'RELAY')),
-  add column lifecycle_state text not null default 'READY' check (
+  -- No DEFAULT here, deliberately: this column only gets a value below via
+  -- an explicit UPDATE that backfills existing rows to READY. A DEFAULT
+  -- would also silently apply to every future INSERT (Phase 3's enrollment
+  -- flow expects a brand-new node to start at PROVISIONING, not READY),
+  -- turning "forgot to set lifecycle_state" into a silent security/routing
+  -- bug instead of a loud NOT NULL failure.
+  add column lifecycle_state text check (
     lifecycle_state in (
       'PROVISIONING', 'WARMING_UP', 'READY', 'DEGRADED',
       'DRAINING', 'MAINTENANCE', 'FAILED', 'QUARANTINED', 'RETIRED'
@@ -75,14 +81,18 @@ alter table public.nodes
   add column observed_revision bigint not null default 0,
   add column retired_at timestamptz;
 
--- The single existing node has been serving production traffic since
--- before this migration — READY (the column default already backfilled
--- every existing row) is the honest lifecycle_state for it, not
--- PROVISIONING. location_id has no default because no sensible one exists
--- for a brand-new column; point every pre-existing row at the placeholder
--- location explicitly instead of leaving it null.
-update public.nodes set location_id = '00000000-0000-4000-8000-000000000000'
+-- Backfill only, not a DEFAULT (see above): the single existing node has
+-- been serving production traffic since before this migration, so READY
+-- is the honest lifecycle_state for it, not PROVISIONING. location_id
+-- similarly has no default because no sensible one exists for a brand-new
+-- column; point every pre-existing row at the placeholder location
+-- explicitly instead of leaving it null.
+update public.nodes
+set location_id = '00000000-0000-4000-8000-000000000000',
+    lifecycle_state = 'READY'
 where location_id is null;
+
+alter table public.nodes alter column lifecycle_state set not null;
 
 create index nodes_location_id_idx on public.nodes (location_id);
 create index nodes_lifecycle_state_idx on public.nodes (lifecycle_state);
@@ -135,38 +145,35 @@ alter table public.vpn_accounts
 -- same account its user_id already belongs to (account_members guarantees
 -- exactly one account per user). A vpn_accounts row whose user has since
 -- left every account (should not exist under the current one-account-per-
--- user invariant, but the join below simply matches zero rows if it did,
--- rather than raising) is left with a null device_id, unchanged from today.
+-- user invariant, but the loop below simply finds no account and leaves
+-- device_id null, rather than raising) is left unchanged from today.
 --
 -- vpn_accounts is only uniquely keyed on (user_id, node_id), not user_id
 -- alone, so a user with more than one vpn_accounts row is not something a
--- constraint rules out even though no code path creates one today. Pairing
--- purely on user_id would let such a user's rows cross-match each other's
--- backfilled device nondeterministically. row_number() pairs each
--- vpn_accounts row with its own distinct backfilled device instead, so the
--- result is correct regardless of how many rows a user has.
-with legacy_devices as (
-  insert into public.devices (account_id, user_id, name, status, created_at)
-  select m.account_id, va.user_id, 'Legacy device', 'ACTIVE', va.created_at
-  from public.vpn_accounts va
-  join public.account_members m on m.user_id = va.user_id
-  returning id as device_id, user_id
-),
-numbered_devices as (
-  select device_id, user_id,
-    row_number() over (partition by user_id order by device_id) as rn
-  from legacy_devices
-),
-numbered_accounts as (
-  select id as vpn_account_id, user_id,
-    row_number() over (partition by user_id order by id) as rn
-  from public.vpn_accounts
-)
-update public.vpn_accounts va
-set device_id = nd.device_id
-from numbered_accounts na
-join numbered_devices nd on nd.user_id = na.user_id and nd.rn = na.rn
-where va.id = na.vpn_account_id;
+-- constraint rules out even though no code path creates one today. A
+-- set-based INSERT...SELECT paired back to its source rows by a derived
+-- row_number() would pair rows by an incidental sort order (e.g. the new
+-- device's random id) rather than by which vpn_accounts row produced which
+-- device — silently correct only by accident for a single row per user.
+-- Looping one row at a time removes the ambiguity entirely: each
+-- vpn_accounts row is paired with the exact device inserted for it.
+do $$
+declare
+  r record;
+  new_device_id uuid;
+begin
+  for r in
+    select va.id as vpn_account_id, va.user_id, va.created_at, m.account_id
+    from public.vpn_accounts va
+    join public.account_members m on m.user_id = va.user_id
+  loop
+    insert into public.devices (account_id, user_id, name, status, created_at)
+    values (r.account_id, r.user_id, 'Legacy device', 'ACTIVE', r.created_at)
+    returning id into new_device_id;
+
+    update public.vpn_accounts set device_id = new_device_id where id = r.vpn_account_id;
+  end loop;
+end $$;
 
 create index vpn_accounts_device_id_idx on public.vpn_accounts (device_id);
 
@@ -186,12 +193,17 @@ create table public.connection_profiles (
   auto_failover boolean not null default true,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  -- DIRECT/AUTO name an exit only; DOUBLE_HOP names both hops. Enforced
+  -- DOUBLE_HOP names both hops; DIRECT names an exit only; AUTO may leave
+  -- both null (spec §10's example is a broad "Exit preference: Europe",
+  -- not one specific location — that's the point of "auto"). Enforced
   -- here rather than only in application code, since this is a data
   -- integrity rule, not a UX rule.
   constraint connection_profiles_entry_requires_double_hop check (
     (routing_mode = 'DOUBLE_HOP' and preferred_entry_location_id is not null)
     or (routing_mode <> 'DOUBLE_HOP' and preferred_entry_location_id is null)
+  ),
+  constraint connection_profiles_exit_required_unless_auto check (
+    routing_mode = 'AUTO' or preferred_exit_location_id is not null
   )
 );
 

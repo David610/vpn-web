@@ -37,6 +37,18 @@ create table auth.users (
   id uuid primary key
 );
 
+-- Supabase's real Postgres provides auth.uid() (reads the request JWT);
+-- this fallback schema doesn't run under PostgREST, but the migration's
+-- RLS policies reference it in their USING clause, and CREATE POLICY
+-- resolves that function signature at creation time even though it's only
+-- evaluated per-query. This test runs entirely as the postgres superuser
+-- (RLS is bypassed for superusers), so the stub's return value is never
+-- actually exercised — it only needs to exist for the migration to apply.
+create function auth.uid()
+returns uuid
+language sql stable
+as $$ select null::uuid; $$;
+
 do $$
 begin
   if not exists (select 1 from pg_roles where rolname = 'anon') then
@@ -148,12 +160,25 @@ begin
   end;
 
   begin
-    insert into public.connection_profiles (account_id, name, routing_mode)
-    values (v_account_id, 'bad-double-hop-no-entry', 'DOUBLE_HOP');
+    insert into public.connection_profiles (account_id, name, routing_mode, preferred_exit_location_id)
+    values (v_account_id, 'bad-double-hop-no-entry', 'DOUBLE_HOP', v_de_location);
     raise exception 'DOUBLE_HOP profile with no entry location was incorrectly allowed';
   exception
     when check_violation then null;
   end;
+
+  begin
+    insert into public.connection_profiles (account_id, name, routing_mode)
+    values (v_account_id, 'bad-direct-no-exit', 'DIRECT');
+    raise exception 'DIRECT profile with no exit location was incorrectly allowed';
+  exception
+    when check_violation then null;
+  end;
+
+  -- AUTO is the one routing mode allowed to leave both locations unset
+  -- (a broad regional preference, not one specific location).
+  insert into public.connection_profiles (account_id, name, routing_mode)
+  values (v_account_id, 'Automatic', 'AUTO');
 
   insert into public.connection_profiles (account_id, name, routing_mode, preferred_exit_location_id)
   values (v_account_id, 'Germany Direct', 'DIRECT', v_de_location)
