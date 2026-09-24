@@ -110,14 +110,21 @@ export async function getMemberVpnAccounts(supabaseAdmin, accountId, nodeId) {
  * dunning window, or on the free trial, still has service.
  */
 export async function getLiveSubscription(supabaseAdmin, accountId, columns = "*") {
+  // An account may now hold several live subscriptions; this returns the one
+  // that runs longest, which is what account-level questions ("does this
+  // account have access, and until when?") need. Per-device access is
+  // decided in subscriptions.js.
   const { data, error } = await supabaseAdmin
     .from("subscriptions")
     .select(columns)
     .eq("account_id", accountId)
-    .in("status", ["trialing", "active", "past_due"])
-    .maybeSingle();
+    .in("status", ["trialing", "active", "past_due"]);
   if (error) throw new Error(`subscriptions lookup failed: ${error.message}`);
-  return data ?? null;
+  const rows = data ?? [];
+  rows.sort((a, b) =>
+    String(b.current_period_end ?? "").localeCompare(String(a.current_period_end ?? ""))
+  );
+  return rows[0] ?? null;
 }
 
 

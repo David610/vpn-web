@@ -4,6 +4,11 @@ import {
   scheduleDoubleHopForDevice,
   scheduleAutoForDevice,
 } from "./scheduler.js";
+import {
+  listAccountSubscriptions,
+  loadDeviceEntitlements,
+  pickSubscriptionWithRoom,
+} from "./subscriptions.js";
 
 /**
  * Device-canonical VPN provisioning: the ONE place that turns "this device,
@@ -34,7 +39,12 @@ import {
  * first; identities on other nodes are disabled only once it exists.
  */
 
-export const MAX_ACTIVE_DEVICES_PER_MEMBER = 5;
+/**
+ * Hard ceiling on one account's active devices, whatever it pays for — a
+ * guard against runaway device creation, not a product limit (capacity is
+ * per subscription; see subscriptions.js).
+ */
+export const MAX_ACTIVE_DEVICES_PER_ACCOUNT = 60;
 
 export function isFleetSchedulingEnabled(env) {
   return env?.FEATURE_MULTI_NODE_SCHEDULING === "true";
@@ -273,7 +283,7 @@ export async function reconcileDeviceProvisioning(
 async function listAccountDevices(supabaseAdmin, accountId) {
   const { data, error } = await supabaseAdmin
     .from("devices")
-    .select("id, account_id, user_id, status, created_at")
+    .select("id, account_id, user_id, status, created_at, subscription_id")
     .eq("account_id", accountId);
   if (error) throw new Error(`devices lookup failed: ${error.message}`);
   return data ?? [];
@@ -288,12 +298,20 @@ async function listAccountDevices(supabaseAdmin, accountId) {
  */
 export async function ensureMemberDevices(supabaseAdmin, accountId, members, devices) {
   const created = [];
+  const subscriptions = await listAccountSubscriptions(supabaseAdmin, accountId);
   for (const member of members) {
     if (devices.some((d) => d.user_id === member.userId)) continue;
+    const room = pickSubscriptionWithRoom(subscriptions, devices.concat(created));
     const { data, error } = await supabaseAdmin
       .from("devices")
-      .insert({ account_id: accountId, user_id: member.userId, name: "My device", status: "ACTIVE" })
-      .select("id, account_id, user_id, status, created_at")
+      .insert({
+        account_id: accountId,
+        user_id: member.userId,
+        name: "My device",
+        status: "ACTIVE",
+        subscription_id: room?.id ?? null,
+      })
+      .select("id, account_id, user_id, status, created_at, subscription_id")
       .single();
     if (error) throw new Error(`devices insert failed: ${error.message}`);
     created.push(data);
@@ -302,9 +320,15 @@ export async function ensureMemberDevices(supabaseAdmin, accountId, members, dev
 }
 
 /**
- * Account-level entry point used by billing, invites and admin grants:
- * reconciles every device of every current member, plus revoked devices
- * and devices of departed members (which are always disabled).
+ * Account-level entry point used by billing, device changes and admin
+ * grants: reconciles every device of the account.
+ *
+ * Entitlement is decided per device from the database, not from the caller:
+ * a device is served while ITS subscription is live and it is within that
+ * subscription's capacity (see subscriptions.js). So one subscription
+ * lapsing disables only its own devices, and a device past capacity is
+ * never served. `entitlement` only says whether the account has any access
+ * at all, which decides whether a first device is created for it.
  */
 export async function reconcileAccountProvisioning(
   supabaseAdmin,
@@ -316,12 +340,13 @@ export async function reconcileAccountProvisioning(
     devices = devices.concat(await ensureMemberDevices(supabaseAdmin, accountId, members, devices));
   }
   const memberIds = new Set(members.map((m) => m.userId));
+  const entitlements = await loadDeviceEntitlements(supabaseAdmin, accountId, devices);
   const results = [];
   for (const device of devices) {
     const isMember = memberIds.has(device.user_id);
     const result = await reconcileDeviceProvisioning(supabaseAdmin, env, {
       device,
-      entitlement: isMember ? entitlement : null,
+      entitlement: isMember ? entitlements.get(device.id) ?? null : null,
       idempotencyPrefix,
     });
     results.push({ deviceId: device.id, ...result });

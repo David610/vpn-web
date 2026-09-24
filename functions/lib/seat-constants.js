@@ -37,3 +37,20 @@ export const SEAT_PACK_SIZE = 3;
 export function packQuantityFromExtraSeats(extraSeats) {
   return Math.ceil(Math.max(0, extraSeats) / SEAT_PACK_SIZE);
 }
+
+/**
+ * Device model (current billing): each subscription covers
+ * INCLUDED_DEVICES devices, plus DEVICE_PACK_SIZE more per paid pack. The
+ * seat names above are kept because the Stripe pack item and the
+ * subscriptions.extra_seats mirror still use them; extra_seats now counts
+ * extra devices.
+ */
+export const INCLUDED_DEVICES = INCLUDED_SEATS;
+export const DEVICE_PACK_SIZE = SEAT_PACK_SIZE;
+/** Monthly price of the base plan and of each pack, in euro cents. */
+export const BASE_PRICE_CENTS = 699;
+export const PACK_PRICE_CENTS = 699;
+
+export function deviceCapacity(extraSeats) {
+  return INCLUDED_DEVICES + Math.max(0, extraSeats ?? 0);
+}

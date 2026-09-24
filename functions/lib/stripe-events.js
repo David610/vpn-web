@@ -27,6 +27,12 @@ import {
 } from "./accounts.js";
 import { syncAccountProvisioningToEntitlement } from "./provision-entitlement.js";
 
+function subscriptionNameFrom(session) {
+  const raw = session.metadata?.subscription_name;
+  const name = typeof raw === "string" ? raw.trim() : "";
+  return name.length >= 1 && name.length <= 80 ? name : "Personal";
+}
+
 /**
  * @param {import('@supabase/supabase-js').SupabaseClient} supabaseAdmin
  * @param {object} session - a Stripe Checkout Session object
@@ -74,6 +80,7 @@ export async function handleCheckoutSessionCompleted(supabaseAdmin, session) {
   const { error: insertError } = await supabaseAdmin.from("subscriptions").insert({
     account_id: account.accountId,
     stripe_subscription_id: session.subscription,
+    name: subscriptionNameFrom(session),
     // "incomplete" until invoice.paid confirms payment and flips this to
     // "active" — never "active" here, and no provisioning_jobs write in
     // this function at all (see file header).

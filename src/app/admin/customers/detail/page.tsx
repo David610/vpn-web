@@ -242,7 +242,7 @@ function AdminCustomerDetailContent() {
               <ConfirmButton
                 label="Rotate subscription link"
                 confirmLabel="Click again to rotate the subscription link"
-                className="rounded bg-blue-600 px-3 py-1.5 text-sm text-white"
+                className="rounded bg-neutral-900 px-3 py-1.5 text-sm text-white"
                 onConfirm={() => callAction("rotate", "Subscription-link rotation")}
               />
               <ConfirmButton

@@ -1,10 +1,14 @@
 import { createClient } from "@supabase/supabase-js";
 import { requireUser, requireRecentUser, jsonResponse } from "../../lib/user-auth.js";
 import { getAccountForUser, getEffectiveEntitlement } from "../../lib/accounts.js";
+import { MAX_ACTIVE_DEVICES_PER_ACCOUNT } from "../../lib/device-provisioning.js";
+import { syncAccountProvisioningToEntitlement } from "../../lib/provision-entitlement.js";
 import {
-  MAX_ACTIVE_DEVICES_PER_MEMBER,
-  reconcileDeviceProvisioning,
-} from "../../lib/device-provisioning.js";
+  isLive,
+  listAccountSubscriptions,
+  pickSubscriptionWithRoom,
+} from "../../lib/subscriptions.js";
+import { deviceCapacity } from "../../lib/seat-constants.js";
 
 /**
  * Lists the caller's account's devices, each annotated with its current
@@ -40,7 +44,7 @@ export async function onRequestGet({ env, request }) {
 
     const { data: devices, error: devicesError } = await supabaseAdmin
       .from("devices")
-      .select("id, user_id, name, platform, status, created_at, last_seen_at, placement_status, placement_error")
+      .select("id, user_id, name, platform, status, created_at, last_seen_at, placement_status, placement_error, subscription_id")
       .eq("account_id", account.accountId)
       .order("created_at", { ascending: true });
     if (devicesError) throw new Error(`devices lookup failed: ${devicesError.message}`);
@@ -98,6 +102,7 @@ export async function onRequestGet({ env, request }) {
         name: d.name,
         platform: d.platform,
         status: d.status,
+        subscriptionId: d.subscription_id == null ? null : String(d.subscription_id),
         createdAt: d.created_at,
         lastSeenAt: d.last_seen_at,
         // Owners manage every device on the plan; members only their own.
@@ -147,6 +152,10 @@ export async function onRequestPost({ env, request }) {
   if (profileId !== null && typeof profileId !== "string") {
     return jsonResponse({ error: "profileId must be a string" }, 400);
   }
+  const requestedSubscription = body?.subscriptionId ?? null;
+  if (requestedSubscription !== null && !/^[0-9]{1,18}$/.test(String(requestedSubscription))) {
+    return jsonResponse({ error: "Unknown subscription" }, 400);
+  }
 
   try {
     const account = await getAccountForUser(supabaseAdmin, user.id);
@@ -155,18 +164,38 @@ export async function onRequestPost({ env, request }) {
       return jsonResponse({ error: "Internal error" }, 500);
     }
 
-    const { data: mine, error: countError } = await supabaseAdmin
+    const { data: active, error: countError } = await supabaseAdmin
       .from("devices")
-      .select("id")
+      .select("id, status, subscription_id, created_at")
       .eq("account_id", account.accountId)
-      .eq("user_id", user.id)
       .eq("status", "ACTIVE");
     if (countError) throw new Error(`devices count failed: ${countError.message}`);
-    if ((mine ?? []).length >= MAX_ACTIVE_DEVICES_PER_MEMBER) {
-      return jsonResponse(
-        { error: `You can have at most ${MAX_ACTIVE_DEVICES_PER_MEMBER} active devices. Revoke one first.` },
-        409
-      );
+    if ((active ?? []).length >= MAX_ACTIVE_DEVICES_PER_ACCOUNT) {
+      return jsonResponse({ error: "This account has too many active devices. Remove one first." }, 409);
+    }
+
+    // Each subscription covers a fixed number of devices; a new device joins
+    // the one the caller chose, or the oldest with a free place.
+    const subscriptions = await listAccountSubscriptions(supabaseAdmin, account.accountId);
+    let target = null;
+    if (requestedSubscription !== null) {
+      target = subscriptions.find((sub) => String(sub.id) === String(requestedSubscription)) ?? null;
+      if (!target || !isLive(target)) return jsonResponse({ error: "Unknown subscription" }, 404);
+      const used = (active ?? []).filter((d) => String(d.subscription_id) === String(target.id)).length;
+      if (used >= deviceCapacity(target.extra_seats)) {
+        return jsonResponse(
+          { error: `"${target.name}" is full. Add 3 devices to it, or remove a device first.` },
+          409
+        );
+      }
+    } else {
+      target = pickSubscriptionWithRoom(subscriptions, active ?? []);
+      if (!target && subscriptions.some(isLive)) {
+        return jsonResponse(
+          { error: "All your subscriptions are full. Add 3 devices or start another subscription." },
+          409
+        );
+      }
     }
 
     if (profileId) {
@@ -184,8 +213,15 @@ export async function onRequestPost({ env, request }) {
 
     const { data: device, error: insertError } = await supabaseAdmin
       .from("devices")
-      .insert({ account_id: account.accountId, user_id: user.id, name, platform, status: "ACTIVE" })
-      .select("id, account_id, user_id, status")
+      .insert({
+        account_id: account.accountId,
+        user_id: user.id,
+        name,
+        platform,
+        status: "ACTIVE",
+        subscription_id: target?.id ?? null,
+      })
+      .select("id, account_id, user_id, status, subscription_id")
       .single();
     if (insertError) throw new Error(`devices insert failed: ${insertError.message}`);
 
@@ -199,11 +235,14 @@ export async function onRequestPost({ env, request }) {
     let provisioning = null;
     const entitlement = await getEffectiveEntitlement(supabaseAdmin, account.accountId);
     if (entitlement) {
-      const result = await reconcileDeviceProvisioning(supabaseAdmin, env, {
-        device,
+      const results = await syncAccountProvisioningToEntitlement(
+        supabaseAdmin,
+        account.accountId,
         entitlement,
-        idempotencyPrefix: `device-added:${device.id}`,
-      });
+        `device-added:${device.id}`,
+        env
+      );
+      const result = results.find((r) => r.deviceId === device.id) ?? { action: "disabled" };
       provisioning = {
         action: result.action,
         placement: result.placement?.ok
@@ -214,7 +253,15 @@ export async function onRequestPost({ env, request }) {
       };
     }
 
-    return jsonResponse({ ok: true, deviceId: device.id, provisioning }, 201);
+    return jsonResponse(
+      {
+        ok: true,
+        deviceId: device.id,
+        subscriptionId: device.subscription_id == null ? null : String(device.subscription_id),
+        provisioning,
+      },
+      201
+    );
   } catch (err) {
     console.error("account/devices POST: unexpected error:", err.message);
     return jsonResponse({ error: "Internal error" }, 500);

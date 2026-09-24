@@ -114,7 +114,7 @@ export default function AdminCustomersPage() {
                     <td className="py-2">
                       <Link
                         href={`/admin/customers/detail?id=${c.userId}`}
-                        className="text-blue-600 hover:underline"
+                        className="text-neutral-900 underline underline-offset-2 hover:text-neutral-600"
                       >
                         {c.email ?? c.userId}
                       </Link>

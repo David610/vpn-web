@@ -104,9 +104,19 @@ async function resumeReservedTrial(stripe, supabaseAdmin, accountId, accountRow)
  */
 export async function onRequestPost({ env, request }) {
   let wantsTrial = true;
+  let subscriptionName = "Personal";
   try {
     const raw = await request.text();
-    if (raw) wantsTrial = JSON.parse(raw)?.trial !== false;
+    if (raw) {
+      const body = JSON.parse(raw);
+      wantsTrial = body?.trial !== false;
+      if (body?.name !== undefined) {
+        if (typeof body.name !== "string" || !/^.{1,80}$/u.test(body.name.trim())) {
+          return json({ error: "Give the subscription a name of 1–80 characters." }, 400);
+        }
+        subscriptionName = body.name.trim();
+      }
+    }
   } catch {
     return json({ error: "Invalid JSON body" }, 400);
   }
@@ -145,8 +155,19 @@ export async function onRequestPost({ env, request }) {
       console.error("create-checkout-session: subscription lookup failed:", existingSubError.message);
       return json({ error: "Something went wrong" }, 500);
     }
+    // An account may hold several subscriptions (one person, for example
+    // "Personal" and "Family"). The free trial is only for the first one,
+    // and a checkout started in the last day blocks only another first one.
     if (existingSubscription) {
-      return json({ error: "You already have an active subscription" }, 409);
+      if (wantsTrial) {
+        return json(
+          { error: "The free trial is only for your first subscription.", code: "trial_unavailable" },
+          409
+        );
+      }
+      if (existingSubscription.status === "incomplete") {
+        return json({ error: "A checkout is already in progress. Finish it first." }, 409);
+      }
     }
 
     const { data: accountRow, error: accountError } = await supabaseAdmin
@@ -212,8 +233,9 @@ export async function onRequestPost({ env, request }) {
       mode: "subscription",
       line_items: [{ price: env.STRIPE_PRICE_ID, quantity: 1 }],
       client_reference_id: user.id,
-      success_url: `${env.SITE_URL}/dashboard/?checkout=success`,
-      cancel_url: `${env.SITE_URL}/dashboard/?checkout=cancel`,
+      metadata: { subscription_name: subscriptionName },
+      success_url: `${env.SITE_URL}/account/?checkout=success`,
+      cancel_url: `${env.SITE_URL}/account/subscriptions/?checkout=cancel`,
       ...(wantsTrial ? { subscription_data: { trial_period_days: TRIAL_DAYS } } : {}),
       ...(accountRow?.stripe_customer_id
         ? { customer: accountRow.stripe_customer_id }

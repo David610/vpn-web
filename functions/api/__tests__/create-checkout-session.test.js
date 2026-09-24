@@ -145,6 +145,32 @@ describe("create-checkout-session", () => {
     expect(reserveTrial).not.toHaveBeenCalled();
   });
 
+  it("starts a second, named subscription without a trial", async () => {
+    subscriptionMaybeSingle.mockResolvedValue({ data: { status: "active" }, error: null });
+    const res = await onRequestPost({
+      env,
+      request: makeRequest({ trial: false, name: "Family" }),
+    });
+    expect(res.status).toBe(200);
+    expect(reserveTrial).not.toHaveBeenCalled();
+    expect(sessionsCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ metadata: { subscription_name: "Family" } })
+    );
+    expect(sessionsCreate.mock.calls[0][0].subscription_data).toBeUndefined();
+  });
+
+  it("refuses a second checkout while one is still incomplete", async () => {
+    subscriptionMaybeSingle.mockResolvedValue({ data: { status: "incomplete" }, error: null });
+    const res = await onRequestPost({ env, request: makeRequest({ trial: false }) });
+    expect(res.status).toBe(409);
+    expect(sessionsCreate).not.toHaveBeenCalled();
+  });
+
+  it("rejects an empty subscription name", async () => {
+    const res = await onRequestPost({ env, request: makeRequest({ trial: false, name: "  " }) });
+    expect(res.status).toBe(400);
+  });
+
   it("starts a one-time 3-day trial", async () => {
     const res = await onRequestPost({ env, request: makeRequest({ trial: true }) });
     const body = await res.json();

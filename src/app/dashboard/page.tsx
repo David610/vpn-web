@@ -239,7 +239,7 @@ export default function DashboardPage() {
         <Nav />
         <main className="dm-section" style={{ borderBottom: "none" }}>
           <div className="section-head">
-            <p className="section-eyebrow">Dashboard</p>
+            <p className="section-eyebrow">Account</p>
             <h1 className="section-h2">
               {loading ? "Loading…" : "Redirecting to login…"}
             </h1>
@@ -255,7 +255,7 @@ export default function DashboardPage() {
       <Nav />
       <main className="dm-section" style={{ borderBottom: "none" }}>
         <div className="section-head">
-          <p className="section-eyebrow">Dashboard</p>
+          <p className="section-eyebrow">Account</p>
           <h1 className="section-h2">Welcome, {session.user.email}</h1>
         </div>
         <div className="dm-card" style={{ maxWidth: "26rem" }}>

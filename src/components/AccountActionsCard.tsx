@@ -40,7 +40,7 @@ export function AccountActionsCard({
   async function rotateCredentials() {
     if (
       !window.confirm(
-        "Regenerate your VPN credentials? Existing VLESS and Hysteria2 configurations will stop connecting after the change. You must re-import your Arcana setup afterwards."
+        "Regenerate your VPN credentials? Configurations already imported into your VPN apps will stop connecting after the change. You must re-import your Arcana setup afterwards."
       )
     ) {
       return;

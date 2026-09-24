@@ -20,7 +20,7 @@ export default function Footer() {
       </div>
       <div className="dm-footer__bottom">
         <span className="text-tiny">
-          © {year} {SITE_NAME}
+          © {year} {SITE_NAME} · Private VPN access for a more open world.
         </span>
       </div>
     </footer>

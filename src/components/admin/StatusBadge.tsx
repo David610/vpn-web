@@ -5,7 +5,7 @@ const COLORS: Record<string, string> = {
   past_due: "bg-yellow-100 text-yellow-800",
   degraded: "bg-yellow-100 text-yellow-800",
   pending: "bg-yellow-100 text-yellow-800",
-  claimed: "bg-blue-100 text-blue-800",
+  claimed: "bg-neutral-100 text-neutral-800 ring-1 ring-inset ring-neutral-300",
   canceled: "bg-gray-100 text-gray-600",
   offline: "bg-red-100 text-red-800",
   failed: "bg-red-100 text-red-800",
@@ -15,8 +15,8 @@ const COLORS: Record<string, string> = {
   // heartbeat-derived connectivity statuses above, uppercase to match the
   // DB's lifecycle_state values verbatim (no case conversion needed).
   READY: "bg-green-100 text-green-800",
-  WARMING_UP: "bg-blue-100 text-blue-800",
-  PROVISIONING: "bg-blue-100 text-blue-800",
+  WARMING_UP: "bg-neutral-100 text-neutral-800 ring-1 ring-inset ring-neutral-300",
+  PROVISIONING: "bg-neutral-100 text-neutral-800 ring-1 ring-inset ring-neutral-300",
   DEGRADED: "bg-yellow-100 text-yellow-800",
   DRAINING: "bg-yellow-100 text-yellow-800",
   MAINTENANCE: "bg-gray-100 text-gray-600",

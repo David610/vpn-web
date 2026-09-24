@@ -5,7 +5,7 @@ let db;
 vi.mock("@supabase/supabase-js", () => ({ createClient: vi.fn(() => db) }));
 
 const { onRequestGet: listDevices } = await import("../devices.js");
-const { onRequestGet: listProfiles } = await import("../connection-profiles.js");
+const { onRequestGet: listProfiles } = await import("../connection-profiles/index.js");
 const { onRequestPost: revokeDevice } = await import("../devices/[id]/revoke.js");
 const { onRequestPost: assignProfile } = await import("../devices/[id]/assignment.js");
 

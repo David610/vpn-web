@@ -20,11 +20,20 @@ export default function Nav() {
       <Link href="/" className="dm-nav__brand">
         {SITE_NAME}
       </Link>
-      <nav className="dm-nav__desktop">
+      <nav className="dm-nav__desktop" aria-label="Main">
+        <Link href="/#features" className="dm-nav__link">
+          Features
+        </Link>
+        <Link href="/#locations" className="dm-nav__link">
+          Locations
+        </Link>
+        <Link href="/#pricing" className="dm-nav__link">
+          Pricing
+        </Link>
         {loading ? null : session ? (
           <>
             <Link href="/dashboard" className="dm-nav__link">
-              Dashboard
+              Account
             </Link>
             <button
               type="button"
@@ -35,14 +44,9 @@ export default function Nav() {
             </button>
           </>
         ) : (
-          <>
-            <Link href="/login" className="dm-nav__link">
-              Log in
-            </Link>
-            <Link href="/signup" className="btn btn-primary dm-nav__cta">
-              Get started
-            </Link>
-          </>
+          <Link href="/login" className="btn btn-secondary dm-nav__cta">
+            Log in
+          </Link>
         )}
       </nav>
     </header>

@@ -54,6 +54,23 @@ describe("handleCheckoutSessionCompleted", () => {
     });
   });
 
+  it("stores the subscription name chosen at checkout", async () => {
+    const db = makeFakeSupabase({
+      customer_accounts: [{ id: "acct-1", stripe_customer_id: null }],
+      account_members: [{ account_id: "acct-1", user_id: "user-1", role: "owner" }],
+    });
+
+    await handleCheckoutSessionCompleted(db, {
+      mode: "subscription",
+      client_reference_id: "user-1",
+      customer: "cus_123",
+      subscription: "sub_family",
+      metadata: { subscription_name: "Family" },
+    });
+
+    expect(db._tables.subscriptions[0].name).toBe("Family");
+  });
+
   it("throws when the checkout user has no account membership", async () => {
     // handle_new_user gives every user an account, so this is data
     // corruption rather than a race — it must not be swallowed.
