@@ -76,6 +76,12 @@ describe("POST /api/admin/nodes/:id/revisions", () => {
     expect(createNodeRevision).not.toHaveBeenCalled();
   });
 
+  it("returns 400 instead of throwing when the parsed JSON body is literally null", async () => {
+    const res = await onRequestPost({ env, request: makeRequest(null), params: { id: "node-1" } });
+    expect(res.status).toBe(400);
+    expect(createNodeRevision).not.toHaveBeenCalled();
+  });
+
   it("returns 400 when config is not an object", async () => {
     const res = await onRequestPost({
       env,
