@@ -119,7 +119,7 @@ export default function AdminJobsPage() {
                         <ConfirmButton
                           label="Retry"
                           confirmLabel="Confirm retry"
-                          className="rounded bg-blue-600 px-2 py-1 text-xs text-white"
+                          className="rounded bg-neutral-900 px-2 py-1 text-xs text-white"
                           onConfirm={() => retry(j.id)}
                         />
                       )}

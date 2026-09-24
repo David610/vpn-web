@@ -5,7 +5,7 @@ import { SITE_URL, SITE_NAME, IS_PRODUCTION } from "@/lib/site-config";
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
   title: {
-    default: `${SITE_NAME} — A VPN without the noise`,
+    default: `${SITE_NAME} — Private VPN access`,
     template: `%s — ${SITE_NAME}`,
   },
   robots: IS_PRODUCTION
