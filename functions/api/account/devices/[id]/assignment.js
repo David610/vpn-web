@@ -81,11 +81,43 @@ export async function onRequestPost({ env, request, params }) {
     if (upsertError) {
       // Defense in depth: if some future code path lets device/profile
       // account ids drift out of sync before this write, the trigger still
-      // rejects it — surface that as a 400, not a 500.
+      // rejects it — surface that as the same 403 the pre-check above
+      // returns for the identical condition, not a different status code
+      // for what is, to the caller, the same error.
       if (upsertError.message.includes("device_profile_account_mismatch")) {
-        return jsonResponse({ error: "That profile does not belong to your account." }, 400);
+        return jsonResponse({ error: "That profile does not belong to your account." }, 403);
       }
       throw new Error(`device_profile_assignments upsert failed: ${upsertError.message}`);
+    }
+
+    // The device/profile checks above and the upsert are not one
+    // transaction, so a revoke or a profile-disable landing in between
+    // would otherwise leave a written assignment that should never have
+    // existed. Re-read both post-write and undo the assignment if either
+    // invalidated concurrently, mirroring the intent of revoke.js's
+    // optimistic-concurrency guard for a write this shape (an upsert into a
+    // second table) can't express as a single conditional UPDATE.
+    const [{ data: deviceAfter, error: deviceAfterError }, { data: profileAfter, error: profileAfterError }] =
+      await Promise.all([
+        supabaseAdmin.from("devices").select("status").eq("id", deviceId).maybeSingle(),
+        supabaseAdmin.from("connection_profiles").select("enabled").eq("id", profileId).maybeSingle(),
+      ]);
+    if (deviceAfterError) throw new Error(`devices re-check failed: ${deviceAfterError.message}`);
+    if (profileAfterError) throw new Error(`connection_profiles re-check failed: ${profileAfterError.message}`);
+
+    if (deviceAfter?.status === "REVOKED" || !profileAfter?.enabled) {
+      const { error: revertError } = await supabaseAdmin
+        .from("device_profile_assignments")
+        .delete()
+        .eq("device_id", deviceId)
+        .eq("profile_id", profileId);
+      if (revertError) {
+        console.error(`account/devices/:id/assignment: revert failed: ${revertError.message}`);
+      }
+      return jsonResponse(
+        { error: "The device or profile changed while assigning — reload and retry." },
+        409
+      );
     }
 
     return jsonResponse({ ok: true, deviceId, profileId });
