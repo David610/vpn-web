@@ -8,6 +8,16 @@ import { getAccountForUser } from "../../lib/accounts.js";
  *
  * Read-only, so this uses requireUser() rather than requireRecentUser() —
  * consistent with GET /api/account and other roster-listing endpoints.
+ *
+ * Deliberately carries no per-device traffic/usage figures (Phase 11
+ * feasibility spike, see docs/PHASE_11_STATS_FEASIBILITY.md and
+ * singbox-vpn's docs/TRAFFIC_ACCOUNTING.md): the official sing-box 1.14.1
+ * build has no reliable per-user attribution, so `nodes` traffic totals
+ * (functions/api/admin/nodes.js) are the only accounting this platform can
+ * stand behind, and they are per-node, not per-device. Do not add a
+ * `traffic`/`usage`/`bytes*` field to this response by reusing or dividing
+ * up node-level totals — that would misattribute one user's bytes to
+ * another's device.
  */
 export async function onRequestGet({ env, request }) {
   const supabaseAdmin = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
