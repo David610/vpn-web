@@ -13,15 +13,20 @@
 export const INCLUDED_SEATS = 3;
 
 /**
- * Extra seats are sold in packs, not one at a time — a pack is the same
- * size as the included base allotment, so total capacity is always
- * `INCLUDED_SEATS * (1 + pack_quantity)`. `subscriptions.extra_seats`
- * remains the source-of-truth mirror of Stripe's seat-item quantity, in
- * seats (not packs); this constant only converts between the two at the
- * edges — the purchase API's request/response shape and pack-quantity-
- * shaped error messages.
+ * Extra seats are sold in packs, not one at a time. `subscriptions.
+ * extra_seats` remains the source-of-truth mirror of Stripe's seat-item
+ * quantity, in seats (not packs); this constant only converts between the
+ * two at the edges — the purchase API's request/response shape and
+ * pack-quantity-shaped error messages.
+ *
+ * Deliberately its own literal, not `= INCLUDED_SEATS`: the two happen to
+ * share the value 3 today (per the fleet platform plan's target model,
+ * `seat_capacity = INCLUDED_SEATS * (1 + pack_quantity)`), but they are
+ * billed as separate Stripe prices and are conceptually independent knobs
+ * — changing the base plan's included-seat count must not silently change
+ * what a seat pack contains, and vice versa.
  */
-export const SEAT_PACK_SIZE = INCLUDED_SEATS;
+export const SEAT_PACK_SIZE = 3;
 
 /**
  * How many whole extra packs `extraSeats` represents. Rounds up so a

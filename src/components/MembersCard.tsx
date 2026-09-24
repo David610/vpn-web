@@ -148,8 +148,9 @@ export function MembersCard({
         return;
       }
       if (!res.ok) throw new Error(data.error || "Could not change your seats.");
+      const currentPackSize = account.seats.packSize ?? SEAT_PACK_SIZE;
       const currentPacks =
-        account.seats.packQuantity ?? Math.ceil(account.seats.extra / SEAT_PACK_SIZE);
+        account.seats.packQuantity ?? Math.ceil(account.seats.extra / currentPackSize);
       setNotice(
         nextPackQuantity > currentPacks
           ? "Seat pack added. Your next invoice is prorated."
@@ -238,6 +239,11 @@ export function MembersCard({
 
   const isOwner = account.role === "owner";
   const { seats } = account;
+  // Always prefer what the API just reported; the local SEAT_PACK_SIZE
+  // constant is a last-resort fallback only, never the primary source.
+  const effectivePackSize = seats.packSize ?? SEAT_PACK_SIZE;
+  const effectivePackQuantity =
+    seats.packQuantity ?? Math.ceil(seats.extra / effectivePackSize);
 
   return (
     <div className="dm-card" style={{ maxWidth: "26rem", marginTop: "var(--space-6)" }}>
@@ -390,12 +396,8 @@ export function MembersCard({
                 type="button"
                 className="btn btn-secondary"
                 disabled={busyId === "seats" || seats.extra === 0}
-                onClick={() =>
-                  changeSeatPacks(
-                    (seats.packQuantity ?? Math.ceil(seats.extra / SEAT_PACK_SIZE)) - 1
-                  )
-                }
-                aria-label={`Release a seat pack (${SEAT_PACK_SIZE} seats)`}
+                onClick={() => changeSeatPacks(effectivePackQuantity - 1)}
+                aria-label={`Release a seat pack (${effectivePackSize} seats)`}
               >
                 −
               </button>
@@ -403,12 +405,8 @@ export function MembersCard({
                 type="button"
                 className="btn btn-secondary"
                 disabled={busyId === "seats"}
-                onClick={() =>
-                  changeSeatPacks(
-                    (seats.packQuantity ?? Math.ceil(seats.extra / SEAT_PACK_SIZE)) + 1
-                  )
-                }
-                aria-label={`Add a seat pack (${SEAT_PACK_SIZE} seats)`}
+                onClick={() => changeSeatPacks(effectivePackQuantity + 1)}
+                aria-label={`Add a seat pack (${effectivePackSize} seats)`}
               >
                 +
               </button>
