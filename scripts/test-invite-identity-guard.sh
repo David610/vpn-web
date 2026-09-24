@@ -29,8 +29,15 @@ create table public.member_invites (
   accepted_by uuid
 );
 
-create role anon;
-create role authenticated;
+do $$
+begin
+  if not exists (select 1 from pg_roles where rolname = 'anon') then
+    create role anon;
+  end if;
+  if not exists (select 1 from pg_roles where rolname = 'authenticated') then
+    create role authenticated;
+  end if;
+end $$;
 SQL
 
 psql_db -f supabase/migrations/20260923200000_invite_identity_guard.sql
