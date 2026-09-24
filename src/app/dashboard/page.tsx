@@ -16,6 +16,10 @@ const UsageCard = dynamic(
   () => import("@/components/UsageCard").then((mod) => mod.UsageCard),
   { loading: () => null }
 );
+const DevicesCard = dynamic(
+  () => import("@/components/DevicesCard").then((mod) => mod.DevicesCard),
+  { loading: () => null }
+);
 const AccountActionsCard = dynamic(
   () => import("@/components/AccountActionsCard").then((mod) => mod.AccountActionsCard),
   { loading: () => null }
@@ -384,6 +388,7 @@ export default function DashboardPage() {
         {config.phase === "ready" && (
           <>
             <MembersCard session={session} initialAccount={config.account} />
+            <DevicesCard session={session} />
             <UsageCard session={session} />
             <AccountActionsCard
               session={session}
