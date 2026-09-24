@@ -64,7 +64,8 @@ describe("GET /api/account/devices", () => {
     expect(body.devices).toHaveLength(2);
     const dev1 = body.devices.find((d) => d.id === "dev-1");
     expect(dev1.assignment).toMatchObject({ profileId: "prof-1" });
-    expect(dev1.assignment.profile).toMatchObject({ name: "Fast" });
+    expect(dev1.assignment.profile).toMatchObject({ name: "Fast", routingMode: "AUTO" });
+    expect(dev1.assignment.profile.routing_mode).toBeUndefined();
     const dev2 = body.devices.find((d) => d.id === "dev-2");
     expect(dev2.assignment).toBeNull();
   });

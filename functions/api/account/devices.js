@@ -54,14 +54,27 @@ export async function onRequestGet({ env, request }) {
       }
 
       assignmentsByDevice = new Map(
-        (assignments ?? []).map((a) => [
-          a.device_id,
-          {
-            profileId: a.profile_id,
-            assignedAt: a.assigned_at,
-            profile: profilesById.get(a.profile_id) ?? null,
-          },
-        ])
+        (assignments ?? []).map((a) => {
+          const profile = profilesById.get(a.profile_id) ?? null;
+          return [
+            a.device_id,
+            {
+              profileId: a.profile_id,
+              assignedAt: a.assigned_at,
+              // camelCase to match GET /api/account/connection-profiles's
+              // shape — DevicesCard's Profile type expects routingMode, not
+              // the raw column name.
+              profile: profile
+                ? {
+                    id: profile.id,
+                    name: profile.name,
+                    enabled: profile.enabled,
+                    routingMode: profile.routing_mode,
+                  }
+                : null,
+            },
+          ];
+        })
       );
     }
 
