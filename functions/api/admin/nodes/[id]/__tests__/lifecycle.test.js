@@ -1,0 +1,104 @@
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+const getClaims = vi.fn();
+const adminMaybeSingle = vi.fn();
+const nodeMaybeSingle = vi.fn();
+const nodeUpdateEq = vi.fn();
+const nodeUpdate = vi.fn(() => ({ eq: nodeUpdateEq }));
+const auditInsert = vi.fn();
+
+vi.mock("@supabase/supabase-js", () => ({
+  createClient: vi.fn(() => ({
+    auth: { getClaims },
+    from: vi.fn((table) => {
+      if (table === "admin_users") {
+        return { select: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(), maybeSingle: adminMaybeSingle };
+      }
+      if (table === "nodes") {
+        return {
+          select: vi.fn().mockReturnThis(),
+          eq: vi.fn().mockReturnThis(),
+          maybeSingle: nodeMaybeSingle,
+          update: nodeUpdate,
+        };
+      }
+      if (table === "admin_audit_log") return { insert: auditInsert };
+      throw new Error(`unexpected table ${table}`);
+    }),
+  })),
+}));
+
+const { onRequestPatch } = await import("../lifecycle.js");
+const env = { SUPABASE_URL: "https://supabase.test", SUPABASE_SERVICE_ROLE_KEY: "key" };
+
+function makeRequest(body) {
+  return new Request("https://example.test/api/admin/nodes/node-1/lifecycle", {
+    method: "PATCH",
+    headers: { Authorization: "Bearer good", "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+beforeEach(() => {
+  getClaims.mockReset().mockResolvedValue({ data: { claims: { sub: "admin-1", aal: "aal2" } }, error: null });
+  adminMaybeSingle.mockReset().mockResolvedValue({ data: { role: "owner" }, error: null });
+  nodeMaybeSingle.mockReset().mockResolvedValue({ data: { node_id: "node-1", lifecycle_state: "READY" }, error: null });
+  nodeUpdateEq.mockReset().mockResolvedValue({ error: null });
+  nodeUpdate.mockClear();
+  auditInsert.mockReset().mockResolvedValue({ error: null });
+});
+
+describe("PATCH /api/admin/nodes/:id/lifecycle", () => {
+  it("returns 400 for an unknown state", async () => {
+    const res = await onRequestPatch({ env, request: makeRequest({ state: "BOGUS" }), params: { id: "node-1" } });
+    expect(res.status).toBe(400);
+    expect(nodeUpdate).not.toHaveBeenCalled();
+  });
+
+  it("returns 403 for a readonly admin and does not mutate the node", async () => {
+    adminMaybeSingle.mockResolvedValue({ data: { role: "readonly" }, error: null });
+    const res = await onRequestPatch({ env, request: makeRequest({ state: "DRAINING" }), params: { id: "node-1" } });
+    expect(res.status).toBe(403);
+    expect(nodeUpdate).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 when the node does not exist", async () => {
+    nodeMaybeSingle.mockResolvedValue({ data: null, error: null });
+    const res = await onRequestPatch({ env, request: makeRequest({ state: "DRAINING" }), params: { id: "missing" } });
+    expect(res.status).toBe(404);
+  });
+
+  it("returns 409 and does not mutate the node for a disallowed transition", async () => {
+    nodeMaybeSingle.mockResolvedValue({ data: { node_id: "node-1", lifecycle_state: "RETIRED" }, error: null });
+    const res = await onRequestPatch({ env, request: makeRequest({ state: "READY" }), params: { id: "node-1" } });
+    expect(res.status).toBe(409);
+    expect(nodeUpdate).not.toHaveBeenCalled();
+    expect(auditInsert).not.toHaveBeenCalled();
+  });
+
+  it("applies an allowed transition and writes an audit row with from/to", async () => {
+    const res = await onRequestPatch({ env, request: makeRequest({ state: "DRAINING" }), params: { id: "node-1" } });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toEqual({ ok: true, lifecycleState: "DRAINING" });
+    expect(nodeUpdate).toHaveBeenCalledWith(expect.objectContaining({ lifecycle_state: "DRAINING" }));
+    expect(nodeUpdate.mock.calls[0][0]).not.toHaveProperty("retired_at");
+    expect(auditInsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "admin.node_lifecycle_transition",
+        target_type: "node",
+        target_id: "node-1",
+        metadata: { from: "READY", to: "DRAINING" },
+      })
+    );
+  });
+
+  it("stamps retired_at only when transitioning to RETIRED", async () => {
+    nodeMaybeSingle.mockResolvedValue({ data: { node_id: "node-1", lifecycle_state: "DRAINING" }, error: null });
+    const res = await onRequestPatch({ env, request: makeRequest({ state: "RETIRED" }), params: { id: "node-1" } });
+    expect(res.status).toBe(200);
+    expect(nodeUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ lifecycle_state: "RETIRED", retired_at: expect.any(String) })
+    );
+  });
+});

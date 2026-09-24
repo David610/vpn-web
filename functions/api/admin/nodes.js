@@ -36,7 +36,7 @@ export async function onRequestGet({ env, request }) {
       supabaseAdmin
         .from("nodes")
         .select(
-          "node_id, last_seen_at, revoked_at, telemetry_at, agent_version, vpn_version, singbox_version, uptime_seconds, cpu_percent, memory_percent, disk_percent, network_rx_bps, network_tx_bps, configured_users, active_users_recent"
+          "node_id, last_seen_at, revoked_at, telemetry_at, agent_version, vpn_version, singbox_version, uptime_seconds, cpu_percent, memory_percent, disk_percent, network_rx_bps, network_tx_bps, configured_users, active_users_recent, role, lifecycle_state, provider, asn, failure_domain, capacity_mbps, max_sessions, desired_revision, observed_revision, retired_at, locations(display_name, country_code)"
         ),
       supabaseAdmin
         .from("node_traffic_samples")
@@ -85,6 +85,24 @@ export async function onRequestGet({ env, request }) {
         configuredUsers: node.configured_users == null ? null : Number(node.configured_users),
         activeUsersRecent:
           node.active_users_recent == null ? null : Number(node.active_users_recent),
+
+        // Fleet registry metadata (spec §7/§54 Phase 2). lifecycleState is
+        // the desired-state side of the reconciliation model (spec §8):
+        // what the control plane intends this node to be doing, set by an
+        // admin lifecycle-transition action, not by the heartbeat above.
+        role: node.role,
+        lifecycleState: node.lifecycle_state,
+        location: node.locations
+          ? { displayName: node.locations.display_name, countryCode: node.locations.country_code }
+          : null,
+        provider: node.provider ?? null,
+        asn: node.asn == null ? null : Number(node.asn),
+        failureDomain: node.failure_domain ?? null,
+        capacityMbps: node.capacity_mbps == null ? null : Number(node.capacity_mbps),
+        maxSessions: node.max_sessions == null ? null : Number(node.max_sessions),
+        desiredRevision: Number(node.desired_revision),
+        observedRevision: Number(node.observed_revision),
+        retiredAt: node.retired_at ?? null,
 
         // VPN data-plane totals from sing-box's Clash API. These are per-node
         // because the official sing-box build exposes no reliable per-user
