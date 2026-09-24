@@ -15,6 +15,8 @@ type Traffic = {
   todayBytesDown: number;
 };
 
+type Location = { displayName: string; countryCode: string };
+
 type Node = {
   nodeId: string;
   status: string;
@@ -31,8 +33,33 @@ type Node = {
   networkTxBps: number | null;
   configuredUsers: number | null;
   activeUsersRecent: number | null;
+  role: string;
+  lifecycleState: string;
+  location: Location | null;
+  desiredRevision: number;
+  observedRevision: number;
   traffic: Traffic;
 };
+
+// Kept in sync with functions/lib/node-lifecycle.js by hand rather than
+// shared across the JS/TS boundary — deliberately not re-deriving the full
+// transition graph client-side (spec §57: no duplicated business logic).
+// The backend is the sole authority on which transitions are legal; the
+// dropdown here just needs "everything except the current state" and the
+// server rejects an illegal choice with 409, surfaced as an inline error.
+const LIFECYCLE_STATES = [
+  "PROVISIONING",
+  "WARMING_UP",
+  "READY",
+  "DEGRADED",
+  "DRAINING",
+  "MAINTENANCE",
+  "FAILED",
+  "QUARANTINED",
+  "RETIRED",
+];
+
+const DANGEROUS_TARGETS = new Set(["QUARANTINED", "RETIRED"]);
 
 const REFRESH_MS = 10_000;
 
@@ -67,6 +94,12 @@ export default function AdminNodesPage() {
   const { session } = useAdminSession();
   const [nodes, setNodes] = useState<Node[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [transitionError, setTransitionError] = useState<string | null>(null);
+  // A Set, not a single id: a global "pending" value would clear the
+  // disabled state on node A's in-flight transition the moment an admin
+  // starts a transition on node B, letting A's dropdown be used again
+  // while its first request is still outstanding.
+  const [pendingNodeIds, setPendingNodeIds] = useState<Set<string>>(new Set());
 
   const load = useCallback(async () => {
     if (!session) return;
@@ -81,6 +114,37 @@ export default function AdminNodesPage() {
       setError(err instanceof Error ? err.message : "Could not load nodes.");
     }
   }, [session]);
+
+  const transition = useCallback(
+    async (nodeId: string, state: string) => {
+      if (!session) return;
+      if (
+        DANGEROUS_TARGETS.has(state) &&
+        !window.confirm(`Move ${nodeId} to ${state}? This stops it from receiving new assignments.`)
+      ) {
+        return;
+      }
+      setPendingNodeIds((prev) => new Set(prev).add(nodeId));
+      setTransitionError(null);
+      try {
+        await adminFetch(`/api/admin/nodes/${encodeURIComponent(nodeId)}/lifecycle`, session.access_token, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ state }),
+        });
+        await load();
+      } catch (err) {
+        setTransitionError(err instanceof Error ? err.message : "Transition failed.");
+      } finally {
+        setPendingNodeIds((prev) => {
+          const next = new Set(prev);
+          next.delete(nodeId);
+          return next;
+        });
+      }
+    },
+    [session, load]
+  );
 
   useEffect(() => {
     if (!session) return;
@@ -105,6 +169,8 @@ export default function AdminNodesPage() {
         </span>
       </div>
 
+      {transitionError && <p className="mb-2 text-red-600">{transitionError}</p>}
+
       {error ? (
         <p className="text-red-600">{error}</p>
       ) : !nodes ? (
@@ -116,6 +182,9 @@ export default function AdminNodesPage() {
               <tr className="border-b text-gray-500">
                 <th className="py-2">Node</th>
                 <th>Status</th>
+                <th>Lifecycle</th>
+                <th>Location / Role</th>
+                <th>Revision</th>
                 <th className="text-right">VPN ↓ / ↑</th>
                 <th className="text-right">Conns</th>
                 <th className="text-right">Today</th>
@@ -132,6 +201,34 @@ export default function AdminNodesPage() {
                 <tr key={node.nodeId} className="border-b align-top">
                   <td className="py-2 font-medium">{node.nodeId}</td>
                   <td><StatusBadge status={node.status} /></td>
+                  <td>
+                    <StatusBadge status={node.lifecycleState} />
+                    <select
+                      className="mt-1 block rounded border text-xs disabled:opacity-50"
+                      value=""
+                      disabled={pendingNodeIds.has(node.nodeId)}
+                      onChange={(e) => {
+                        const target = e.target.value;
+                        e.target.value = "";
+                        if (target) transition(node.nodeId, target);
+                      }}
+                    >
+                      <option value="">Transition…</option>
+                      {LIFECYCLE_STATES.filter((s) => s !== node.lifecycleState).map((s) => (
+                        <option key={s} value={s}>
+                          {s}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
+                  <td className="text-xs text-gray-500">
+                    {node.location ? `${node.location.displayName} (${node.location.countryCode})` : "unassigned"}
+                    <br />
+                    {node.role}
+                  </td>
+                  <td className="text-xs tabular-nums text-gray-500">
+                    {node.observedRevision}/{node.desiredRevision}
+                  </td>
                   <td className="text-right tabular-nums">
                     {formatBits(node.traffic.bpsDown)} / {formatBits(node.traffic.bpsUp)}
                   </td>
