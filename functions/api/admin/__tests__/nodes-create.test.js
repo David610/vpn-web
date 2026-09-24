@@ -17,6 +17,15 @@ vi.mock("@supabase/supabase-js", () => ({
   })),
 }));
 
+const createInstance = vi.fn();
+const destroyInstance = vi.fn();
+vi.mock("../../../lib/provider-adapter.js", () => ({
+  getProviderAdapter: vi.fn((provider) => {
+    if (provider !== "hetzner") throw new Error(`Unknown or unsupported provider: ${provider}`);
+    return { name: "hetzner", createInstance, destroyInstance };
+  }),
+}));
+
 const { onRequestPost } = await import("../nodes.js");
 const env = { SUPABASE_URL: "https://supabase.test", SUPABASE_SERVICE_ROLE_KEY: "key" };
 
@@ -33,6 +42,8 @@ beforeEach(() => {
   adminMaybeSingle.mockReset().mockResolvedValue({ data: { role: "owner" }, error: null });
   nodesInsert.mockReset().mockResolvedValue({ error: null });
   auditInsert.mockReset().mockResolvedValue({ error: null });
+  createInstance.mockReset();
+  destroyInstance.mockReset().mockResolvedValue(undefined);
 });
 
 describe("POST /api/admin/nodes", () => {
@@ -105,5 +116,74 @@ describe("POST /api/admin/nodes", () => {
   it("defaults role to EXIT and locationId to null when omitted", async () => {
     await onRequestPost({ env, request: makeRequest({ nodeId: "de-fra-4" }) });
     expect(nodesInsert.mock.calls[0][0]).toMatchObject({ role: "EXIT", location_id: null });
+  });
+
+  it("returns 400 when provider is set without a region", async () => {
+    const res = await onRequestPost({ env, request: makeRequest({ nodeId: "de-fra-3", provider: "hetzner" }) });
+    expect(res.status).toBe(400);
+    expect(createInstance).not.toHaveBeenCalled();
+    expect(nodesInsert).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 for an unsupported provider", async () => {
+    const res = await onRequestPost({
+      env,
+      request: makeRequest({ nodeId: "de-fra-3", provider: "aws", region: "us-east-1" }),
+    });
+    expect(res.status).toBe(400);
+    expect(nodesInsert).not.toHaveBeenCalled();
+  });
+
+  it("calls the provider adapter, embeds the enrollment token, and stores the returned instance/ip", async () => {
+    createInstance.mockResolvedValue({
+      providerInstanceId: "12345",
+      ipAddress: "203.0.113.9",
+      region: "fsn1",
+    });
+    const res = await onRequestPost({
+      env,
+      request: makeRequest({ nodeId: "de-fra-3", provider: "hetzner", region: "fsn1" }),
+    });
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body.ipAddress).toBe("203.0.113.9");
+    expect(body.providerInstanceId).toBe("12345");
+
+    const createArgs = createInstance.mock.calls[0][0];
+    expect(createArgs.nodeId).toBe("de-fra-3");
+    expect(createArgs.region).toBe("fsn1");
+    expect(createArgs.enrollmentToken).toBe(body.enrollmentToken);
+
+    const insertedRow = nodesInsert.mock.calls[0][0];
+    expect(insertedRow).toMatchObject({
+      provider: "hetzner",
+      provider_instance_id: "12345",
+      ip_address: "203.0.113.9",
+    });
+  });
+
+  it("returns 502 and does not insert a node when the provider call fails", async () => {
+    createInstance.mockRejectedValue(new Error("Hetzner API returned 403"));
+    const res = await onRequestPost({
+      env,
+      request: makeRequest({ nodeId: "de-fra-3", provider: "hetzner", region: "fsn1" }),
+    });
+    expect(res.status).toBe(502);
+    expect(nodesInsert).not.toHaveBeenCalled();
+  });
+
+  it("destroys the just-created provider instance if the subsequent DB insert fails", async () => {
+    createInstance.mockResolvedValue({
+      providerInstanceId: "12345",
+      ipAddress: "203.0.113.9",
+      region: "fsn1",
+    });
+    nodesInsert.mockResolvedValue({ error: { code: "23505", message: "duplicate key" } });
+    const res = await onRequestPost({
+      env,
+      request: makeRequest({ nodeId: "de-fra-3", provider: "hetzner", region: "fsn1" }),
+    });
+    expect(res.status).toBe(409);
+    expect(destroyInstance).toHaveBeenCalledWith({ providerInstanceId: "12345" });
   });
 });
