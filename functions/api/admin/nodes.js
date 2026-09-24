@@ -3,6 +3,7 @@ import { requireAdmin } from "../../lib/admin-auth.js";
 import { writeAdminAudit } from "../../lib/admin-audit.js";
 import { sha256Hex } from "../../lib/crypto.js";
 import { generateHexSecret, ENROLLMENT_TOKEN_TTL_MS } from "../../lib/node-enrollment.js";
+import { getProviderAdapter } from "../../lib/provider-adapter.js";
 
 function jsonResponse(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -177,11 +178,43 @@ export async function onRequestPost({ env, request }) {
   if (locationId !== null && !UUID_PATTERN.test(locationId)) {
     return jsonResponse({ error: "locationId must be a UUID" }, 400);
   }
+  // `provider` opts into automated provisioning (spec 54 Phase 4). Omitting
+  // it keeps today's manual flow: an admin stands up the VPS by hand and
+  // pastes the returned enrollmentToken into its bootstrap themselves.
+  // `region` is the provider's own datacenter identifier (e.g. Hetzner's
+  // "fsn1"), a different concept from locationId's customer-facing
+  // locations row -- see provider-adapter.js's interface comment.
+  const provider = typeof body?.provider === "string" && body.provider ? body.provider : null;
+  const region = typeof body?.region === "string" && body.region ? body.region : null;
+  if (provider && !region) {
+    return jsonResponse({ error: "region is required when provider is set" }, 400);
+  }
 
   try {
     const enrollmentToken = generateHexSecret();
     const enrollmentTokenHash = await sha256Hex(enrollmentToken);
     const expiresAt = new Date(Date.now() + ENROLLMENT_TOKEN_TTL_MS).toISOString();
+
+    let providerInstanceId = null;
+    let ipAddress = null;
+    let resolvedRegion = null;
+    if (provider) {
+      let adapter;
+      try {
+        adapter = getProviderAdapter(provider, env);
+      } catch {
+        return jsonResponse({ error: `Unsupported provider: ${provider}` }, 400);
+      }
+      try {
+        const instance = await adapter.createInstance({ nodeId, region, enrollmentToken });
+        providerInstanceId = instance.providerInstanceId;
+        ipAddress = instance.ipAddress;
+        resolvedRegion = instance.region ?? region;
+      } catch (err) {
+        console.error("admin/nodes POST: provider createInstance failed:", err.message);
+        return jsonResponse({ error: "Provider request failed" }, 502);
+      }
+    }
 
     const { error: insertError } = await supabaseAdmin.from("nodes").insert({
       node_id: nodeId,
@@ -190,8 +223,26 @@ export async function onRequestPost({ env, request }) {
       lifecycle_state: "PROVISIONING",
       enrollment_token_hash: enrollmentTokenHash,
       enrollment_token_expires_at: expiresAt,
+      provider,
+      provider_instance_id: providerInstanceId,
+      ip_address: ipAddress,
     });
     if (insertError) {
+      // The VPS itself, if the provider branch above already created one,
+      // now exists with nothing tracking it -- tear it down rather than
+      // leaking a running, billed instance nobody can find in the fleet
+      // registry.
+      if (providerInstanceId) {
+        try {
+          const adapter = getProviderAdapter(provider, env);
+          await adapter.destroyInstance({ providerInstanceId });
+        } catch (cleanupErr) {
+          console.error(
+            "admin/nodes POST: failed to clean up orphaned provider instance:",
+            cleanupErr.message
+          );
+        }
+      }
       if (insertError.code === "23505") {
         return jsonResponse({ error: "A node with this id already exists" }, 409);
       }
@@ -206,10 +257,19 @@ export async function onRequestPost({ env, request }) {
       action: "admin.create_pending_node",
       targetType: "node",
       targetId: nodeId,
-      metadata: { role, location_id: locationId },
+      metadata: {
+        role,
+        location_id: locationId,
+        provider,
+        provider_instance_id: providerInstanceId,
+        region: resolvedRegion,
+      },
     });
 
-    return jsonResponse({ ok: true, nodeId, enrollmentToken, expiresAt }, 201);
+    return jsonResponse(
+      { ok: true, nodeId, enrollmentToken, expiresAt, ipAddress, providerInstanceId },
+      201
+    );
   } catch (err) {
     console.error("admin/nodes POST: unexpected error:", err.message);
     return jsonResponse({ error: "Internal error" }, 500);
