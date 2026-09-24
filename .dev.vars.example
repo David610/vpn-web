@@ -26,3 +26,8 @@ RESEND_API_KEY=<paste from Resend dashboard>
 # onboarding@resend.dev works without a verified domain, for local/test
 # sends only — replace with a real from-address once a domain exists.
 ALERT_FROM_EMAIL=onboarding@resend.dev
+
+# Telegram identity linking + Mini App (docs/FLEET_PLATFORM_PLAN.md Phase 13).
+# HMAC secret for verifying Mini App initData — see functions/lib/telegram-init-data.js.
+# Never commit a real value; without it every Telegram-authenticated request fails closed.
+TELEGRAM_BOT_TOKEN=123456:test-placeholder-not-a-real-bot-token
