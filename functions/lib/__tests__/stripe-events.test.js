@@ -261,10 +261,12 @@ describe("handleSubscriptionUpdated", () => {
     expect(jobs.map((j) => j.payload.vpn_user_id).sort()).toEqual(["vpn-1", "vpn-2"]);
   });
 
-  it("mirrors the per-seat item quantity into extra_seats", async () => {
-    // Stripe owns the seat count; this column is only ever a mirror. Seats
-    // bought through our API and seats adjusted in the Stripe dashboard both
-    // arrive as this event, so syncing here covers both.
+  it("mirrors the seat-pack item quantity into extra_seats, converted to seats", async () => {
+    // Stripe owns the pack count; extra_seats is only ever a mirror,
+    // expressed in seats (packs * SEAT_PACK_SIZE). Packs bought through our
+    // API and packs adjusted directly in the Stripe dashboard both arrive as
+    // this event, so syncing here covers both — this is the mechanism that
+    // reconciles a dashboard-initiated seat-pack change into the DB.
     const db = makeFakeSupabase(seedAccount({}));
 
     await handleSubscriptionUpdated(
@@ -284,7 +286,56 @@ describe("handleSubscriptionUpdated", () => {
       "price_seat"
     );
 
-    expect(db._tables.subscriptions[0].extra_seats).toBe(4);
+    // 4 packs * SEAT_PACK_SIZE (3) = 12 extra seats.
+    expect(db._tables.subscriptions[0].extra_seats).toBe(12);
+  });
+
+  it("converges extra_seats from a dashboard-initiated pack downgrade without evicting anyone", async () => {
+    // No silent eviction: a seat-pack quantity reduced directly in the
+    // Stripe dashboard (not through our purchase API's own guard) still
+    // must not cause this webhook to touch account_members or
+    // vpn_accounts. Only a canceled/unpaid subscription status enqueues
+    // DISABLE_USER jobs — a live subscription's seat-pack change never
+    // does, regardless of how far below current membership it drops.
+    const db = makeFakeSupabase(
+      seedAccount({
+        members: [
+          { userId: "user-1", role: "owner" },
+          { userId: "user-2", role: "member" },
+          { userId: "user-3", role: "member" },
+          { userId: "user-4", role: "member" },
+          { userId: "user-5", role: "member" },
+        ],
+        provisioned: [
+          { userId: "user-1", vpnUserId: "vpn-1" },
+          { userId: "user-2", vpnUserId: "vpn-2" },
+          { userId: "user-3", vpnUserId: "vpn-3" },
+          { userId: "user-4", vpnUserId: "vpn-4" },
+          { userId: "user-5", vpnUserId: "vpn-5" },
+        ],
+      })
+    );
+    const vpnAccountsBefore = JSON.stringify(db._tables.vpn_accounts);
+    const membersBefore = JSON.stringify(db._tables.account_members);
+
+    // 5 members need at least 2 extra seats (INCLUDED_SEATS=3), but the
+    // dashboard drops the seat-pack item to 0 — well below what's in use.
+    await handleSubscriptionUpdated(
+      db,
+      {
+        id: "sub_123",
+        status: "active",
+        cancel_at_period_end: false,
+        current_period_end: PERIOD_END_UNIX,
+        items: { data: [{ id: "si_base", price: { id: "price_base" }, quantity: 1 }] },
+      },
+      "price_seat"
+    );
+
+    expect(db._tables.subscriptions[0].extra_seats).toBe(0);
+    expect(jobsOf(db)).toHaveLength(0);
+    expect(db._tables.vpn_accounts).toEqual(JSON.parse(vpnAccountsBefore));
+    expect(db._tables.account_members).toEqual(JSON.parse(membersBefore));
   });
 
   it("records zero extra seats when the seat item is gone", async () => {

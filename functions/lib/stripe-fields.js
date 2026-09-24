@@ -12,6 +12,8 @@
 // handler (it silently nulled every renewal's expiry once tested against a
 // real, current-API-version payload).
 
+import { SEAT_PACK_SIZE } from "./seat-constants.js";
+
 /**
  * @param {object} subscription - a Stripe Subscription object
  * @returns {number | null} unix seconds, or null if genuinely absent
@@ -44,17 +46,18 @@ export function getInvoiceSubscriptionId(invoice) {
 }
 
 /**
- * The per-seat line item on a subscription, if one has been added.
+ * The per-seat-pack line item on a subscription, if one has been added.
  *
  * A subscription carries the flat base price (which includes the first
  * INCLUDED_SEATS) and, once the owner buys extra capacity, a second licensed
- * item whose quantity is the number of seats beyond that. Matching on the
- * configured price id rather than on position is what keeps this from
- * mistaking the base item for the seat item when Stripe reorders them.
+ * item priced per pack of SEAT_PACK_SIZE seats — its quantity is the number
+ * of extra packs, not the number of extra seats. Matching on the configured
+ * price id rather than on position is what keeps this from mistaking the
+ * base item for the seat-pack item when Stripe reorders them.
  *
  * @param {object} subscription - a Stripe Subscription object
  * @param {string | undefined} seatPriceId - env.STRIPE_SEAT_PRICE_ID
- * @returns {object | null} the subscription item, or null if no seats
+ * @returns {object | null} the subscription item, or null if no seat packs
  */
 export function getSeatSubscriptionItem(subscription, seatPriceId) {
   if (!seatPriceId) return null;
@@ -69,15 +72,26 @@ export function getSeatSubscriptionItem(subscription, seatPriceId) {
 }
 
 /**
- * How many seats beyond the included ones a subscription is paying for.
- * Absent a seat item — the common case — that is zero, not unknown.
+ * How many extra seat packs a subscription is paying for. Absent a seat
+ * item — the common case — that is zero, not unknown.
+ *
+ * @returns {number}
+ */
+export function getSeatPackQuantity(subscription, seatPriceId) {
+  const item = getSeatSubscriptionItem(subscription, seatPriceId);
+  const quantity = item?.quantity;
+  return Number.isInteger(quantity) && quantity > 0 ? quantity : 0;
+}
+
+/**
+ * How many seats beyond the included ones a subscription is paying for —
+ * the seat-pack item's quantity converted from packs to seats. Absent a
+ * seat item that is zero, not unknown.
  *
  * @returns {number}
  */
 export function getExtraSeatCount(subscription, seatPriceId) {
-  const item = getSeatSubscriptionItem(subscription, seatPriceId);
-  const quantity = item?.quantity;
-  return Number.isInteger(quantity) && quantity > 0 ? quantity : 0;
+  return getSeatPackQuantity(subscription, seatPriceId) * SEAT_PACK_SIZE;
 }
 
 /**

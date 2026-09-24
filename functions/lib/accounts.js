@@ -9,8 +9,15 @@
  * Both directions live here so the join is written once.
  */
 
-/** Seats included in the base price before any per-seat item is billed. */
-export const INCLUDED_SEATS = 3;
+// INCLUDED_SEATS, SEAT_PACK_SIZE and packQuantityFromExtraSeats live in
+// seat-constants.js (not here) specifically so they have zero dependencies
+// and can be imported directly by client code (src/components/MembersCard
+// .tsx) without pulling in this module's Supabase-touching functions.
+// Importing (not just re-exporting) them here keeps them usable by name
+// below, and re-exporting keeps every existing server-side import of these
+// three names from "./accounts.js" working unchanged.
+import { INCLUDED_SEATS, SEAT_PACK_SIZE, packQuantityFromExtraSeats } from "./seat-constants.js";
+export { INCLUDED_SEATS, SEAT_PACK_SIZE, packQuantityFromExtraSeats };
 
 /**
  * The account a user belongs to. account_members.user_id is unique, so this

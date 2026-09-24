@@ -1,5 +1,7 @@
 import {
   INCLUDED_SEATS,
+  SEAT_PACK_SIZE,
+  packQuantityFromExtraSeats,
   resolveEffectiveEntitlement,
 } from "./accounts.js";
 
@@ -40,6 +42,8 @@ export async function loadCustomerDashboardState(supabaseAdmin, user) {
       limit: seatLimit,
       used: seatsUsed,
       available: Math.max(0, seatLimit - seatsUsed),
+      packSize: SEAT_PACK_SIZE,
+      packQuantity: packQuantityFromExtraSeats(entitlement?.extraSeats ?? 0),
     },
     members: members
       .map((m) => ({

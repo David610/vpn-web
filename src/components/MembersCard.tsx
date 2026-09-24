@@ -22,10 +22,28 @@ export type AccountInfo = {
   accountId: string;
   role: string;
   subscription: { status: string; source?: "stripe" | "admin_grant" } | null;
-  seats: { included: number; extra: number; limit: number; used: number; available: number };
+  seats: {
+    included: number;
+    extra: number;
+    limit: number;
+    used: number;
+    available: number;
+    packSize?: number;
+    packQuantity?: number;
+  };
   members: Member[];
   invites: Invite[];
 };
+
+// Kept in sync with SEAT_PACK_SIZE in functions/lib/seat-constants.js by
+// hand rather than shared across the JS/TS boundary (same reasoning as
+// LIFECYCLE_STATES in src/app/admin/nodes/page.tsx: this repo's src/ and
+// functions/ trees are separate build/runtime targets, so nothing here
+// imports from functions/lib). The API always includes `seats.packSize` in
+// every response, which is authoritative and used in preference to this
+// constant everywhere below; this is purely the last-resort fallback for a
+// stale cached response that predates that field.
+const SEAT_PACK_SIZE = 3;
 
 const ROW: React.CSSProperties = {
   display: "flex",
@@ -107,7 +125,7 @@ export function MembersCard({
     }
   }
 
-  async function changeSeats(nextExtra: number) {
+  async function changeSeatPacks(nextPackQuantity: number) {
     if (!account) return;
     setActionError(null);
     setNotice(null);
@@ -121,7 +139,7 @@ export function MembersCard({
         },
         // Absolute, not a delta: a double-click sets the same total rather
         // than buying twice.
-        body: JSON.stringify({ quantity: nextExtra }),
+        body: JSON.stringify({ packQuantity: nextPackQuantity }),
       });
       const data = await res.json().catch(() => ({}));
       if (res.status === 403 && data.code === "reauth_required") {
@@ -129,10 +147,13 @@ export function MembersCard({
         return;
       }
       if (!res.ok) throw new Error(data.error || "Could not change your seats.");
+      const currentPackSize = account.seats.packSize ?? SEAT_PACK_SIZE;
+      const currentPacks =
+        account.seats.packQuantity ?? Math.ceil(account.seats.extra / currentPackSize);
       setNotice(
-        nextExtra > account.seats.extra
-          ? "Seat added. Your next invoice is prorated."
-          : "Seat released. Your next invoice is prorated."
+        nextPackQuantity > currentPacks
+          ? "Seat pack added. Your next invoice is prorated."
+          : "Seat pack released. Your next invoice is prorated."
       );
       await load();
     } catch (err) {
@@ -217,6 +238,11 @@ export function MembersCard({
 
   const isOwner = account.role === "owner";
   const { seats } = account;
+  // Always prefer what the API just reported; the local SEAT_PACK_SIZE
+  // constant is a last-resort fallback only, never the primary source.
+  const effectivePackSize = seats.packSize ?? SEAT_PACK_SIZE;
+  const effectivePackQuantity =
+    seats.packQuantity ?? Math.ceil(seats.extra / effectivePackSize);
 
   return (
     <div className="dm-card" style={{ maxWidth: "26rem", marginTop: "var(--space-6)" }}>
@@ -368,9 +394,9 @@ export function MembersCard({
               <button
                 type="button"
                 className="btn btn-secondary"
-                disabled={busyId === "seats" || seats.extra === 0}
-                onClick={() => changeSeats(seats.extra - 1)}
-                aria-label="Release a seat"
+                disabled={busyId === "seats" || effectivePackQuantity === 0}
+                onClick={() => changeSeatPacks(effectivePackQuantity - 1)}
+                aria-label={`Release a seat pack (${effectivePackSize} seats)`}
               >
                 −
               </button>
@@ -378,8 +404,8 @@ export function MembersCard({
                 type="button"
                 className="btn btn-secondary"
                 disabled={busyId === "seats"}
-                onClick={() => changeSeats(seats.extra + 1)}
-                aria-label="Add a seat"
+                onClick={() => changeSeatPacks(effectivePackQuantity + 1)}
+                aria-label={`Add a seat pack (${effectivePackSize} seats)`}
               >
                 +
               </button>

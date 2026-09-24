@@ -83,7 +83,15 @@ describe("GET /api/account", () => {
 
     expect(res.status).toBe(200);
     expect(body.role).toBe("owner");
-    expect(body.seats).toEqual({ included: 3, extra: 0, limit: 3, used: 1, available: 2 });
+    expect(body.seats).toEqual({
+      included: 3,
+      extra: 0,
+      limit: 3,
+      used: 1,
+      available: 2,
+      packSize: 3,
+      packQuantity: 0,
+    });
     expect(body.members).toHaveLength(1);
     expect(body.members[0]).toMatchObject({ userId: "user-1", role: "owner", isYou: true });
   });
