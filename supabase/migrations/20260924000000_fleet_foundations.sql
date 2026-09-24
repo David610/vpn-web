@@ -258,6 +258,41 @@ create table public.device_profile_assignments (
 create index device_profile_assignments_profile_id_idx
   on public.device_profile_assignments (profile_id);
 
+-- The device_id/profile_id foreign keys and the primary key on device_id
+-- enforce "each device has at most one assignment", but nothing stops a
+-- device belonging to one account from being assigned a profile that
+-- belongs to a different account — Postgres has no native cross-table
+-- CHECK for that. Enforce it the same way enforce_member_invite_identity
+-- (20260923200000_invite_identity_guard.sql) enforces its own cross-table
+-- identity rule: a BEFORE trigger, not application-code discipline alone.
+create function public.enforce_device_profile_assignment_account()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_device_account_id uuid;
+  v_profile_account_id uuid;
+begin
+  select account_id into v_device_account_id from public.devices where id = new.device_id;
+  select account_id into v_profile_account_id from public.connection_profiles where id = new.profile_id;
+
+  if v_device_account_id is distinct from v_profile_account_id then
+    raise exception 'device_profile_account_mismatch';
+  end if;
+
+  return new;
+end;
+$$;
+
+revoke execute on function public.enforce_device_profile_assignment_account()
+  from public, anon, authenticated;
+
+create trigger device_profile_assignments_account_guard
+  before insert or update of device_id, profile_id on public.device_profile_assignments
+  for each row execute function public.enforce_device_profile_assignment_account();
+
 alter table public.device_profile_assignments enable row level security;
 
 create policy "device_profile_assignments_select_own_account" on public.device_profile_assignments

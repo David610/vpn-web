@@ -202,6 +202,31 @@ begin
     when unique_violation then null;
   end;
 
+  -- ---- cross-account assignment is rejected ---------------------------------
+  declare
+    v_other_account_id uuid;
+    v_other_device_id uuid;
+  begin
+    insert into public.customer_accounts default values returning id into v_other_account_id;
+    insert into auth.users (id) values ('10000000-0000-4000-8000-000000000002');
+    insert into public.account_members (account_id, user_id, role)
+      values (v_other_account_id, '10000000-0000-4000-8000-000000000002', 'owner');
+    insert into public.devices (account_id, user_id, name)
+      values (v_other_account_id, '10000000-0000-4000-8000-000000000002', 'Other account device')
+      returning id into v_other_device_id;
+
+    begin
+      insert into public.device_profile_assignments (device_id, profile_id)
+      values (v_other_device_id, v_profile_id);
+      raise exception 'assigning another account''s device to this account''s profile was incorrectly allowed';
+    exception
+      when others then
+        if sqlerrm not like '%device_profile_account_mismatch%' then
+          raise;
+        end if;
+    end;
+  end;
+
   -- ---- allowed_paths distinct-hops check constraint -------------------------
   begin
     insert into public.allowed_paths (entry_location_id, exit_location_id)
