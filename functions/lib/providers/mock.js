@@ -8,18 +8,28 @@
 let counter = 0;
 
 export function createMockProvider() {
+  const byNodeId = new Map();
   return {
     name: "mock",
+    async findInstanceByNodeId(nodeId) {
+      return byNodeId.get(nodeId) ?? null;
+    },
     async createInstance({ nodeId, region }) {
       counter += 1;
-      return {
+      const instance = {
         providerInstanceId: `mock-${nodeId}-${counter}`,
         ipAddress: `203.0.113.${counter % 254 + 1}`,
+        ipv6Network: null,
         region: region ?? "mock-region",
+        status: "running",
       };
+      byNodeId.set(nodeId, instance);
+      return instance;
     },
-    async destroyInstance() {
-      // No state to tear down.
+    async destroyInstance({ providerInstanceId }) {
+      for (const [nodeId, instance] of byNodeId) {
+        if (instance.providerInstanceId === providerInstanceId) byNodeId.delete(nodeId);
+      }
     },
   };
 }
