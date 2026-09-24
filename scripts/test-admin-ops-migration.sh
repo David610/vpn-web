@@ -98,9 +98,18 @@ create table public.abuse_signals (
   flagged boolean not null
 );
 
-create role anon;
-create role authenticated;
-create role service_role;
+do $$
+begin
+  if not exists (select 1 from pg_roles where rolname = 'anon') then
+    create role anon;
+  end if;
+  if not exists (select 1 from pg_roles where rolname = 'authenticated') then
+    create role authenticated;
+  end if;
+  if not exists (select 1 from pg_roles where rolname = 'service_role') then
+    create role service_role;
+  end if;
+end $$;
 SQL
 
 psql_db -f supabase/migrations/20260923190000_admin_ops_scaling.sql

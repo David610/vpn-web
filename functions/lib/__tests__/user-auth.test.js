@@ -83,6 +83,21 @@ describe("customer auth helpers", () => {
     expect((await result.response.json()).code).toBe("reauth_required");
   });
 
+  it("does not treat an anonymous session as recent human authentication", async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const result = await requireRecentUser(
+      request(),
+      client({
+        sub: "user-1",
+        amr: [{ method: "anonymous", timestamp: now }],
+      })
+    );
+
+    expect(result.user).toBeNull();
+    expect(result.response.status).toBe(403);
+    expect((await result.response.json()).code).toBe("reauth_required");
+  });
+
   it("does not treat token refresh as human reauthentication", async () => {
     const now = Math.floor(Date.now() / 1000);
     const result = await requireRecentUser(
