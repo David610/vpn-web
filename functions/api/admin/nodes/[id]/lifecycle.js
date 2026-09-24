@@ -52,11 +52,29 @@ export async function onRequestPatch({ env, request, params }) {
     const update = { lifecycle_state: body.state };
     if (body.state === "RETIRED") update.retired_at = new Date().toISOString();
 
-    const { error: updateError } = await supabaseAdmin
+    // Guard the write on the lifecycle_state this request actually
+    // validated against, not just node_id: without it, two concurrent
+    // requests both reading READY (one going to QUARANTINED, one to
+    // DRAINING) can both pass canTransitionLifecycle and the second
+    // UPDATE silently overwrites the first's result — including undoing
+    // a just-applied QUARANTINED, which is supposed to be a one-way
+    // security containment (spec §45). If zero rows match, someone else's
+    // transition landed first; the client should re-read and retry
+    // rather than get a false "ok" for a write that never happened.
+    const { data: updated, error: updateError } = await supabaseAdmin
       .from("nodes")
       .update(update)
-      .eq("node_id", nodeId);
+      .eq("node_id", nodeId)
+      .eq("lifecycle_state", node.lifecycle_state)
+      .select("node_id")
+      .maybeSingle();
     if (updateError) throw new Error(`nodes update failed: ${updateError.message}`);
+    if (!updated) {
+      return jsonResponse(
+        { error: "Node lifecycle_state changed concurrently — reload and retry" },
+        409
+      );
+    }
 
     await writeAdminAudit(supabaseAdmin, {
       adminUserId: admin.userId,

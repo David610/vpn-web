@@ -95,7 +95,11 @@ export default function AdminNodesPage() {
   const [nodes, setNodes] = useState<Node[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [transitionError, setTransitionError] = useState<string | null>(null);
-  const [pendingNodeId, setPendingNodeId] = useState<string | null>(null);
+  // A Set, not a single id: a global "pending" value would clear the
+  // disabled state on node A's in-flight transition the moment an admin
+  // starts a transition on node B, letting A's dropdown be used again
+  // while its first request is still outstanding.
+  const [pendingNodeIds, setPendingNodeIds] = useState<Set<string>>(new Set());
 
   const load = useCallback(async () => {
     if (!session) return;
@@ -120,7 +124,7 @@ export default function AdminNodesPage() {
       ) {
         return;
       }
-      setPendingNodeId(nodeId);
+      setPendingNodeIds((prev) => new Set(prev).add(nodeId));
       setTransitionError(null);
       try {
         await adminFetch(`/api/admin/nodes/${encodeURIComponent(nodeId)}/lifecycle`, session.access_token, {
@@ -132,7 +136,11 @@ export default function AdminNodesPage() {
       } catch (err) {
         setTransitionError(err instanceof Error ? err.message : "Transition failed.");
       } finally {
-        setPendingNodeId(null);
+        setPendingNodeIds((prev) => {
+          const next = new Set(prev);
+          next.delete(nodeId);
+          return next;
+        });
       }
     },
     [session, load]
@@ -198,7 +206,7 @@ export default function AdminNodesPage() {
                     <select
                       className="mt-1 block rounded border text-xs disabled:opacity-50"
                       value=""
-                      disabled={pendingNodeId === node.nodeId}
+                      disabled={pendingNodeIds.has(node.nodeId)}
                       onChange={(e) => {
                         const target = e.target.value;
                         e.target.value = "";

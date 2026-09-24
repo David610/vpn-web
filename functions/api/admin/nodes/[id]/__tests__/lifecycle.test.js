@@ -3,8 +3,13 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const getClaims = vi.fn();
 const adminMaybeSingle = vi.fn();
 const nodeMaybeSingle = vi.fn();
-const nodeUpdateEq = vi.fn();
-const nodeUpdate = vi.fn(() => ({ eq: nodeUpdateEq }));
+const nodeUpdateMaybeSingle = vi.fn();
+const nodeUpdateChain = {
+  eq: vi.fn().mockReturnThis(),
+  select: vi.fn().mockReturnThis(),
+  maybeSingle: nodeUpdateMaybeSingle,
+};
+const nodeUpdate = vi.fn(() => nodeUpdateChain);
 const auditInsert = vi.fn();
 
 vi.mock("@supabase/supabase-js", () => ({
@@ -43,8 +48,9 @@ beforeEach(() => {
   getClaims.mockReset().mockResolvedValue({ data: { claims: { sub: "admin-1", aal: "aal2" } }, error: null });
   adminMaybeSingle.mockReset().mockResolvedValue({ data: { role: "owner" }, error: null });
   nodeMaybeSingle.mockReset().mockResolvedValue({ data: { node_id: "node-1", lifecycle_state: "READY" }, error: null });
-  nodeUpdateEq.mockReset().mockResolvedValue({ error: null });
+  nodeUpdateMaybeSingle.mockReset().mockResolvedValue({ data: { node_id: "node-1" }, error: null });
   nodeUpdate.mockClear();
+  nodeUpdateChain.eq.mockClear();
   auditInsert.mockReset().mockResolvedValue({ error: null });
 });
 
@@ -76,13 +82,17 @@ describe("PATCH /api/admin/nodes/:id/lifecycle", () => {
     expect(auditInsert).not.toHaveBeenCalled();
   });
 
-  it("applies an allowed transition and writes an audit row with from/to", async () => {
+  it("applies an allowed transition, guards the write on the read state, and writes an audit row", async () => {
     const res = await onRequestPatch({ env, request: makeRequest({ state: "DRAINING" }), params: { id: "node-1" } });
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body).toEqual({ ok: true, lifecycleState: "DRAINING" });
     expect(nodeUpdate).toHaveBeenCalledWith(expect.objectContaining({ lifecycle_state: "DRAINING" }));
     expect(nodeUpdate.mock.calls[0][0]).not.toHaveProperty("retired_at");
+    // The UPDATE must be guarded by the lifecycle_state this request
+    // actually read (READY), not just node_id — see lifecycle.js's
+    // comment on the concurrent-transition race this closes.
+    expect(nodeUpdateChain.eq).toHaveBeenCalledWith("lifecycle_state", "READY");
     expect(auditInsert).toHaveBeenCalledWith(
       expect.objectContaining({
         action: "admin.node_lifecycle_transition",
@@ -100,5 +110,16 @@ describe("PATCH /api/admin/nodes/:id/lifecycle", () => {
     expect(nodeUpdate).toHaveBeenCalledWith(
       expect.objectContaining({ lifecycle_state: "RETIRED", retired_at: expect.any(String) })
     );
+  });
+
+  it("returns 409 without a false ok when another request's transition wins the race", async () => {
+    // The read saw READY, canTransitionLifecycle allows READY->DRAINING,
+    // but by the time the guarded UPDATE runs, another request has
+    // already moved the node to QUARANTINED — zero rows match the
+    // lifecycle_state guard.
+    nodeUpdateMaybeSingle.mockResolvedValue({ data: null, error: null });
+    const res = await onRequestPatch({ env, request: makeRequest({ state: "DRAINING" }), params: { id: "node-1" } });
+    expect(res.status).toBe(409);
+    expect(auditInsert).not.toHaveBeenCalled();
   });
 });
