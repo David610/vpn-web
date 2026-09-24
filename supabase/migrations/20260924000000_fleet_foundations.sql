@@ -138,8 +138,18 @@ revoke insert, update, delete, truncate, references, trigger
 -- dual-read/dual-write -> validate -> make device ownership canonical").
 -- This migration only does step one and the backfill; no application code
 -- path is switched to read/write it yet.
+-- ON DELETE SET NULL, not the default NO ACTION: devices.account_id
+-- cascades from customer_accounts (above), and accept_member_invite
+-- (20260922140000_member_invites_rpc.sql / its admin_entitlements
+-- successor) deletes a departing member's old customer_accounts row once
+-- it has no subscription and no members left. That row's backfilled
+-- "Legacy device" would cascade-delete right along with it; without SET
+-- NULL here, the dangling FK on this column would abort that whole
+-- accept-invite transaction with a foreign_key_violation. The
+-- vpn_accounts row itself (and its real VPN credential) is untouched
+-- either way — only the device link is cleared.
 alter table public.vpn_accounts
-  add column device_id uuid references public.devices (id);
+  add column device_id uuid references public.devices (id) on delete set null;
 
 -- Backfill: one legacy device per existing vpn_accounts row, owned by the
 -- same account its user_id already belongs to (account_members guarantees

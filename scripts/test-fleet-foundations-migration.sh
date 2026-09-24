@@ -76,7 +76,7 @@ create table public.customer_accounts (
 
 create table public.account_members (
   id bigint generated always as identity primary key,
-  account_id uuid not null references public.customer_accounts (id),
+  account_id uuid not null references public.customer_accounts (id) on delete cascade,
   user_id uuid not null references auth.users (id),
   role text not null
 );
@@ -216,6 +216,23 @@ begin
   -- ---- placeholder location is present and disabled --------------------------
   if (select enabled from public.locations where id = v_legacy_location) then
     raise exception 'the legacy placeholder location must not be customer-selectable';
+  end if;
+
+  -- ---- account deletion must not orphan-block the vpn_accounts row -----------
+  -- Mirrors what accept_member_invite (20260922140000_member_invites_rpc.sql)
+  -- does to a departing member's old, never-billed account: delete
+  -- customer_accounts, which cascades to account_members and (via this
+  -- migration's devices.account_id) to the backfilled device. Without
+  -- vpn_accounts.device_id's ON DELETE SET NULL, this raises a
+  -- foreign_key_violation instead of succeeding.
+  delete from public.customer_accounts where id = v_account_id;
+
+  if exists (select 1 from public.vpn_accounts where vpn_user_id = 'vpnuser1' and device_id is not null) then
+    raise exception 'vpn_accounts.device_id was not cleared when its account/device was deleted';
+  end if;
+
+  if not exists (select 1 from public.vpn_accounts where vpn_user_id = 'vpnuser1') then
+    raise exception 'deleting the owning account incorrectly deleted the vpn_accounts row itself';
   end if;
 end $$;
 SQL
