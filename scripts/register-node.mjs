@@ -25,9 +25,31 @@ const keyHash = createHash("sha256").update(rawKey).digest("hex");
 const supabase = createClient(supabaseUrl, serviceKey, {
   auth: { autoRefreshToken: false, persistSession: false },
 });
-const { error } = await supabase
+
+// A plain upsert can't distinguish "brand-new node" from "rotate this
+// node's key": lifecycle_state is NOT NULL with no default (deliberately —
+// see the fleet-foundations migration), so it must be set on insert, but
+// re-running this script against an existing node to rotate its key must
+// leave its current lifecycle_state (e.g. READY, DRAINING) untouched
+// rather than resetting it back to PROVISIONING.
+const { data: existing, error: lookupError } = await supabase
   .from("nodes")
-  .upsert({ node_id: nodeId, api_key_hash: keyHash, revoked_at: null });
+  .select("node_id")
+  .eq("node_id", nodeId)
+  .maybeSingle();
+if (lookupError) {
+  console.error("Failed to look up node:", lookupError.message);
+  process.exit(1);
+}
+
+const { error } = existing
+  ? await supabase
+      .from("nodes")
+      .update({ api_key_hash: keyHash, revoked_at: null })
+      .eq("node_id", nodeId)
+  : await supabase
+      .from("nodes")
+      .insert({ node_id: nodeId, api_key_hash: keyHash, revoked_at: null, lifecycle_state: "PROVISIONING" });
 if (error) {
   console.error("Failed to register node:", error.message);
   process.exit(1);

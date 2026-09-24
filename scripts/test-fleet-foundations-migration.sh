@@ -175,6 +175,14 @@ begin
     when check_violation then null;
   end;
 
+  begin
+    insert into public.connection_profiles (account_id, name, routing_mode, preferred_entry_location_id, preferred_exit_location_id)
+    values (v_account_id, 'bad-double-hop-same-hop', 'DOUBLE_HOP', v_de_location, v_de_location);
+    raise exception 'DOUBLE_HOP profile with identical entry and exit was incorrectly allowed';
+  exception
+    when check_violation then null;
+  end;
+
   -- AUTO is the one routing mode allowed to leave both locations unset
   -- (a broad regional preference, not one specific location).
   insert into public.connection_profiles (account_id, name, routing_mode)

@@ -204,6 +204,12 @@ create table public.connection_profiles (
   ),
   constraint connection_profiles_exit_required_unless_auto check (
     routing_mode = 'AUTO' or preferred_exit_location_id is not null
+  ),
+  -- Mirrors allowed_paths_distinct_hops on the allowed_paths table: an
+  -- entry and exit at the same location isn't a real double hop.
+  constraint connection_profiles_distinct_hops check (
+    preferred_entry_location_id is null
+    or preferred_entry_location_id <> preferred_exit_location_id
   )
 );
 
