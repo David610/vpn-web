@@ -45,8 +45,8 @@ describe("GET /api/locations", () => {
     });
     locationsResult.mockResolvedValue({
       data: [
-        { country_code: "DE", city: "Frankfurt", display_name: "Germany" },
-        { country_code: "SE", city: null, display_name: "Sweden" },
+        { id: "loc-de", country_code: "DE", city: "Frankfurt", display_name: "Germany" },
+        { id: "loc-se", country_code: "SE", city: null, display_name: "Sweden" },
       ],
       error: null,
     });
@@ -58,8 +58,8 @@ describe("GET /api/locations", () => {
     expect(locationsIn).toHaveBeenCalledWith("id", ["loc-de", "loc-se"]);
     expect(await res.json()).toEqual({
       locations: [
-        { countryCode: "DE", city: "Frankfurt", name: "Germany" },
-        { countryCode: "SE", city: null, name: "Sweden" },
+        { id: "loc-de", countryCode: "DE", city: "Frankfurt", name: "Germany" },
+        { id: "loc-se", countryCode: "SE", city: null, name: "Sweden" },
       ],
     });
   });
@@ -82,7 +82,7 @@ describe("GET /api/locations", () => {
 
     const body = await (await onRequestGet({ env })).json();
 
-    expect(Object.keys(body.locations[0]).sort()).toEqual(["city", "countryCode", "name"]);
+    expect(Object.keys(body.locations[0]).sort()).toEqual(["city", "countryCode", "id", "name"]);
   });
 
   it("fails closed with a generic error", async () => {

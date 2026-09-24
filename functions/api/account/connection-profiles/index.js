@@ -1,6 +1,8 @@
 import { createClient } from "@supabase/supabase-js";
-import { requireUser, jsonResponse } from "../../lib/user-auth.js";
-import { getAccountForUser } from "../../lib/accounts.js";
+import { requireUser, jsonResponse } from "../../../lib/user-auth.js";
+import { getAccountForUser } from "../../../lib/accounts.js";
+import { readJson, runAccountAction } from "../../../lib/account-http.js";
+import { createProfile } from "../../../lib/connection-profiles.js";
 
 /**
  * Lists the caller's account's connection profiles, for the device
@@ -43,4 +45,13 @@ export async function onRequestGet({ env, request }) {
     console.error("account/connection-profiles: unexpected error:", err.message);
     return jsonResponse({ error: "Internal error" }, 500);
   }
+}
+
+/** Body: { name, routingMode: AUTO|DIRECT|DOUBLE_HOP, entryLocationId?, exitLocationId? } */
+export async function onRequestPost(context) {
+  const { body, error } = await readJson(context.request);
+  if (error) return error;
+  return runAccountAction(context, "account/connection-profiles POST", (db, user) =>
+    createProfile(db, context.env, user, body)
+  );
 }

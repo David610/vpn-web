@@ -26,7 +26,7 @@ export async function onRequestGet({ env }) {
 
     const { data: locations, error: locationsError } = await supabaseAdmin
       .from("locations")
-      .select("country_code, city, display_name")
+      .select("id, country_code, city, display_name")
       .eq("enabled", true)
       .in("id", serving)
       .order("display_name", { ascending: true });
@@ -34,6 +34,7 @@ export async function onRequestGet({ env }) {
 
     return publicJson({
       locations: (locations ?? []).map((l) => ({
+        id: l.id,
         countryCode: l.country_code,
         city: l.city ?? null,
         name: l.display_name,

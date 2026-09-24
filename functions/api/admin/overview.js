@@ -20,7 +20,15 @@ export async function onRequestGet({ env, request }) {
     if (error) throw new Error(`admin_overview_snapshot failed: ${error.message}`);
     if (!data) throw new Error("admin_overview_snapshot returned no data");
 
-    return jsonResponse(data);
+    // Subscriptions and device capacity under the per-subscription model.
+    const { data: deviceModel, error: deviceModelError } = await supabaseAdmin.rpc(
+      "admin_device_model_snapshot"
+    );
+    if (deviceModelError) {
+      throw new Error(`admin_device_model_snapshot failed: ${deviceModelError.message}`);
+    }
+
+    return jsonResponse({ ...data, ...(deviceModel ?? {}) });
   } catch (err) {
     console.error("admin/overview: unexpected error:", err.message);
     return jsonResponse({ error: "Internal error" }, 500);
