@@ -22,10 +22,21 @@ export type AccountInfo = {
   accountId: string;
   role: string;
   subscription: { status: string; source?: "stripe" | "admin_grant" } | null;
-  seats: { included: number; extra: number; limit: number; used: number; available: number };
+  seats: {
+    included: number;
+    extra: number;
+    limit: number;
+    used: number;
+    available: number;
+    packSize?: number;
+    packQuantity?: number;
+  };
   members: Member[];
   invites: Invite[];
 };
+
+/** Extra seats are sold in packs of this size — mirrors SEAT_PACK_SIZE. */
+const SEAT_PACK_SIZE = 3;
 
 const ROW: React.CSSProperties = {
   display: "flex",
@@ -107,7 +118,7 @@ export function MembersCard({
     }
   }
 
-  async function changeSeats(nextExtra: number) {
+  async function changeSeatPacks(nextPackQuantity: number) {
     if (!account) return;
     setActionError(null);
     setNotice(null);
@@ -121,7 +132,7 @@ export function MembersCard({
         },
         // Absolute, not a delta: a double-click sets the same total rather
         // than buying twice.
-        body: JSON.stringify({ quantity: nextExtra }),
+        body: JSON.stringify({ packQuantity: nextPackQuantity }),
       });
       const data = await res.json().catch(() => ({}));
       if (res.status === 403 && data.code === "reauth_required") {
@@ -129,10 +140,12 @@ export function MembersCard({
         return;
       }
       if (!res.ok) throw new Error(data.error || "Could not change your seats.");
+      const currentPacks =
+        account.seats.packQuantity ?? Math.ceil(account.seats.extra / SEAT_PACK_SIZE);
       setNotice(
-        nextExtra > account.seats.extra
-          ? "Seat added. Your next invoice is prorated."
-          : "Seat released. Your next invoice is prorated."
+        nextPackQuantity > currentPacks
+          ? "Seat pack added. Your next invoice is prorated."
+          : "Seat pack released. Your next invoice is prorated."
       );
       await load();
     } catch (err) {
@@ -369,8 +382,12 @@ export function MembersCard({
                 type="button"
                 className="btn btn-secondary"
                 disabled={busyId === "seats" || seats.extra === 0}
-                onClick={() => changeSeats(seats.extra - 1)}
-                aria-label="Release a seat"
+                onClick={() =>
+                  changeSeatPacks(
+                    (seats.packQuantity ?? Math.ceil(seats.extra / SEAT_PACK_SIZE)) - 1
+                  )
+                }
+                aria-label={`Release a seat pack (${SEAT_PACK_SIZE} seats)`}
               >
                 −
               </button>
@@ -378,8 +395,12 @@ export function MembersCard({
                 type="button"
                 className="btn btn-secondary"
                 disabled={busyId === "seats"}
-                onClick={() => changeSeats(seats.extra + 1)}
-                aria-label="Add a seat"
+                onClick={() =>
+                  changeSeatPacks(
+                    (seats.packQuantity ?? Math.ceil(seats.extra / SEAT_PACK_SIZE)) + 1
+                  )
+                }
+                aria-label={`Add a seat pack (${SEAT_PACK_SIZE} seats)`}
               >
                 +
               </button>

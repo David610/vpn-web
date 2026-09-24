@@ -13,6 +13,28 @@
 export const INCLUDED_SEATS = 3;
 
 /**
+ * Extra seats are sold in packs, not one at a time — a pack is the same
+ * size as the included base allotment, so total capacity is always
+ * `INCLUDED_SEATS * (1 + pack_quantity)`. `subscriptions.extra_seats`
+ * remains the source-of-truth mirror of Stripe's seat-item quantity, in
+ * seats (not packs); this constant only converts between the two at the
+ * edges — the purchase API's request/response shape and pack-quantity-
+ * shaped error messages.
+ */
+export const SEAT_PACK_SIZE = INCLUDED_SEATS;
+
+/**
+ * How many whole extra packs `extraSeats` represents. Rounds up so a
+ * non-pack-aligned `extra_seats` value (only reachable via a manual Stripe
+ * dashboard edit — our own purchase API only ever writes multiples of
+ * SEAT_PACK_SIZE) is never under-reported: the caller always sees at least
+ * as many packs as the seats actually in place.
+ */
+export function packQuantityFromExtraSeats(extraSeats) {
+  return Math.ceil(Math.max(0, extraSeats) / SEAT_PACK_SIZE);
+}
+
+/**
  * The account a user belongs to. account_members.user_id is unique, so this
  * is at most one row and maybeSingle() cannot throw on a multi-row result.
  *

@@ -5,26 +5,29 @@ import {
   getAccountForUser,
   getLiveSubscription,
   INCLUDED_SEATS,
+  SEAT_PACK_SIZE,
 } from "../../lib/accounts.js";
-import { getSeatSubscriptionItem, getExtraSeatCount } from "../../lib/stripe-fields.js";
+import { getSeatSubscriptionItem, getSeatPackQuantity } from "../../lib/stripe-fields.js";
 
 /**
- * Upper bound on purchasable seats. Not a business rule so much as a
+ * Upper bound on purchasable seat packs. Not a business rule so much as a
  * fat-finger guard: a mistyped quantity here bills real money immediately,
  * since Stripe prorates the change on the spot.
  */
-const MAX_EXTRA_SEATS = 50;
+const MAX_SEAT_PACKS = 16;
 
 /**
- * Sets how many seats beyond the included ones the account pays for.
+ * Sets how many extra seat packs (SEAT_PACK_SIZE seats each) beyond the
+ * included base the account pays for.
  *
  * Absolute, not a delta: the client sends the total it wants, so a
- * double-submitted request buys one seat rather than two.
+ * double-submitted request buys one pack rather than two.
  *
  * Stripe is the source of truth for the count. subscriptions.extra_seats is
- * only ever a mirror, written here from Stripe's own response and again by
- * the customer.subscription.updated webhook that the same change triggers —
- * both from the same authority, so they cannot disagree.
+ * only ever a mirror (in seats, not packs), written here from Stripe's own
+ * response and again by the customer.subscription.updated webhook that the
+ * same change triggers — both from the same authority, so they cannot
+ * disagree.
  */
 export async function onRequestPost({ env, request }) {
   const supabaseAdmin = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
@@ -46,10 +49,16 @@ export async function onRequestPost({ env, request }) {
     } catch {
       return jsonResponse({ error: "Invalid JSON body" }, 400);
     }
-    const quantity = body?.quantity;
-    if (!Number.isInteger(quantity) || quantity < 0 || quantity > MAX_EXTRA_SEATS) {
+    const packQuantity = body?.packQuantity;
+    if (
+      !Number.isInteger(packQuantity) ||
+      packQuantity < 0 ||
+      packQuantity > MAX_SEAT_PACKS
+    ) {
       return jsonResponse(
-        { error: `Choose between 0 and ${MAX_EXTRA_SEATS} extra seats.` },
+        {
+          error: `Choose between 0 and ${MAX_SEAT_PACKS} extra seat packs (${SEAT_PACK_SIZE} seats each).`,
+        },
         400
       );
     }
@@ -96,14 +105,21 @@ export async function onRequestPost({ env, request }) {
     if (memberError) throw new Error(`account_members count failed: ${memberError.message}`);
     if (inviteError) throw new Error(`member_invites query failed: ${inviteError.message}`);
 
+    // No silent eviction: a downgrade that would drop capacity below the
+    // number of seats actually in use is rejected outright, before any
+    // Stripe or DB write happens. The owner must remove a member or
+    // withdraw an invite first — this function never disables a member or
+    // touches vpn_accounts as a side effect of a billing change.
     const seatsInUse = memberCount + liveInvites.length;
     const minimumExtra = Math.max(0, seatsInUse - INCLUDED_SEATS);
-    if (quantity < minimumExtra) {
+    const minimumPacks = Math.ceil(minimumExtra / SEAT_PACK_SIZE);
+    if (packQuantity < minimumPacks) {
       return jsonResponse(
         {
-          error: `You have ${seatsInUse} seats in use. Remove a member or withdraw an invitation before dropping below ${minimumExtra} extra seats.`,
+          error: `You have ${seatsInUse} seats in use. Remove a member or withdraw an invitation before dropping below ${minimumPacks} extra seat pack(s) (${minimumPacks * SEAT_PACK_SIZE} seats).`,
           code: "seats_in_use",
-          minimum: minimumExtra,
+          minimum: minimumPacks,
+          minimumSeats: minimumPacks * SEAT_PACK_SIZE,
         },
         409
       );
@@ -119,28 +135,29 @@ export async function onRequestPost({ env, request }) {
     const seatItem = getSeatSubscriptionItem(stripeSubscription, env.STRIPE_SEAT_PRICE_ID);
 
     let updated;
-    if (quantity === 0 && seatItem) {
+    if (packQuantity === 0 && seatItem) {
       // Drop the line item entirely rather than leaving a zero-quantity one:
       // a zero item still shows on the invoice and reads as a mistake.
       updated = await stripe.subscriptions.update(subscription.stripe_subscription_id, {
         items: [{ id: seatItem.id, deleted: true }],
         proration_behavior: "create_prorations",
       });
-    } else if (quantity === 0) {
+    } else if (packQuantity === 0) {
       updated = stripeSubscription; // nothing to do
     } else if (seatItem) {
       updated = await stripe.subscriptions.update(subscription.stripe_subscription_id, {
-        items: [{ id: seatItem.id, quantity }],
+        items: [{ id: seatItem.id, quantity: packQuantity }],
         proration_behavior: "create_prorations",
       });
     } else {
       updated = await stripe.subscriptions.update(subscription.stripe_subscription_id, {
-        items: [{ price: env.STRIPE_SEAT_PRICE_ID, quantity }],
+        items: [{ price: env.STRIPE_SEAT_PRICE_ID, quantity: packQuantity }],
         proration_behavior: "create_prorations",
       });
     }
 
-    const extraSeats = getExtraSeatCount(updated, env.STRIPE_SEAT_PRICE_ID);
+    const confirmedPacks = getSeatPackQuantity(updated, env.STRIPE_SEAT_PRICE_ID);
+    const extraSeats = confirmedPacks * SEAT_PACK_SIZE;
 
     // Mirror immediately so the dashboard reflects the change without
     // waiting on webhook delivery; the webhook writes the same value.
@@ -160,6 +177,8 @@ export async function onRequestPost({ env, request }) {
         limit: INCLUDED_SEATS + extraSeats,
         used: seatsInUse,
         available: Math.max(0, INCLUDED_SEATS + extraSeats - seatsInUse),
+        packSize: SEAT_PACK_SIZE,
+        packQuantity: confirmedPacks,
       },
     });
   } catch (err) {

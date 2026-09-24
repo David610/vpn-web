@@ -31,11 +31,15 @@ function makeRequest(body) {
   });
 }
 
-/** Stripe subscription carrying a base item and optionally a seat item. */
-function stripeSub({ seatQuantity = null } = {}) {
+/**
+ * Stripe subscription carrying a base item and optionally a seat-pack item.
+ * `packQuantity` is the pack item's quantity (packs of 3 seats), matching
+ * how the seat price is configured in Stripe.
+ */
+function stripeSub({ packQuantity = null } = {}) {
   const items = [{ id: "si_base", price: { id: "price_base" }, quantity: 1 }];
-  if (seatQuantity !== null) {
-    items.push({ id: "si_seat", price: { id: "price_seat" }, quantity: seatQuantity });
+  if (packQuantity !== null) {
+    items.push({ id: "si_seat", price: { id: "price_seat" }, quantity: packQuantity });
   }
   return { id: "sub_123", items: { data: items } };
 }
@@ -83,12 +87,12 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("POST /api/account/seats", () => {
-  it("adds a seat item when the subscription has none", async () => {
+  it("adds a seat-pack item when the subscription has none", async () => {
     db = seed();
     retrieve.mockResolvedValue(stripeSub());
-    update.mockResolvedValue(stripeSub({ seatQuantity: 2 }));
+    update.mockResolvedValue(stripeSub({ packQuantity: 2 }));
 
-    const res = await onRequestPost({ env, request: makeRequest({ quantity: 2 }) });
+    const res = await onRequestPost({ env, request: makeRequest({ packQuantity: 2 }) });
     const body = await res.json();
 
     expect(res.status).toBe(200);
@@ -96,17 +100,18 @@ describe("POST /api/account/seats", () => {
       "sub_123",
       expect.objectContaining({ items: [{ price: "price_seat", quantity: 2 }] })
     );
-    expect(body.seats).toMatchObject({ included: 3, extra: 2, limit: 5 });
+    // 2 packs of 3 seats = 6 extra seats.
+    expect(body.seats).toMatchObject({ included: 3, extra: 6, limit: 9, packSize: 3, packQuantity: 2 });
     // Mirrored locally so the dashboard does not wait on webhook delivery.
-    expect(db._tables.subscriptions[0].extra_seats).toBe(2);
+    expect(db._tables.subscriptions[0].extra_seats).toBe(6);
   });
 
-  it("updates the existing seat item rather than adding a second", async () => {
+  it("updates the existing seat-pack item rather than adding a second", async () => {
     db = seed();
-    retrieve.mockResolvedValue(stripeSub({ seatQuantity: 1 }));
-    update.mockResolvedValue(stripeSub({ seatQuantity: 3 }));
+    retrieve.mockResolvedValue(stripeSub({ packQuantity: 1 }));
+    update.mockResolvedValue(stripeSub({ packQuantity: 3 }));
 
-    await onRequestPost({ env, request: makeRequest({ quantity: 3 }) });
+    await onRequestPost({ env, request: makeRequest({ packQuantity: 3 }) });
 
     expect(update).toHaveBeenCalledWith(
       "sub_123",
@@ -114,13 +119,13 @@ describe("POST /api/account/seats", () => {
     );
   });
 
-  it("deletes the seat item at zero instead of leaving a zero-quantity line", async () => {
+  it("deletes the seat-pack item at zero instead of leaving a zero-quantity line", async () => {
     // A zero-quantity item still prints on the invoice and reads as a bug.
     db = seed();
-    retrieve.mockResolvedValue(stripeSub({ seatQuantity: 2 }));
+    retrieve.mockResolvedValue(stripeSub({ packQuantity: 2 }));
     update.mockResolvedValue(stripeSub());
 
-    const res = await onRequestPost({ env, request: makeRequest({ quantity: 0 }) });
+    const res = await onRequestPost({ env, request: makeRequest({ packQuantity: 0 }) });
 
     expect(res.status).toBe(200);
     expect(update).toHaveBeenCalledWith(
@@ -129,21 +134,21 @@ describe("POST /api/account/seats", () => {
     );
   });
 
-  it("does not call Stripe when asked for zero and there is no seat item", async () => {
+  it("does not call Stripe when asked for zero and there is no seat-pack item", async () => {
     db = seed();
     retrieve.mockResolvedValue(stripeSub());
-    const res = await onRequestPost({ env, request: makeRequest({ quantity: 0 }) });
+    const res = await onRequestPost({ env, request: makeRequest({ packQuantity: 0 }) });
     expect(res.status).toBe(200);
     expect(update).not.toHaveBeenCalled();
   });
 
   it("is absolute, so a double submit does not buy twice", async () => {
     db = seed();
-    retrieve.mockResolvedValue(stripeSub({ seatQuantity: 2 }));
-    update.mockResolvedValue(stripeSub({ seatQuantity: 2 }));
+    retrieve.mockResolvedValue(stripeSub({ packQuantity: 2 }));
+    update.mockResolvedValue(stripeSub({ packQuantity: 2 }));
 
-    await onRequestPost({ env, request: makeRequest({ quantity: 2 }) });
-    await onRequestPost({ env, request: makeRequest({ quantity: 2 }) });
+    await onRequestPost({ env, request: makeRequest({ packQuantity: 2 }) });
+    await onRequestPost({ env, request: makeRequest({ packQuantity: 2 }) });
 
     // Both calls set the same total rather than incrementing.
     for (const call of update.mock.calls) {
@@ -151,40 +156,64 @@ describe("POST /api/account/seats", () => {
     }
   });
 
-  it("refuses to release a seat that is occupied", async () => {
-    // 5 people on a plan of 3 + 2 extra; dropping to 1 extra would bill for
-    // fewer seats than there are members. Making the owner remove someone
-    // first is better than silently evicting whoever sorts last.
+  it("refuses to release a pack containing an occupied seat", async () => {
+    // 5 people on a plan of 3 + 2 packs (6 extra seats); dropping to 1 pack
+    // (3 extra seats, 6 total) would still fit, but dropping to 0 packs
+    // would not — 5 people need at least 1 extra pack (2 extra seats
+    // rounds up to 1 pack). Making the owner remove someone first is
+    // better than silently evicting whoever sorts last.
     db = seed({ members: 5 });
-    retrieve.mockResolvedValue(stripeSub({ seatQuantity: 2 }));
+    retrieve.mockResolvedValue(stripeSub({ packQuantity: 2 }));
 
-    const res = await onRequestPost({ env, request: makeRequest({ quantity: 1 }) });
+    const res = await onRequestPost({ env, request: makeRequest({ packQuantity: 0 }) });
     const body = await res.json();
 
     expect(res.status).toBe(409);
-    expect(body).toMatchObject({ code: "seats_in_use", minimum: 2 });
+    expect(body).toMatchObject({ code: "seats_in_use", minimum: 1, minimumSeats: 3 });
     expect(update).not.toHaveBeenCalled();
   });
 
   it("counts a pending invite as occupying a seat when releasing", async () => {
     db = seed({ members: 3, invites: 1 });
-    retrieve.mockResolvedValue(stripeSub({ seatQuantity: 1 }));
+    retrieve.mockResolvedValue(stripeSub({ packQuantity: 1 }));
 
-    const res = await onRequestPost({ env, request: makeRequest({ quantity: 0 }) });
+    const res = await onRequestPost({ env, request: makeRequest({ packQuantity: 0 }) });
     expect(res.status).toBe(409);
-    expect(await res.json()).toMatchObject({ minimum: 1 });
+    expect(await res.json()).toMatchObject({ minimum: 1, minimumSeats: 3 });
+  });
+
+  it("rejects a downgrade below current member count without touching members or Stripe", async () => {
+    // 7 members need at least 2 extra packs (4 extra seats -> ceil(4/3)=2).
+    // Attempting to drop to 1 pack must be rejected outright: no Stripe
+    // call, no subscriptions write, and account_members/vpn_accounts must
+    // be completely untouched by this request.
+    db = seed({ members: 7 });
+    retrieve.mockResolvedValue(stripeSub({ packQuantity: 3 }));
+    const membersBefore = JSON.stringify(db._tables.account_members);
+
+    const res = await onRequestPost({ env, request: makeRequest({ packQuantity: 1 }) });
+    const body = await res.json();
+
+    expect(res.status).toBe(409);
+    expect(body).toMatchObject({ code: "seats_in_use", minimum: 2, minimumSeats: 6 });
+    expect(retrieve).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+    expect(db._tables.vpn_accounts ?? []).toEqual([]);
+    expect(JSON.stringify(db._tables.account_members)).toBe(membersBefore);
+    // extra_seats mirror must be untouched by the rejected request.
+    expect(db._tables.subscriptions[0].extra_seats).toBe(0);
   });
 
   it("refuses a member who is not the owner", async () => {
     db = seed({ role: "member" });
-    const res = await onRequestPost({ env, request: makeRequest({ quantity: 1 }) });
+    const res = await onRequestPost({ env, request: makeRequest({ packQuantity: 1 }) });
     expect(res.status).toBe(403);
     expect(retrieve).not.toHaveBeenCalled();
   });
 
   it("refuses an account with no live subscription", async () => {
     db = seed({ status: null });
-    const res = await onRequestPost({ env, request: makeRequest({ quantity: 1 }) });
+    const res = await onRequestPost({ env, request: makeRequest({ packQuantity: 1 }) });
     expect(res.status).toBe(403);
     expect(retrieve).not.toHaveBeenCalled();
   });
@@ -194,9 +223,9 @@ describe("POST /api/account/seats", () => {
     ["a fractional count", 1.5],
     ["an absurd count", 9999],
     ["a string", "2"],
-  ])("rejects %s without calling Stripe", async (_label, quantity) => {
+  ])("rejects %s without calling Stripe", async (_label, packQuantity) => {
     db = seed();
-    const res = await onRequestPost({ env, request: makeRequest({ quantity }) });
+    const res = await onRequestPost({ env, request: makeRequest({ packQuantity }) });
     expect(res.status).toBe(400);
     expect(retrieve).not.toHaveBeenCalled();
   });
@@ -205,7 +234,7 @@ describe("POST /api/account/seats", () => {
     db = seed();
     const res = await onRequestPost({
       env: { ...env, STRIPE_SEAT_PRICE_ID: undefined },
-      request: makeRequest({ quantity: 1 }),
+      request: makeRequest({ packQuantity: 1 }),
     });
     expect(res.status).toBe(503);
     expect(retrieve).not.toHaveBeenCalled();
