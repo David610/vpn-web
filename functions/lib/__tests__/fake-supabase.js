@@ -33,6 +33,8 @@ export function makeFakeSupabase(seed = {}, options = {}) {
     devices: [],
     connection_profiles: [],
     device_profile_assignments: [],
+    telegram_links: [],
+    telegram_link_codes: [],
     ...structuredClone(seed),
   };
 
@@ -61,6 +63,14 @@ export function makeFakeSupabase(seed = {}, options = {}) {
       if (state.op === "update") {
         const hit = tables[table].filter(match);
         for (const row of hit) Object.assign(row, state.payload);
+        return single
+          ? { data: hit[0] ?? null, error: null }
+          : { data: hit, error: null };
+      }
+
+      if (state.op === "delete") {
+        const hit = tables[table].filter(match);
+        tables[table] = tables[table].filter((row) => !match(row));
         return single
           ? { data: hit[0] ?? null, error: null }
           : { data: hit, error: null };
@@ -108,6 +118,10 @@ export function makeFakeSupabase(seed = {}, options = {}) {
       update(payload) {
         state.op = "update";
         state.payload = payload;
+        return chain;
+      },
+      delete() {
+        state.op = "delete";
         return chain;
       },
       upsert(payload, opts) {

@@ -28,6 +28,10 @@ const SecurityCard = dynamic(
   () => import("@/components/SecurityCard").then((mod) => mod.SecurityCard),
   { loading: () => null }
 );
+const TelegramCard = dynamic(
+  () => import("@/components/TelegramCard").then((mod) => mod.TelegramCard),
+  { loading: () => null }
+);
 
 type ConfigState =
   | { phase: "loading" }
@@ -398,6 +402,7 @@ export default function DashboardPage() {
           </>
         )}
         <SecurityCard session={session} />
+        <TelegramCard session={session} />
       </main>
       <Footer />
     </>
