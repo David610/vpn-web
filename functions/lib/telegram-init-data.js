@@ -18,7 +18,7 @@
 
 const DEFAULT_MAX_AGE_SECONDS = 24 * 60 * 60;
 
-function hex(bytes) {
+export function hex(bytes) {
   return Array.from(new Uint8Array(bytes))
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");

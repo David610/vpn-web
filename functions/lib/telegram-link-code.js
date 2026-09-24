@@ -8,6 +8,8 @@
  * hand, unlike an invite link's URL-embedded token.
  */
 
+import { sha256Hex } from "./crypto.js";
+
 const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // no 0/O/1/I
 const CODE_LENGTH = 8;
 export const LINK_CODE_TTL_SECONDS = 10 * 60;
@@ -20,10 +22,6 @@ export function generateLinkCode() {
   return code;
 }
 
-export async function hashLinkCode(code) {
-  const digest = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(code.toUpperCase())
-  );
-  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+export function hashLinkCode(code) {
+  return sha256Hex(code.toUpperCase());
 }

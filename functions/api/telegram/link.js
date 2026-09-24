@@ -81,19 +81,18 @@ export async function onRequestPost({ env, request }) {
     });
     if (insertError) {
       // The existingLink check above and this insert are not one
-      // transaction: two requests racing on two different valid codes for
-      // the same Telegram account can both pass that check and both
-      // consume their own code before either inserts. The loser hits
-      // telegram_links' unique index on telegram_user_id here — a real
-      // conflict, not an internal error, so it gets its own status rather
-      // than falling through to the generic 500 below (which would also
-      // mask that this caller's code is now consumed with no link
-      // created).
+      // transaction, so two different races can land here:
+      //   - two codes for the same Telegram account both pass the
+      //     existingLink check and both consume, then collide on the
+      //     telegram_user_id unique index;
+      //   - two codes for the same *Arcana* user (issued by two
+      //     concurrent link-code requests) both consume, then collide on
+      //     telegram_links' user_id primary key instead.
+      // Either way it is a real conflict, not an internal error, and
+      // which side already holds a link is not safe to assert from the
+      // error alone -- report it generically rather than guessing.
       if (insertError.code === "23505") {
-        return jsonResponse(
-          { error: "This Telegram account is already linked to an account." },
-          409
-        );
+        return jsonResponse({ error: "This account is already linked to a Telegram account." }, 409);
       }
       throw new Error(`telegram_links insert failed: ${insertError.message}`);
     }
