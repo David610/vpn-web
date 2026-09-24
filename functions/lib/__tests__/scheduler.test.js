@@ -31,6 +31,14 @@ describe("selectNodeForDevice (pure)", () => {
     expect(selectNodeForDevice({ candidates, stickyNodeId: "de-fra-1" })).toBe("de-fra-1");
   });
 
+  it("treats a null configured_users (no heartbeat yet) as worse than a known low load, not as zero", () => {
+    const candidates = [
+      { nodeId: "no-heartbeat-yet", configuredUsers: null },
+      { nodeId: "known-low-load", configuredUsers: 3 },
+    ];
+    expect(selectNodeForDevice({ candidates, stickyNodeId: null })).toBe("known-low-load");
+  });
+
   it("falls back to load-based selection when the sticky node is no longer a candidate", () => {
     // e.g. it went DRAINING or QUARANTINED and was already filtered out
     // by the DB-facing caller before candidates ever reached here.

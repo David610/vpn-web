@@ -33,9 +33,14 @@ export function selectNodeForDevice({ candidates, stickyNodeId }) {
     if (sticky) return sticky.nodeId;
   }
 
+  // A null configured_users (no heartbeat reported yet) must sort as the
+  // *worst* choice, not the best: treating "unknown" as zero would make an
+  // uninstrumented or stale node always win over nodes with genuinely low,
+  // actually-reported load.
   const sorted = [...candidates].sort((a, b) => {
-    const loadDiff = (a.configuredUsers ?? 0) - (b.configuredUsers ?? 0);
-    if (loadDiff !== 0) return loadDiff;
+    const loadA = a.configuredUsers ?? Infinity;
+    const loadB = b.configuredUsers ?? Infinity;
+    if (loadA !== loadB) return loadA - loadB;
     return a.nodeId < b.nodeId ? -1 : a.nodeId > b.nodeId ? 1 : 0;
   });
   return sorted[0].nodeId;
