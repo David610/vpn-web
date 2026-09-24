@@ -207,6 +207,20 @@ describe("POST /api/account/devices/:id/assignment", () => {
     expect(res.status).toBe(404);
   });
 
+  it("400s when assigning a disabled profile", async () => {
+    db = seed({
+      devices: [{ id: "dev-1", account_id: "acct-1", user_id: "user-1", name: "iPhone", platform: "ios", status: "ACTIVE", created_at: "2026-01-01T00:00:00Z", last_seen_at: null }],
+      profiles: [{ id: "prof-1", account_id: "acct-1", name: "Fast", enabled: false, routing_mode: "AUTO" }],
+    });
+    const res = await assignProfile({
+      env,
+      request: postReq("/api/account/devices/dev-1/assignment", { profileId: "prof-1" }),
+      params: { id: "dev-1" },
+    });
+    expect(res.status).toBe(400);
+    expect(db._tables.device_profile_assignments).toHaveLength(0);
+  });
+
   it("400s on a missing profileId", async () => {
     db = seed({
       devices: [{ id: "dev-1", account_id: "acct-1", user_id: "user-1", name: "iPhone", platform: "ios", status: "ACTIVE", created_at: "2026-01-01T00:00:00Z", last_seen_at: null }],

@@ -185,8 +185,13 @@ export function DevicesCard({ session }: { session: Session }) {
                         {profiles.length === 0 ? "No profiles available" : "Choose a profile"}
                       </option>
                       {profiles.map((p) => (
-                        <option key={p.id} value={p.id}>
+                        <option
+                          key={p.id}
+                          value={p.id}
+                          disabled={!p.enabled && p.id !== d.assignment?.profileId}
+                        >
                           {p.name}
+                          {p.enabled ? "" : " (disabled)"}
                         </option>
                       ))}
                     </select>

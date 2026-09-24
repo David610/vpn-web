@@ -56,7 +56,7 @@ export async function onRequestPost({ env, request, params }) {
 
     const { data: profile, error: profileError } = await supabaseAdmin
       .from("connection_profiles")
-      .select("id, account_id")
+      .select("id, account_id, enabled")
       .eq("id", profileId)
       .maybeSingle();
     if (profileError) throw new Error(`connection_profiles lookup failed: ${profileError.message}`);
@@ -67,6 +67,9 @@ export async function onRequestPost({ env, request, params }) {
       // Same cross-account invariant the DB trigger enforces; caught here
       // first for a clean 403 rather than a raised trigger exception.
       return jsonResponse({ error: "That profile does not belong to your account." }, 403);
+    }
+    if (!profile.enabled) {
+      return jsonResponse({ error: "That connection profile is disabled." }, 400);
     }
 
     const { error: upsertError } = await supabaseAdmin
