@@ -81,6 +81,7 @@ export async function scheduleNodeForDevice(supabaseAdmin, { deviceId, exitLocat
       .from("device_node_assignments")
       .select("node_id")
       .eq("device_id", deviceId)
+      .eq("hop", "EXIT")
       .maybeSingle(),
   ]);
   if (pathError) throw new Error(`allowed_paths lookup failed: ${pathError.message}`);
@@ -109,9 +110,117 @@ export async function scheduleNodeForDevice(supabaseAdmin, { deviceId, exitLocat
   if (nodeId !== sticky?.node_id) {
     const { error: upsertError } = await supabaseAdmin
       .from("device_node_assignments")
-      .upsert({ device_id: deviceId, node_id: nodeId }, { onConflict: "device_id" });
+      .upsert({ device_id: deviceId, node_id: nodeId, hop: "EXIT" }, { onConflict: "device_id,hop" });
     if (upsertError) throw new Error(`device_node_assignments upsert failed: ${upsertError.message}`);
   }
 
   return nodeId;
+}
+
+/**
+ * Double-hop counterpart of scheduleNodeForDevice() (spec 54 Phase 7 /
+ * FLEET_PLATFORM_PLAN.md Phase 7). Picks a concrete RELAY node in the
+ * entry location and a concrete EXIT node in the exit location for a
+ * device whose connection_profiles row has routing_mode = 'DOUBLE_HOP'.
+ *
+ * Reuses selectNodeForDevice()'s pure placement logic independently for
+ * each hop -- same sticky/least-loaded/capacity behavior a direct
+ * assignment gets, just run twice against two different candidate pools.
+ * Fails closed exactly like scheduleNodeForDevice(): no enabled double-hop
+ * allowed_paths row for (entryLocationId, exitLocationId), or no candidate
+ * for either hop, returns null and writes nothing -- never a partial
+ * assignment with only one hop persisted.
+ *
+ * Same FEATURE_MULTI_NODE_SCHEDULING-gating contract as
+ * scheduleNodeForDevice(): additive, self-contained, not called from any
+ * live route yet. Callers must check the flag themselves.
+ */
+export async function scheduleDoubleHopForDevice(
+  supabaseAdmin,
+  { deviceId, entryLocationId, exitLocationId }
+) {
+  const [
+    { data: allowedPath, error: pathError },
+    { data: relaySticky, error: relayStickyError },
+    { data: exitSticky, error: exitStickyError },
+  ] = await Promise.all([
+    supabaseAdmin
+      .from("allowed_paths")
+      .select("id")
+      .eq("entry_location_id", entryLocationId)
+      .eq("exit_location_id", exitLocationId)
+      .eq("enabled", true)
+      .maybeSingle(),
+    supabaseAdmin
+      .from("device_node_assignments")
+      .select("node_id")
+      .eq("device_id", deviceId)
+      .eq("hop", "RELAY")
+      .maybeSingle(),
+    supabaseAdmin
+      .from("device_node_assignments")
+      .select("node_id")
+      .eq("device_id", deviceId)
+      .eq("hop", "EXIT")
+      .maybeSingle(),
+  ]);
+  if (pathError) throw new Error(`allowed_paths lookup failed: ${pathError.message}`);
+  if (relayStickyError) throw new Error(`device_node_assignments lookup failed: ${relayStickyError.message}`);
+  if (exitStickyError) throw new Error(`device_node_assignments lookup failed: ${exitStickyError.message}`);
+  if (!allowedPath) return null;
+
+  const [{ data: relayNodes, error: relayNodesError }, { data: exitNodes, error: exitNodesError }] =
+    await Promise.all([
+      supabaseAdmin
+        .from("nodes")
+        .select("node_id, configured_users, max_sessions")
+        .eq("role", "RELAY")
+        .eq("lifecycle_state", "READY")
+        .eq("location_id", entryLocationId),
+      supabaseAdmin
+        .from("nodes")
+        .select("node_id, configured_users, max_sessions")
+        .eq("role", "EXIT")
+        .eq("lifecycle_state", "READY")
+        .eq("location_id", exitLocationId),
+    ]);
+  if (relayNodesError) throw new Error(`nodes lookup failed: ${relayNodesError.message}`);
+  if (exitNodesError) throw new Error(`nodes lookup failed: ${exitNodesError.message}`);
+
+  const toCandidates = (nodes) =>
+    (nodes ?? [])
+      .map((node) => ({
+        nodeId: node.node_id,
+        configuredUsers: node.configured_users,
+        maxSessions: node.max_sessions,
+      }))
+      .filter(isUnderCapacity);
+
+  const relayNodeId = selectNodeForDevice({
+    candidates: toCandidates(relayNodes),
+    stickyNodeId: relaySticky?.node_id ?? null,
+  });
+  const exitNodeId = selectNodeForDevice({
+    candidates: toCandidates(exitNodes),
+    stickyNodeId: exitSticky?.node_id ?? null,
+  });
+  // Fail closed on a partial placement too: a double-hop device must never
+  // end up with only one hop scheduled.
+  if (!relayNodeId || !exitNodeId) return null;
+
+  const writes = [];
+  if (relayNodeId !== relaySticky?.node_id) {
+    writes.push({ device_id: deviceId, node_id: relayNodeId, hop: "RELAY" });
+  }
+  if (exitNodeId !== exitSticky?.node_id) {
+    writes.push({ device_id: deviceId, node_id: exitNodeId, hop: "EXIT" });
+  }
+  if (writes.length > 0) {
+    const { error: upsertError } = await supabaseAdmin
+      .from("device_node_assignments")
+      .upsert(writes, { onConflict: "device_id,hop" });
+    if (upsertError) throw new Error(`device_node_assignments upsert failed: ${upsertError.message}`);
+  }
+
+  return { relayNodeId, exitNodeId };
 }
