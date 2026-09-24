@@ -12,7 +12,7 @@
 // handler (it silently nulled every renewal's expiry once tested against a
 // real, current-API-version payload).
 
-import { SEAT_PACK_SIZE } from "./accounts.js";
+import { SEAT_PACK_SIZE } from "./seat-constants.js";
 
 /**
  * @param {object} subscription - a Stripe Subscription object
