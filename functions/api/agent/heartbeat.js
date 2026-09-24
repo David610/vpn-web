@@ -52,6 +52,13 @@ export async function onRequestPost({ env, request }) {
     active_users_recent:
       body.active_users_recent == null ? null : nonNegativeInteger(body.active_users_recent),
   };
+  // observed_revision (spec 54 Phase 6): the agent reports the revision it
+  // last successfully applied via vpn-admin apply-revision. Absent/invalid
+  // is left out of the update entirely, not coerced to 0 -- an agent still
+  // on an old build that doesn't report this yet must never look like it
+  // just rolled back to revision zero.
+  const observedRevision = nonNegativeInteger(body.observed_revision);
+  if (observedRevision != null) update.observed_revision = observedRevision;
 
   // Null means "collector could not obtain this metric", not zero. Keeping
   // it explicit prevents an unavailable probe from looking healthy.
