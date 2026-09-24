@@ -95,3 +95,6 @@ jobs:
 
       - name: Validate fleet foundations migration semantics in PostgreSQL
         run: bash scripts/test-fleet-foundations-migration.sh
+
+      - name: Validate node enrollment migration semantics in PostgreSQL
+        run: bash scripts/test-node-enrollment-migration.sh

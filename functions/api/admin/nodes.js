@@ -1,5 +1,8 @@
 import { createClient } from "@supabase/supabase-js";
 import { requireAdmin } from "../../lib/admin-auth.js";
+import { writeAdminAudit } from "../../lib/admin-audit.js";
+import { sha256Hex } from "../../lib/crypto.js";
+import { generateHexSecret, ENROLLMENT_TOKEN_TTL_MS } from "../../lib/node-enrollment.js";
 
 function jsonResponse(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -127,6 +130,88 @@ export async function onRequestGet({ env, request }) {
     return jsonResponse({ nodes });
   } catch (err) {
     console.error("admin/nodes: unexpected error:", err.message);
+    return jsonResponse({ error: "Internal error" }, 500);
+  }
+}
+
+const NODE_ID_PATTERN = /^[a-z0-9][a-z0-9-]{1,62}$/;
+
+/**
+ * Node enrollment (spec §20, §54 Phase 3): creates a PROVISIONING node
+ * with no credential and a short-lived, single-use enrollment token —
+ * the admin never sees or generates the node's actual API key, and no
+ * root SSH or service-role key touches the new VPS. The raw token is
+ * returned exactly once; only its hash is stored (nodes.enrollment_token_hash).
+ * functions/api/agent/enroll.js is the only other place that ever sees it.
+ */
+export async function onRequestPost({ env, request }) {
+  const supabaseAdmin = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
+
+  const { admin, response } = await requireAdmin(request, supabaseAdmin);
+  if (!admin) return response;
+  if (admin.role === "readonly") {
+    return jsonResponse({ error: "Read-only admins cannot perform this action" }, 403);
+  }
+
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return jsonResponse({ error: "Invalid JSON body" }, 400);
+  }
+  const nodeId = typeof body?.nodeId === "string" ? body.nodeId.trim() : "";
+  if (!NODE_ID_PATTERN.test(nodeId)) {
+    return jsonResponse(
+      { error: "nodeId must be lowercase alphanumeric/hyphen, 2-63 characters" },
+      400
+    );
+  }
+  if (body?.role !== undefined && body.role !== "EXIT" && body.role !== "RELAY") {
+    return jsonResponse({ error: "role must be EXIT or RELAY" }, 400);
+  }
+  const role = body?.role ?? "EXIT";
+  const locationId = typeof body?.locationId === "string" && body.locationId ? body.locationId : null;
+  const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (locationId !== null && !UUID_PATTERN.test(locationId)) {
+    return jsonResponse({ error: "locationId must be a UUID" }, 400);
+  }
+
+  try {
+    const enrollmentToken = generateHexSecret();
+    const enrollmentTokenHash = await sha256Hex(enrollmentToken);
+    const expiresAt = new Date(Date.now() + ENROLLMENT_TOKEN_TTL_MS).toISOString();
+
+    const { error: insertError } = await supabaseAdmin.from("nodes").insert({
+      node_id: nodeId,
+      role,
+      location_id: locationId,
+      lifecycle_state: "PROVISIONING",
+      enrollment_token_hash: enrollmentTokenHash,
+      enrollment_token_expires_at: expiresAt,
+    });
+    if (insertError) {
+      if (insertError.code === "23505") {
+        return jsonResponse({ error: "A node with this id already exists" }, 409);
+      }
+      if (insertError.code === "23503") {
+        return jsonResponse({ error: "locationId does not exist" }, 400);
+      }
+      throw new Error(`nodes insert failed: ${insertError.message}`);
+    }
+
+    await writeAdminAudit(supabaseAdmin, {
+      adminUserId: admin.userId,
+      action: "admin.create_pending_node",
+      targetType: "node",
+      targetId: nodeId,
+      metadata: { role, location_id: locationId },
+    });
+
+    return jsonResponse({ ok: true, nodeId, enrollmentToken, expiresAt }, 201);
+  } catch (err) {
+    console.error("admin/nodes POST: unexpected error:", err.message);
     return jsonResponse({ error: "Internal error" }, 500);
   }
 }

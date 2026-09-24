@@ -98,7 +98,7 @@ describe("PATCH /api/admin/nodes/:id/lifecycle", () => {
         action: "admin.node_lifecycle_transition",
         target_type: "node",
         target_id: "node-1",
-        metadata: { from: "READY", to: "DRAINING" },
+        metadata: { from: "READY", to: "DRAINING", reissued_enrollment_token: false },
       })
     );
   });
@@ -110,6 +110,34 @@ describe("PATCH /api/admin/nodes/:id/lifecycle", () => {
     expect(nodeUpdate).toHaveBeenCalledWith(
       expect.objectContaining({ lifecycle_state: "RETIRED", retired_at: expect.any(String) })
     );
+  });
+
+  it("reissues a fresh enrollment token and returns it when transitioning back to PROVISIONING", async () => {
+    // Closes a real gap: without reissuing, a leaked-but-unexpired token
+    // from an earlier enrollment attempt would still be valid after a
+    // FAILED -> PROVISIONING retry, letting whoever holds it claim the
+    // node's real API key ahead of the legitimate VPS.
+    nodeMaybeSingle.mockResolvedValue({ data: { node_id: "node-1", lifecycle_state: "FAILED" }, error: null });
+    const res = await onRequestPatch({ env, request: makeRequest({ state: "PROVISIONING" }), params: { id: "node-1" } });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(typeof body.enrollmentToken).toBe("string");
+    expect(typeof body.expiresAt).toBe("string");
+
+    const update = nodeUpdate.mock.calls[0][0];
+    expect(update.enrollment_token_hash).toMatch(/^[0-9a-f]{64}$/);
+    // Only the hash is stored — never the raw token.
+    expect(update.enrollment_token_hash).not.toBe(body.enrollmentToken);
+    expect(auditInsert).toHaveBeenCalledWith(
+      expect.objectContaining({ metadata: expect.objectContaining({ reissued_enrollment_token: true }) })
+    );
+  });
+
+  it("does not include an enrollment token for a non-PROVISIONING transition", async () => {
+    const res = await onRequestPatch({ env, request: makeRequest({ state: "DRAINING" }), params: { id: "node-1" } });
+    const body = await res.json();
+    expect(body.enrollmentToken).toBeUndefined();
+    expect(nodeUpdate.mock.calls[0][0]).not.toHaveProperty("enrollment_token_hash");
   });
 
   it("returns 409 without a false ok when another request's transition wins the race", async () => {

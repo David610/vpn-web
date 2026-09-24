@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { AdminShell } from "@/components/admin/AdminShell";
 import { StatusBadge } from "@/components/admin/StatusBadge";
 import { useAdminSession } from "@/hooks/useAdminSession";
@@ -100,6 +100,11 @@ export default function AdminNodesPage() {
   // starts a transition on node B, letting A's dropdown be used again
   // while its first request is still outstanding.
   const [pendingNodeIds, setPendingNodeIds] = useState<Set<string>>(new Set());
+  const [newNodeId, setNewNodeId] = useState("");
+  const [newNodeRole, setNewNodeRole] = useState<"EXIT" | "RELAY">("EXIT");
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [enrollment, setEnrollment] = useState<{ nodeId: string; token: string; expiresAt: string } | null>(null);
 
   const load = useCallback(async () => {
     if (!session) return;
@@ -146,6 +151,43 @@ export default function AdminNodesPage() {
     [session, load]
   );
 
+  const createPendingNode = useCallback(
+    async (e: FormEvent) => {
+      e.preventDefault();
+      if (!session || !newNodeId.trim()) return;
+      if (enrollment) {
+        // The previous node's one-time token only ever exists in this
+        // component's state — it is never re-fetchable (the server only
+        // stores its hash). Overwriting `enrollment` before the admin has
+        // copied it would discard it permanently, leaving that node stuck
+        // in PROVISIONING with an orphaned, unrecoverable token.
+        setCreateError("Dismiss the current enrollment token before creating another node.");
+        return;
+      }
+      setCreating(true);
+      setCreateError(null);
+      try {
+        const body = await adminFetch<{ nodeId: string; enrollmentToken: string; expiresAt: string }>(
+          "/api/admin/nodes",
+          session.access_token,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ nodeId: newNodeId.trim(), role: newNodeRole }),
+          }
+        );
+        setEnrollment({ nodeId: body.nodeId, token: body.enrollmentToken, expiresAt: body.expiresAt });
+        setNewNodeId("");
+        await load();
+      } catch (err) {
+        setCreateError(err instanceof Error ? err.message : "Could not create node.");
+      } finally {
+        setCreating(false);
+      }
+    },
+    [session, newNodeId, newNodeRole, load, enrollment]
+  );
+
   useEffect(() => {
     if (!session) return;
     const refresh = () => {
@@ -168,6 +210,55 @@ export default function AdminNodesPage() {
           VPN traffic and host health · refresh {REFRESH_MS / 1000}s
         </span>
       </div>
+
+      <form onSubmit={createPendingNode} className="mb-4 flex items-end gap-2 rounded border p-3 text-sm">
+        <div>
+          <label className="block text-xs text-gray-500">Node id</label>
+          <input
+            className="rounded border px-2 py-1"
+            placeholder="de-fra-3"
+            value={newNodeId}
+            onChange={(e) => setNewNodeId(e.target.value)}
+            disabled={creating}
+          />
+        </div>
+        <div>
+          <label className="block text-xs text-gray-500">Role</label>
+          <select
+            className="rounded border px-2 py-1"
+            value={newNodeRole}
+            onChange={(e) => setNewNodeRole(e.target.value as "EXIT" | "RELAY")}
+            disabled={creating}
+          >
+            <option value="EXIT">EXIT</option>
+            <option value="RELAY">RELAY</option>
+          </select>
+        </div>
+        <button
+          type="submit"
+          disabled={creating || !newNodeId.trim() || !!enrollment}
+          className="rounded bg-gray-900 px-3 py-1 text-white disabled:opacity-50"
+        >
+          {creating ? "Creating…" : "Enroll node"}
+        </button>
+        {createError && <span className="text-red-600">{createError}</span>}
+      </form>
+
+      {enrollment && (
+        <div className="mb-4 rounded border border-yellow-300 bg-yellow-50 p-3 text-sm">
+          <p className="font-medium">
+            Enrollment token for {enrollment.nodeId} (shown once — copy it now):
+          </p>
+          <code className="block break-all rounded bg-white p-2 text-xs">{enrollment.token}</code>
+          <p className="mt-1 text-xs text-gray-500">
+            Expires {new Date(enrollment.expiresAt).toLocaleString()}. Pass it to the new VPS&apos;s
+            bootstrap step; it calls POST /api/agent/enroll once and is then useless.
+          </p>
+          <button className="mt-1 text-xs underline" onClick={() => setEnrollment(null)}>
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {transitionError && <p className="mb-2 text-red-600">{transitionError}</p>}
 
