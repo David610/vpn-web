@@ -168,7 +168,10 @@ export async function onRequestPost({ env, request }) {
       400
     );
   }
-  const role = body?.role === "RELAY" ? "RELAY" : "EXIT";
+  if (body?.role !== undefined && body.role !== "EXIT" && body.role !== "RELAY") {
+    return jsonResponse({ error: "role must be EXIT or RELAY" }, 400);
+  }
+  const role = body?.role ?? "EXIT";
   const locationId = typeof body?.locationId === "string" && body.locationId ? body.locationId : null;
   const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   if (locationId !== null && !UUID_PATTERN.test(locationId)) {

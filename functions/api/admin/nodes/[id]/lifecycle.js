@@ -2,6 +2,8 @@ import { createClient } from "@supabase/supabase-js";
 import { requireAdmin } from "../../../../lib/admin-auth.js";
 import { writeAdminAudit } from "../../../../lib/admin-audit.js";
 import { isValidLifecycleState, canTransitionLifecycle } from "../../../../lib/node-lifecycle.js";
+import { sha256Hex } from "../../../../lib/crypto.js";
+import { generateHexSecret, ENROLLMENT_TOKEN_TTL_MS } from "../../../../lib/node-enrollment.js";
 
 function jsonResponse(body, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -52,6 +54,24 @@ export async function onRequestPatch({ env, request, params }) {
     const update = { lifecycle_state: body.state };
     if (body.state === "RETIRED") update.retired_at = new Date().toISOString();
 
+    // A node can re-enter PROVISIONING (e.g. FAILED -> PROVISIONING, a
+    // retry). If it still has an unexpired enrollment token from a
+    // previous, possibly-leaked attempt (functions/api/agent/enroll.js's
+    // consuming UPDATE never runs unless that exact token is presented,
+    // so a token that was never spent stays valid for its full TTL
+    // regardless of what the node's lifecycle_state does in the
+    // meantime), whoever holds that old token could still redeem it and
+    // claim the node's real API key ahead of the legitimate VPS. Mint a
+    // fresh token on every transition into PROVISIONING so any prior one
+    // is unconditionally invalidated, and return it the same way POST
+    // /api/admin/nodes does.
+    let enrollmentToken = null;
+    if (body.state === "PROVISIONING") {
+      enrollmentToken = generateHexSecret();
+      update.enrollment_token_hash = await sha256Hex(enrollmentToken);
+      update.enrollment_token_expires_at = new Date(Date.now() + ENROLLMENT_TOKEN_TTL_MS).toISOString();
+    }
+
     // Guard the write on the lifecycle_state this request actually
     // validated against, not just node_id: without it, two concurrent
     // requests both reading READY (one going to QUARANTINED, one to
@@ -81,10 +101,16 @@ export async function onRequestPatch({ env, request, params }) {
       action: "admin.node_lifecycle_transition",
       targetType: "node",
       targetId: nodeId,
-      metadata: { from: node.lifecycle_state, to: body.state },
+      // Never the token or its hash here — admin-audit.js's contract is
+      // identifiers only, same as everywhere else this file is written to.
+      metadata: { from: node.lifecycle_state, to: body.state, reissued_enrollment_token: !!enrollmentToken },
     });
 
-    return jsonResponse({ ok: true, lifecycleState: body.state });
+    return jsonResponse({
+      ok: true,
+      lifecycleState: body.state,
+      ...(enrollmentToken ? { enrollmentToken, expiresAt: update.enrollment_token_expires_at } : {}),
+    });
   } catch (err) {
     console.error("admin/nodes/:id/lifecycle: unexpected error:", err.message);
     return jsonResponse({ error: "Internal error" }, 500);

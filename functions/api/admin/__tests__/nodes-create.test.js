@@ -42,6 +42,12 @@ describe("POST /api/admin/nodes", () => {
     expect(nodesInsert).not.toHaveBeenCalled();
   });
 
+  it("returns 400 for an invalid role rather than silently defaulting to EXIT", async () => {
+    const res = await onRequestPost({ env, request: makeRequest({ nodeId: "de-fra-3", role: "Relay" }) });
+    expect(res.status).toBe(400);
+    expect(nodesInsert).not.toHaveBeenCalled();
+  });
+
   it("returns 403 for a readonly admin and does not insert a node", async () => {
     adminMaybeSingle.mockResolvedValue({ data: { role: "readonly" }, error: null });
     const res = await onRequestPost({ env, request: makeRequest({ nodeId: "de-fra-3" }) });
