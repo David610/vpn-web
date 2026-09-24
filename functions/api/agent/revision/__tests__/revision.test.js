@@ -64,6 +64,15 @@ describe("GET /api/agent/revision/:revision", () => {
     expect(revisionMaybeSingle).not.toHaveBeenCalled();
   });
 
+  it.each([["scientific notation", "3e2"], ["hex", "0x3"], ["leading zero", "03"], ["decimal", "3.0"]])(
+    "rejects a numeric-coercible but non-plain-decimal revision (%s)",
+    async (_label, revision) => {
+      const res = await onRequestGet({ env, request: makeRequest(), params: { revision } });
+      expect(res.status).toBe(400);
+      expect(revisionMaybeSingle).not.toHaveBeenCalled();
+    }
+  );
+
   it("returns 404 when the node has no such revision", async () => {
     revisionMaybeSingle.mockResolvedValue({ data: null, error: null });
     const res = await onRequestGet({ env, request: makeRequest(), params: { revision: "99" } });

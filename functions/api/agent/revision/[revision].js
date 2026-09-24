@@ -23,8 +23,15 @@ export async function onRequestGet({ env, request, params }) {
   const nodeId = await authenticateNode(request, supabaseAdmin);
   if (!nodeId) return json({ error: "Unauthorized" }, 401);
 
+  // Plain decimal digits only -- Number()'s coercion also accepts things
+  // like "3e2" or "0x3", which would look like a safe integer to
+  // Number.isSafeInteger() while not being the plain revision number a
+  // caller intended.
+  if (!/^[1-9][0-9]*$/.test(params.revision ?? "")) {
+    return json({ error: "revision must be a positive integer" }, 400);
+  }
   const revision = Number(params.revision);
-  if (!Number.isSafeInteger(revision) || revision <= 0) {
+  if (!Number.isSafeInteger(revision)) {
     return json({ error: "revision must be a positive integer" }, 400);
   }
 

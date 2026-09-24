@@ -84,4 +84,15 @@ describe("createNodeRevision", () => {
       /provisioning_jobs insert failed/
     );
   });
+
+  it("treats a 23505 from the enqueue insert as a benign concurrent-call race, not a failure", async () => {
+    // provisioning_jobs_one_pending_apply_revision_per_node (the migration's
+    // partial unique index) is what actually makes the "never more than one
+    // pending job" invariant hold under concurrency -- a 23505 here means a
+    // concurrent createNodeRevision() call for the same node already has a
+    // pending job in flight, which itself satisfies the invariant.
+    const supabase = makeSupabase({ latestRevision: null, enqueueError: { code: "23505", message: "duplicate" } });
+    const result = await createNodeRevision(supabase, { nodeId: "de-fra-1", config: {} });
+    expect(result).toEqual({ revision: 1 });
+  });
 });

@@ -50,3 +50,15 @@ alter table public.provisioning_jobs
 -- observed_revision (Phase 1 column, never written before) is reported by
 -- the agent's own heartbeat once it has actually applied a revision --
 -- see functions/api/agent/heartbeat.js.
+
+-- Enforces the "never more than one pending APPLY_NODE_REVISION job per
+-- node" invariant at the database level: functions/lib/node-revisions.js's
+-- delete-then-insert coalescing is not itself atomic across two concurrent
+-- createNodeRevision() calls for the same node, so without this a race
+-- between them could leave two pending rows. The insert then relies on a
+-- 23505 from this index as "someone else's concurrent call already has a
+-- pending job in flight for this node" and treats that as success, not
+-- failure -- one pending job either way satisfies the invariant.
+create unique index provisioning_jobs_one_pending_apply_revision_per_node
+  on public.provisioning_jobs (node_id)
+  where job_type = 'APPLY_NODE_REVISION' and status = 'pending';

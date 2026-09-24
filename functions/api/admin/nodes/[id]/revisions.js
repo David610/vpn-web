@@ -34,7 +34,12 @@ export async function onRequestPost({ env, request, params }) {
   } catch {
     return jsonResponse({ error: "Invalid JSON body" }, 400);
   }
-  if (body == null || typeof body.config !== "object" || body.config === null) {
+  if (
+    body == null ||
+    typeof body.config !== "object" ||
+    body.config === null ||
+    Array.isArray(body.config)
+  ) {
     return jsonResponse({ error: "config must be a JSON object" }, 400);
   }
   const reason = typeof body?.reason === "string" && body.reason ? body.reason : null;

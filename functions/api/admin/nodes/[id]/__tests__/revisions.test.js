@@ -92,6 +92,16 @@ describe("POST /api/admin/nodes/:id/revisions", () => {
     expect(createNodeRevision).not.toHaveBeenCalled();
   });
 
+  it("returns 400 when config is an array rather than an object", async () => {
+    const res = await onRequestPost({
+      env,
+      request: makeRequest({ config: [1, 2, 3] }),
+      params: { id: "node-1" },
+    });
+    expect(res.status).toBe(400);
+    expect(createNodeRevision).not.toHaveBeenCalled();
+  });
+
   it("returns 403 for a readonly admin and does not push a revision", async () => {
     adminMaybeSingle.mockResolvedValue({ data: { role: "readonly" }, error: null });
     const res = await onRequestPost({ env, request: makeRequest({ config: {} }), params: { id: "node-1" } });

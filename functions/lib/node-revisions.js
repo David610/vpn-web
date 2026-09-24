@@ -45,6 +45,12 @@ export async function createNodeRevision(supabaseAdmin, { nodeId, config, reason
   // agent already claimed it (status != 'pending'), leave it alone; it's
   // already in flight and will pick up this new revision on its next poll
   // regardless, same as any other superseded-but-already-running job.
+  //
+  // This delete-then-insert is not itself atomic across two concurrent
+  // createNodeRevision() calls for the same node -- the migration's
+  // provisioning_jobs_one_pending_apply_revision_per_node partial unique
+  // index is what actually makes the invariant hold; a 23505 from it below
+  // means a concurrent call's job already covers this node, which is fine.
   const { error: cancelError } = await supabaseAdmin
     .from("provisioning_jobs")
     .delete()
@@ -58,7 +64,9 @@ export async function createNodeRevision(supabaseAdmin, { nodeId, config, reason
     job_type: "APPLY_NODE_REVISION",
     payload: { revision },
   });
-  if (enqueueError) throw new Error(`provisioning_jobs insert failed: ${enqueueError.message}`);
+  if (enqueueError && enqueueError.code !== "23505") {
+    throw new Error(`provisioning_jobs insert failed: ${enqueueError.message}`);
+  }
 
   return { revision };
 }
