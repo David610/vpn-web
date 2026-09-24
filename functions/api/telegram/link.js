@@ -94,6 +94,14 @@ export async function onRequestPost({ env, request }) {
       if (insertError.code === "23505") {
         return jsonResponse({ error: "This account is already linked to a Telegram account." }, 409);
       }
+      // Any other insert failure (transient DB error, etc.) leaves the code
+      // consumed with no link created -- best-effort un-consume it so the
+      // same code can be retried, rather than forcing the user back to the
+      // dashboard for a fresh one over what may be a one-off failure.
+      await supabaseAdmin
+        .from("telegram_link_codes")
+        .update({ consumed_at: null })
+        .eq("code_hash", codeHash);
       throw new Error(`telegram_links insert failed: ${insertError.message}`);
     }
 
