@@ -70,6 +70,25 @@ describe("GET /api/account/devices", () => {
     expect(dev2.assignment).toBeNull();
   });
 
+  it("never reports per-device traffic/usage figures (Phase 11 capability gate)", async () => {
+    // sing-box's official 1.14.1 build has no reliable per-user traffic
+    // attribution (docs/PHASE_11_STATS_FEASIBILITY.md) — only per-node
+    // totals exist. This response must never imply otherwise, whether via a
+    // real field or a misattributed reuse of node-level totals.
+    db = seed({
+      devices: [
+        { id: "dev-1", account_id: "acct-1", user_id: "user-1", name: "iPhone", platform: "ios", status: "ACTIVE", created_at: "2026-01-01T00:00:00Z", last_seen_at: null },
+      ],
+    });
+    const res = await listDevices({ env, request: getReq("/api/account/devices") });
+    const body = await res.json();
+    const device = body.devices[0];
+    const trafficKeyPattern = /traffic|usage|bytes|uplink|downlink|bps/i;
+    for (const key of Object.keys(device)) {
+      expect(key).not.toMatch(trafficKeyPattern);
+    }
+  });
+
   it("never returns another account's devices", async () => {
     db = seed({
       devices: [
