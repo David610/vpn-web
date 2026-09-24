@@ -394,7 +394,7 @@ export function MembersCard({
               <button
                 type="button"
                 className="btn btn-secondary"
-                disabled={busyId === "seats" || seats.extra === 0}
+                disabled={busyId === "seats" || effectivePackQuantity === 0}
                 onClick={() => changeSeatPacks(effectivePackQuantity - 1)}
                 aria-label={`Release a seat pack (${effectivePackSize} seats)`}
               >
