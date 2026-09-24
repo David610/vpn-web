@@ -76,10 +76,16 @@ function deviceView(device, { sessionId = null } = {}) {
 /** Everything the account pages and the app's Account tab show. */
 export async function getOverview(supabaseAdmin, user, { sessionId = null } = {}) {
   const account = await accountOf(supabaseAdmin, user);
-  const [subscriptions, devices] = await Promise.all([
+  const [subscriptions, devices, accountRow] = await Promise.all([
     listAccountSubscriptions(supabaseAdmin, account.accountId),
     listDevices(supabaseAdmin, account.accountId),
+    supabaseAdmin
+      .from("customer_accounts")
+      .select("trial_used_at, stripe_customer_id")
+      .eq("id", account.accountId)
+      .maybeSingle(),
   ]);
+  if (accountRow.error) throw new Error(`customer_accounts lookup failed: ${accountRow.error.message}`);
   const active = devices.filter((d) => d.status !== "REVOKED");
   const views = subscriptions
     .filter((s) => isLive(s) || s.status === "canceled" || s.status === "unpaid")
@@ -87,6 +93,10 @@ export async function getOverview(supabaseAdmin, user, { sessionId = null } = {}
   const live = views.filter((v) => isLive({ status: v.stripeStatus }));
   return ok({
     email: user.email,
+    role: account.role,
+    // The one-time trial is for an account that never had a subscription.
+    trialAvailable: !accountRow.data?.trial_used_at && subscriptions.length === 0,
+    billingAccount: Boolean(accountRow.data?.stripe_customer_id),
     subscriptions: views,
     devices: active.map((d) => deviceView(d, { sessionId })),
     capacity: {

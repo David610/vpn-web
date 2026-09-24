@@ -234,8 +234,8 @@ export async function onRequestPost({ env, request }) {
       line_items: [{ price: env.STRIPE_PRICE_ID, quantity: 1 }],
       client_reference_id: user.id,
       metadata: { subscription_name: subscriptionName },
-      success_url: `${env.SITE_URL}/dashboard/?checkout=success`,
-      cancel_url: `${env.SITE_URL}/dashboard/?checkout=cancel`,
+      success_url: `${env.SITE_URL}/account/?checkout=success`,
+      cancel_url: `${env.SITE_URL}/account/subscriptions/?checkout=cancel`,
       ...(wantsTrial ? { subscription_data: { trial_period_days: TRIAL_DAYS } } : {}),
       ...(accountRow?.stripe_customer_id
         ? { customer: accountRow.stripe_customer_id }
