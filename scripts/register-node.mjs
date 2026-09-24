@@ -32,24 +32,24 @@ const supabase = createClient(supabaseUrl, serviceKey, {
 // re-running this script against an existing node to rotate its key must
 // leave its current lifecycle_state (e.g. READY, DRAINING) untouched
 // rather than resetting it back to PROVISIONING.
-const { data: existing, error: lookupError } = await supabase
+//
+// Attempt the insert first rather than checking existence beforehand: a
+// select-then-branch has a TOCTOU window (two concurrent runs for the same
+// brand-new node_id could both see "doesn't exist yet" and both try to
+// insert). Racing the insert itself against Postgres's own primary-key
+// constraint means only one can win; the loser falls back to the update
+// branch instead of surfacing a raw duplicate-key error.
+const { error: insertError } = await supabase
   .from("nodes")
-  .select("node_id")
-  .eq("node_id", nodeId)
-  .maybeSingle();
-if (lookupError) {
-  console.error("Failed to look up node:", lookupError.message);
-  process.exit(1);
-}
+  .insert({ node_id: nodeId, api_key_hash: keyHash, revoked_at: null, lifecycle_state: "PROVISIONING" });
 
-const { error } = existing
-  ? await supabase
-      .from("nodes")
-      .update({ api_key_hash: keyHash, revoked_at: null })
-      .eq("node_id", nodeId)
-  : await supabase
-      .from("nodes")
-      .insert({ node_id: nodeId, api_key_hash: keyHash, revoked_at: null, lifecycle_state: "PROVISIONING" });
+let error = insertError;
+if (insertError?.code === "23505") {
+  ({ error } = await supabase
+    .from("nodes")
+    .update({ api_key_hash: keyHash, revoked_at: null })
+    .eq("node_id", nodeId));
+}
 if (error) {
   console.error("Failed to register node:", error.message);
   process.exit(1);
