@@ -26,6 +26,14 @@ vi.mock("../../../lib/provider-adapter.js", () => ({
   }),
 }));
 
+const startCreateNodeOperation = vi.fn();
+const advanceOperation = vi.fn();
+vi.mock("../../../lib/fleet-operations.js", () => ({ startCreateNodeOperation, advanceOperation }));
+vi.mock("../../../lib/dns-adapter.js", async (importOriginal) => ({
+  ...(await importOriginal()),
+  getDnsAdapter: vi.fn(() => ({ name: "cloudflare" })),
+}));
+
 const { onRequestPost } = await import("../nodes.js");
 const env = { SUPABASE_URL: "https://supabase.test", SUPABASE_SERVICE_ROLE_KEY: "key" };
 
@@ -44,6 +52,8 @@ beforeEach(() => {
   auditInsert.mockReset().mockResolvedValue({ error: null });
   createInstance.mockReset();
   destroyInstance.mockReset().mockResolvedValue(undefined);
+  startCreateNodeOperation.mockReset();
+  advanceOperation.mockReset();
 });
 
 describe("POST /api/admin/nodes", () => {
@@ -134,56 +144,80 @@ describe("POST /api/admin/nodes", () => {
     expect(nodesInsert).not.toHaveBeenCalled();
   });
 
-  it("calls the provider adapter, embeds the enrollment token, and stores the returned instance/ip", async () => {
-    createInstance.mockResolvedValue({
-      providerInstanceId: "12345",
-      ipAddress: "203.0.113.9",
-      region: "fsn1",
-    });
-    const res = await onRequestPost({
-      env,
-      request: makeRequest({ nodeId: "de-fra-3", provider: "hetzner", region: "fsn1" }),
-    });
-    expect(res.status).toBe(201);
-    const body = await res.json();
-    expect(body.ipAddress).toBe("203.0.113.9");
-    expect(body.providerInstanceId).toBe("12345");
+  describe("automated provider flow (CREATE_NODE operation)", () => {
+    const fleetEnv = {
+      ...env,
+      FLEET_NODE_DOMAIN: "nodes.example.test",
+      FLEET_SINGBOX_VPN_VERSION: "v1.1.0-rc.2",
+    };
 
-    const createArgs = createInstance.mock.calls[0][0];
-    expect(createArgs.nodeId).toBe("de-fra-3");
-    expect(createArgs.region).toBe("fsn1");
-    expect(createArgs.enrollmentToken).toBe(body.enrollmentToken);
+    it("registers the node + operation, advances it inline, and returns 202 WITHOUT any enrollment token", async () => {
+      startCreateNodeOperation.mockResolvedValue({ operation: { id: "op-1", type: "CREATE_NODE" } });
+      advanceOperation.mockResolvedValue({ status: "RUNNING", step: "AWAIT_ENROLLMENT", waitSeconds: 30 });
 
-    const insertedRow = nodesInsert.mock.calls[0][0];
-    expect(insertedRow).toMatchObject({
-      provider: "hetzner",
-      provider_instance_id: "12345",
-      ip_address: "203.0.113.9",
-    });
-  });
+      const res = await onRequestPost({
+        env: fleetEnv,
+        request: makeRequest({ nodeId: "de-fsn-001", provider: "hetzner", region: "fsn1" }),
+      });
+      expect(res.status).toBe(202);
+      const body = await res.json();
+      expect(body).toMatchObject({
+        ok: true,
+        nodeId: "de-fsn-001",
+        hostname: "de-fsn-001.nodes.example.test",
+        operationId: "op-1",
+        progress: { status: "RUNNING", step: "AWAIT_ENROLLMENT" },
+      });
+      // The token is minted inside the operation and only ever handed to
+      // the provider's user_data -- never to the admin's browser.
+      expect(body).not.toHaveProperty("enrollmentToken");
+      expect(JSON.stringify(body)).not.toMatch(/[0-9a-f]{64}/);
 
-  it("returns 502 and does not insert a node when the provider call fails", async () => {
-    createInstance.mockRejectedValue(new Error("Hetzner API returned 403"));
-    const res = await onRequestPost({
-      env,
-      request: makeRequest({ nodeId: "de-fra-3", provider: "hetzner", region: "fsn1" }),
+      expect(startCreateNodeOperation.mock.calls[0][1]).toEqual({
+        nodeId: "de-fsn-001",
+        role: "EXIT",
+        locationId: null,
+        provider: "hetzner",
+        region: "fsn1",
+        hostname: "de-fsn-001.nodes.example.test",
+      });
+      expect(advanceOperation).toHaveBeenCalledTimes(1);
+      expect(nodesInsert).not.toHaveBeenCalled();
+      expect(auditInsert).toHaveBeenCalledWith(
+        expect.objectContaining({ action: "admin.create_node", target_id: "de-fsn-001" })
+      );
     });
-    expect(res.status).toBe(502);
-    expect(nodesInsert).not.toHaveBeenCalled();
-  });
 
-  it("destroys the just-created provider instance if the subsequent DB insert fails", async () => {
-    createInstance.mockResolvedValue({
-      providerInstanceId: "12345",
-      ipAddress: "203.0.113.9",
-      region: "fsn1",
+    it("still returns 202 when the inline advance fails -- the reconciler resumes it", async () => {
+      startCreateNodeOperation.mockResolvedValue({ operation: { id: "op-1" } });
+      advanceOperation.mockRejectedValue(new Error("Supabase unavailable"));
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      const res = await onRequestPost({
+        env: fleetEnv,
+        request: makeRequest({ nodeId: "de-fsn-001", provider: "hetzner", region: "fsn1" }),
+      });
+      expect(res.status).toBe(202);
+      expect((await res.json()).progress).toBeNull();
     });
-    nodesInsert.mockResolvedValue({ error: { code: "23505", message: "duplicate key" } });
-    const res = await onRequestPost({
-      env,
-      request: makeRequest({ nodeId: "de-fra-3", provider: "hetzner", region: "fsn1" }),
+
+    it("returns 409 for a duplicate node id and never advances anything", async () => {
+      startCreateNodeOperation.mockResolvedValue({ error: { code: "23505", message: "duplicate key" } });
+      const res = await onRequestPost({
+        env: fleetEnv,
+        request: makeRequest({ nodeId: "de-fsn-001", provider: "hetzner", region: "fsn1" }),
+      });
+      expect(res.status).toBe(409);
+      expect(advanceOperation).not.toHaveBeenCalled();
     });
-    expect(res.status).toBe(409);
-    expect(destroyInstance).toHaveBeenCalledWith({ providerInstanceId: "12345" });
+
+    it("refuses (400) when fleet provisioning is not configured, before registering anything", async () => {
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      const res = await onRequestPost({
+        env, // no FLEET_NODE_DOMAIN / FLEET_SINGBOX_VPN_VERSION
+        request: makeRequest({ nodeId: "de-fsn-001", provider: "hetzner", region: "fsn1" }),
+      });
+      expect(res.status).toBe(400);
+      expect(startCreateNodeOperation).not.toHaveBeenCalled();
+    });
   });
 });

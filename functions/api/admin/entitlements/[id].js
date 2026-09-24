@@ -41,7 +41,8 @@ export async function onRequestDelete({ env, request, params }) {
       supabaseAdmin,
       grant.account_id,
       entitlement,
-      `admin-revoke:${grant.id}`
+      `admin-revoke:${grant.id}`,
+      env
     );
 
     await writeAdminAudit(supabaseAdmin, {

@@ -31,3 +31,18 @@ ALERT_FROM_EMAIL=onboarding@resend.dev
 # HMAC secret for verifying Mini App initData — see functions/lib/telegram-init-data.js.
 # Never commit a real value; without it every Telegram-authenticated request fails closed.
 TELEGRAM_BOT_TOKEN=123456:test-placeholder-not-a-real-bot-token
+
+# Automated fleet provisioning (docs/NODE_BOOTSTRAP.md). All optional: without
+# them the admin can still register nodes manually, but provider-backed node
+# creation refuses with a 400.
+HETZNER_API_TOKEN=<Hetzner Cloud project token — ideally a dedicated project>
+# Token scoped to Zone.DNS:Edit on the node zone ONLY (never the deploy token).
+CLOUDFLARE_DNS_API_TOKEN=<cloudflare dns-edit token>
+CLOUDFLARE_DNS_ZONE_ID=<zone id of the domain that holds FLEET_NODE_DOMAIN>
+# Nodes are published as <nodeId>.<FLEET_NODE_DOMAIN>, e.g. de-fsn-001.nodes.example.com
+FLEET_NODE_DOMAIN=nodes.example.com
+# Pinned singbox-vpn release every new node installs (must ship vpn-provisioning-agent).
+FLEET_SINGBOX_VPN_VERSION=v1.1.0-rc.2
+# Shared secret the Supabase pg_cron reconciler presents to /api/internal/fleet-tick
+# (openssl rand -hex 32). scripts/setup-fleet-cron.mjs stores it in Supabase Vault.
+FLEET_TICK_SECRET=<64 hex chars>

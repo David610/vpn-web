@@ -2,7 +2,7 @@ import { createClient } from "@supabase/supabase-js";
 import { requireUser, jsonResponse } from "../../lib/user-auth.js";
 import { getEffectiveEntitlement } from "../../lib/accounts.js";
 import { hashInviteToken } from "../../lib/invite-token.js";
-import { resolveNodeForUser } from "../../lib/resolve-node.js";
+import { syncAccountProvisioningToEntitlement } from "../../lib/provision-entitlement.js";
 
 /**
  * Every way accept_member_invite can refuse, mapped to what the invitee
@@ -75,25 +75,22 @@ export async function onRequestPost({ env, request }) {
     // separate concern and its own failure must not undo the membership.
     const entitlement = await getEffectiveEntitlement(supabaseAdmin, accountId);
     if (entitlement) {
-      const nodeId = resolveNodeForUser();
-      const payload = { user_id: user.id };
-      if (!entitlement.clearExpiry && entitlement.serviceExpiresAt) {
-        payload.expires_at = entitlement.serviceExpiresAt;
-      }
-      const { error: jobError } = await supabaseAdmin.from("provisioning_jobs").insert({
+      try {
         // Keyed on the member, so a retried acceptance cannot enqueue a
-        // second CREATE_USER for the same person.
-        idempotency_key: `create-user:member:${accountId}:${user.id}`,
-        node_id: nodeId,
-        job_type: "CREATE_USER",
-        vpn_account_id: null,
-        payload,
-      });
-      if (jobError && jobError.code !== "23505") {
+        // second identity for the same person's device. Gives the new
+        // member a device (if they have none) placed like every other one.
+        await syncAccountProvisioningToEntitlement(
+          supabaseAdmin,
+          accountId,
+          entitlement,
+          `member-joined:${accountId}:${user.id}`,
+          env
+        );
+      } catch (err) {
         // Logged, not fatal: the membership is committed, and an admin can
         // re-run provisioning. Failing here would leave the invite spent
         // with no way for the invitee to retry.
-        console.error(`accept-invite: provisioning enqueue failed: ${jobError.message}`);
+        console.error(`accept-invite: provisioning enqueue failed: ${err.message}`);
       }
     }
 

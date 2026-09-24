@@ -83,10 +83,16 @@ describe("handleInvoicePaid — first invoice", () => {
 
     const jobs = jobsOf(db);
     expect(jobs).toHaveLength(1);
+    // The member got a device, and the job creates THAT device's identity
+    // on the node it was placed on (legacy mode: node-1).
+    const [device] = db._tables.devices;
+    expect(device).toMatchObject({ account_id: "acct-1", user_id: "user-1", status: "ACTIVE" });
     expect(jobs[0]).toMatchObject({
       job_type: "CREATE_USER",
-      idempotency_key: "create-user:sub_123:user-1",
-      payload: { user_id: "user-1", expires_at: PERIOD_END_ISO },
+      node_id: "node-1",
+      device_id: device.id,
+      idempotency_key: `create-user:sub_123:create:${device.id}:node-1`,
+      payload: { user_id: "user-1", device_id: device.id, expires_at: PERIOD_END_ISO },
     });
     expect(db._tables.subscriptions[0].status).toBe("active");
   });
@@ -210,7 +216,23 @@ describe("handleInvoicePaid — renewal", () => {
     const db = makeFakeSupabase(seedAccount({ provisioned: [] }));
     await expect(
       handleInvoicePaid(db, invoice({ billingReason: "subscription_cycle" }))
-    ).rejects.toThrow(/no vpn_accounts rows/);
+    ).rejects.toThrow(/first VPN identity is not created yet/);
+  });
+
+  it("does not enqueue a duplicate CREATE_USER on the retry while the first is in flight", async () => {
+    const db = makeFakeSupabase(seedAccount({ status: "incomplete" }));
+    await handleInvoicePaid(db, invoice({ billingReason: "subscription_create" }));
+    expect(jobsOf(db)).toHaveLength(1);
+    // The renewal arrives before the agent claimed the first create: it
+    // throws (so Stripe retries) and must not add a second create for the
+    // same device and node.
+    await expect(
+      handleInvoicePaid(db, invoice({ billingReason: "subscription_cycle" }))
+    ).rejects.toThrow(/not created yet/);
+    await expect(
+      handleInvoicePaid(db, invoice({ billingReason: "subscription_cycle" }))
+    ).rejects.toThrow(/not created yet/);
+    expect(jobsOf(db).filter((j) => j.job_type === "CREATE_USER")).toHaveLength(1);
   });
 
   it("skips provisioning for an invoice that lands after cancellation", async () => {
@@ -416,9 +438,15 @@ describe("handleSubscriptionDeleted", () => {
 
     const jobs = jobsOf(db);
     expect(jobs).toHaveLength(2);
+    expect(jobs.every((j) => j.job_type === "DISABLE_USER")).toBe(true);
+    // One job per identity, each targeted at the node that identity lives on.
     expect(jobs.map((j) => j.idempotency_key).sort()).toEqual([
-      "disable-user:sub_123:1",
-      "disable-user:sub_123:2",
+      "disable-user:sub_123:disable:1",
+      "disable-user:sub_123:disable:2",
+    ]);
+    expect(jobs.map((j) => [j.vpn_account_id, j.node_id]).sort()).toEqual([
+      [1, "node-1"],
+      [2, "node-1"],
     ]);
     expect(db._tables.subscriptions[0].status).toBe("canceled");
   });
@@ -460,7 +488,7 @@ describe("handleSubscriptionDeleted", () => {
     });
 
     await expect(handleSubscriptionDeleted(db, { id: "sub_123" })).rejects.toThrow(
-      /no vpn_accounts rows/
+      /no VPN identities/
     );
   });
 
@@ -490,10 +518,11 @@ describe("handleSubscriptionTrialing", () => {
 
     const jobs = jobsOf(db);
     expect(jobs).toHaveLength(1);
+    const [device] = db._tables.devices;
     expect(jobs[0]).toMatchObject({
       job_type: "CREATE_USER",
-      idempotency_key: "create-user:sub_123:user-1",
-      payload: { user_id: "user-1", expires_at: TRIAL_END_ISO },
+      idempotency_key: `create-user:sub_123:create:${device.id}:node-1`,
+      payload: { user_id: "user-1", device_id: device.id, expires_at: TRIAL_END_ISO },
     });
     expect(db._tables.subscriptions[0]).toMatchObject({
       status: "trialing",

@@ -5,12 +5,10 @@
  * allowed_paths resolve only to *locations*; nothing before this picked a
  * specific *node* within one.
  *
- * This module is additive and self-contained. Nothing in
- * functions/lib/resolve-node.js or its ~7 existing callers calls into it
- * yet -- the old single-node path (resolveNodeForUser() always returning
- * "node-1") is untouched and stays the production behavior until a later
- * phase migrates callers over one at a time. See scheduleNodeForDevice's
- * own comment for the FEATURE_MULTI_NODE_SCHEDULING flag this guards.
+ * Live since the fleet-integration work: functions/lib/device-provisioning.js
+ * calls these for every device when FEATURE_MULTI_NODE_SCHEDULING is "true"
+ * (otherwise devices stay on the legacy single node). They only decide and
+ * persist placement; the caller turns placement into VPN identities.
  */
 
 /**
@@ -223,4 +221,62 @@ export async function scheduleDoubleHopForDevice(
   }
 
   return { relayNodeId, exitNodeId };
+}
+
+/**
+ * AUTO routing: the device has no fixed exit location. Candidates are READY
+ * EXIT nodes in every location that has an ENABLED direct allowed_paths row
+ * -- AUTO never widens authorization, it only chooses among routes that are
+ * already allowed. Preference order: the device's sticky EXIT assignment,
+ * then the node its existing VPN identity already lives on (so enabling
+ * fleet scheduling does not needlessly move legacy devices), then least
+ * loaded. Returns null (fail closed) when nothing qualifies.
+ */
+export async function scheduleAutoForDevice(supabaseAdmin, { deviceId, preferredNodeId = null }) {
+  const [{ data: paths, error: pathsError }, { data: sticky, error: stickyError }] = await Promise.all([
+    supabaseAdmin
+      .from("allowed_paths")
+      .select("exit_location_id")
+      .is("entry_location_id", null)
+      .eq("enabled", true),
+    supabaseAdmin
+      .from("device_node_assignments")
+      .select("node_id")
+      .eq("device_id", deviceId)
+      .eq("hop", "EXIT")
+      .maybeSingle(),
+  ]);
+  if (pathsError) throw new Error(`allowed_paths lookup failed: ${pathsError.message}`);
+  if (stickyError) throw new Error(`device_node_assignments lookup failed: ${stickyError.message}`);
+  const locationIds = [...new Set((paths ?? []).map((p) => p.exit_location_id))];
+  if (locationIds.length === 0) return null;
+
+  const { data: nodes, error: nodesError } = await supabaseAdmin
+    .from("nodes")
+    .select("node_id, configured_users, max_sessions")
+    .eq("role", "EXIT")
+    .eq("lifecycle_state", "READY")
+    .in("location_id", locationIds);
+  if (nodesError) throw new Error(`nodes lookup failed: ${nodesError.message}`);
+
+  const candidates = (nodes ?? [])
+    .map((node) => ({
+      nodeId: node.node_id,
+      configuredUsers: node.configured_users,
+      maxSessions: node.max_sessions,
+    }))
+    .filter(isUnderCapacity);
+
+  const stickyNodeId =
+    [sticky?.node_id, preferredNodeId].find((id) => id && candidates.some((c) => c.nodeId === id)) ?? null;
+  const nodeId = selectNodeForDevice({ candidates, stickyNodeId });
+  if (!nodeId) return null;
+
+  if (nodeId !== sticky?.node_id) {
+    const { error: upsertError } = await supabaseAdmin
+      .from("device_node_assignments")
+      .upsert({ device_id: deviceId, node_id: nodeId, hop: "EXIT" }, { onConflict: "device_id,hop" });
+    if (upsertError) throw new Error(`device_node_assignments upsert failed: ${upsertError.message}`);
+  }
+  return nodeId;
 }

@@ -16,7 +16,7 @@ function req(path) {
   });
 }
 
-function seed({ callerRole = "owner", callerId = "user-1", rpc, invites = [], vpn = [] } = {}) {
+function seed({ callerRole = "owner", callerId = "user-1", rpc, invites = [], vpn = [], devices = [] } = {}) {
   return makeFakeSupabase(
     {
       customer_accounts: [{ id: "acct-1" }],
@@ -26,6 +26,7 @@ function seed({ callerRole = "owner", callerId = "user-1", rpc, invites = [], vp
       ],
       member_invites: invites,
       vpn_accounts: vpn,
+      devices,
     },
     {
       user: { id: callerId, email: "caller@example.com" },
@@ -44,7 +45,10 @@ afterEach(() => vi.restoreAllMocks());
 
 describe("DELETE /api/account/members/:id", () => {
   it("lets the owner remove a member and revokes their VPN access", async () => {
-    db = seed({ vpn: [{ id: 7, user_id: "user-2", vpn_user_id: "vpn-2", node_id: "node-1" }] });
+    db = seed({
+      devices: [{ id: "dev-2", account_id: "acct-1", user_id: "user-2", status: "ACTIVE" }],
+      vpn: [{ id: 7, user_id: "user-2", device_id: "dev-2", vpn_user_id: "vpn-2", node_id: "node-1", enabled: true }],
+    });
     const res = await removeMember({ env, request: req("/api/account/members/user-2"), params: { id: "user-2" } });
 
     expect(res.status).toBe(200);
@@ -52,8 +56,40 @@ describe("DELETE /api/account/members/:id", () => {
     expect(jobs).toHaveLength(1);
     expect(jobs[0]).toMatchObject({
       job_type: "DISABLE_USER",
+      node_id: "node-1",
+      vpn_account_id: 7,
       payload: { vpn_user_id: "vpn-2", user_id: "user-2" },
     });
+    expect(db._tables.devices[0]).toMatchObject({ status: "REVOKED" });
+    expect(db._tables.devices[0].revoked_at).toBeTruthy();
+  });
+
+  it("revokes EVERY device of the removed member, on the node each identity lives on (fleet)", async () => {
+    // Regression: removal used to disable only the member's node-1 identity,
+    // leaving identities on other fleet nodes live after they left the plan.
+    db = seed({
+      devices: [
+        { id: "dev-phone", account_id: "acct-1", user_id: "user-2", status: "ACTIVE" },
+        { id: "dev-laptop", account_id: "acct-1", user_id: "user-2", status: "ACTIVE" },
+        { id: "dev-owner", account_id: "acct-1", user_id: "user-1", status: "ACTIVE" },
+      ],
+      vpn: [
+        { id: 7, user_id: "user-2", device_id: "dev-phone", vpn_user_id: "vpn-p", node_id: "node-1", enabled: true },
+        { id: 8, user_id: "user-2", device_id: "dev-laptop", vpn_user_id: "vpn-l", node_id: "de-fsn-001", enabled: true },
+        { id: 9, user_id: "user-1", device_id: "dev-owner", vpn_user_id: "vpn-o", node_id: "de-fsn-001", enabled: true },
+      ],
+    });
+    const res = await removeMember({ env, request: req("/api/account/members/user-2"), params: { id: "user-2" } });
+    expect(res.status).toBe(200);
+
+    const jobs = db._tables.provisioning_jobs;
+    expect(jobs.every((j) => j.job_type === "DISABLE_USER")).toBe(true);
+    expect(jobs.map((j) => [j.vpn_account_id, j.node_id]).sort()).toEqual([
+      [7, "node-1"],
+      [8, "de-fsn-001"],
+    ]);
+    const status = Object.fromEntries(db._tables.devices.map((d) => [d.id, d.status]));
+    expect(status).toEqual({ "dev-phone": "REVOKED", "dev-laptop": "REVOKED", "dev-owner": "ACTIVE" });
   });
 
   it("lets a member remove themselves", async () => {

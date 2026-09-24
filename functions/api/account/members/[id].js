@@ -1,7 +1,7 @@
 import { createClient } from "@supabase/supabase-js";
 import { requireRecentUser, jsonResponse } from "../../../lib/user-auth.js";
 import { getAccountForUser } from "../../../lib/accounts.js";
-import { resolveNodeForUser } from "../../../lib/resolve-node.js";
+import { revokeDevice } from "../../../lib/device-provisioning.js";
 
 /**
  * Removes a member from the caller's account, or lets a member remove
@@ -33,16 +33,14 @@ export async function onRequestDelete({ env, request, params }) {
       return jsonResponse({ error: "Only the account owner can remove members." }, 403);
     }
 
-    // Resolve the VPN account before the membership goes away — afterwards
-    // there is nothing linking this user to the plan being revoked.
-    const nodeId = resolveNodeForUser();
-    const { data: vpnAccount, error: vpnError } = await supabaseAdmin
-      .from("vpn_accounts")
-      .select("id, vpn_user_id")
-      .eq("user_id", targetUserId)
-      .eq("node_id", nodeId)
-      .maybeSingle();
-    if (vpnError) throw new Error(`vpn_accounts lookup failed: ${vpnError.message}`);
+    // Resolve the member's devices before the membership goes away --
+    // afterwards nothing links this user to the plan being revoked.
+    const { data: memberDevices, error: devicesError } = await supabaseAdmin
+      .from("devices")
+      .select("id, account_id, user_id, status")
+      .eq("account_id", account.accountId)
+      .eq("user_id", targetUserId);
+    if (devicesError) throw new Error(`devices lookup failed: ${devicesError.message}`);
 
     const { error: rpcError } = await supabaseAdmin.rpc("remove_account_member", {
       p_account_id: account.accountId,
@@ -61,19 +59,21 @@ export async function onRequestDelete({ env, request, params }) {
       throw new Error(`remove_account_member failed: ${rpcError.message}`);
     }
 
-    if (vpnAccount) {
-      const { error: jobError } = await supabaseAdmin.from("provisioning_jobs").insert({
-        idempotency_key: `disable-user:member-removed:${account.accountId}:${targetUserId}`,
-        node_id: nodeId,
-        job_type: "DISABLE_USER",
-        vpn_account_id: vpnAccount.id,
-        payload: { vpn_user_id: vpnAccount.vpn_user_id, user_id: targetUserId },
-      });
-      if (jobError && jobError.code !== "23505") {
+    // Every device the member had on this plan loses access, on every node
+    // its identities live on -- not just the legacy node-1 identity.
+    for (const device of memberDevices ?? []) {
+      try {
+        await revokeDevice(
+          supabaseAdmin,
+          env,
+          device,
+          `member-removed:${account.accountId}:${targetUserId}`
+        );
+      } catch (err) {
         // The membership is already gone, so this cannot be rolled back.
-        // Log loudly: the seat is free but the credential is still live
-        // until an admin re-runs the disable.
-        console.error(`members/[id]: disable enqueue failed: ${jobError.message}`);
+        // Log loudly: the seat is free but a credential may still be live
+        // until an admin re-runs the revocation.
+        console.error(`members/[id]: revoking device ${device.id} failed: ${err.message}`);
       }
     }
 

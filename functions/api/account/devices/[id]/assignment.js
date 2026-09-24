@@ -1,6 +1,7 @@
 import { createClient } from "@supabase/supabase-js";
 import { requireUser, jsonResponse } from "../../../../lib/user-auth.js";
-import { getAccountForUser } from "../../../../lib/accounts.js";
+import { getAccountForUser, getEffectiveEntitlement } from "../../../../lib/accounts.js";
+import { reconcileDeviceProvisioning } from "../../../../lib/device-provisioning.js";
 
 /**
  * Reassigns a device's connection profile — "free" in the billing sense
@@ -43,12 +44,15 @@ export async function onRequestPost({ env, request, params }) {
 
     const { data: device, error: deviceError } = await supabaseAdmin
       .from("devices")
-      .select("id, account_id, status")
+      .select("id, account_id, user_id, status")
       .eq("id", deviceId)
       .maybeSingle();
     if (deviceError) throw new Error(`devices lookup failed: ${deviceError.message}`);
     if (!device || device.account_id !== account.accountId) {
       return jsonResponse({ error: "Device not found" }, 404);
+    }
+    if (device.user_id !== user.id && account.role !== "owner") {
+      return jsonResponse({ error: "Only the account owner can change another member's device." }, 403);
     }
     if (device.status === "REVOKED") {
       return jsonResponse({ error: "Cannot assign a profile to a revoked device." }, 409);
@@ -120,7 +124,25 @@ export async function onRequestPost({ env, request, params }) {
       );
     }
 
-    return jsonResponse({ ok: true, deviceId, profileId });
+    // A new profile can mean a new route: re-place the device now so its
+    // identity moves (make-before-break) or, fail-closed, stops serving a
+    // route the new profile does not allow.
+    let placement = null;
+    const entitlement = await getEffectiveEntitlement(supabaseAdmin, account.accountId);
+    if (entitlement) {
+      const result = await reconcileDeviceProvisioning(supabaseAdmin, env, {
+        device: { ...device, status: deviceAfter.status },
+        entitlement,
+        idempotencyPrefix: `device-profile:${deviceId}:${profileId}:${Date.now()}`,
+      });
+      placement = result.placement?.ok
+        ? { status: "PLACED" }
+        : result.placement
+          ? { status: "UNSCHEDULABLE", error: result.placement.reason }
+          : null;
+    }
+
+    return jsonResponse({ ok: true, deviceId, profileId, placement });
   } catch (err) {
     console.error("account/devices/:id/assignment: unexpected error:", err.message);
     return jsonResponse({ error: "Internal error" }, 500);

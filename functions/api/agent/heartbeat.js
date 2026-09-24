@@ -68,6 +68,22 @@ export async function onRequestPost({ env, request }) {
     return json({ error: "Internal error" }, 500);
   }
 
+  // An authenticated heartbeat proves the node holds its permanent key, so
+  // the enrollment token agent/enroll.js keeps for idempotent retries has no
+  // remaining purpose. Never clear it while PROVISIONING, though: that token
+  // was freshly minted for a re-enrollment (admin/nodes/[id]/lifecycle.js)
+  // and an old agent still heartbeating must not be able to cancel it.
+  const { error: tokenClearError } = await supabaseAdmin
+    .from("nodes")
+    .update({ enrollment_token_hash: null, enrollment_token_expires_at: null })
+    .eq("node_id", nodeId)
+    .neq("lifecycle_state", "PROVISIONING")
+    .not("enrollment_token_hash", "is", null);
+  if (tokenClearError) {
+    // Non-fatal: the token still expires on its own TTL.
+    console.error("agent/heartbeat: enrollment token clear failed:", tokenClearError.message);
+  }
+
   async function reconcileAlert(kind, active, severity, message) {
     const dedupKey = `node:${nodeId}:${kind}`;
     if (active) {

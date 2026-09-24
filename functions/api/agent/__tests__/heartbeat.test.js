@@ -26,6 +26,22 @@ vi.mock("@supabase/supabase-js", () => ({
   })),
 }));
 
+// Chainable + awaitable, like a real PostgREST builder: records every
+// filter applied so tests can assert on guards.
+const updateChains = [];
+function updateChain() {
+  const chain = { filters: [] };
+  for (const op of ["eq", "neq", "not"]) {
+    chain[op] = vi.fn((...args) => {
+      chain.filters.push([op, ...args]);
+      return chain;
+    });
+  }
+  chain.then = (resolve) => resolve({ error: null });
+  updateChains.push(chain);
+  return chain;
+}
+
 const { onRequestPost } = await import("../heartbeat.js");
 const env = { SUPABASE_URL: "https://supabase.test", SUPABASE_SERVICE_ROLE_KEY: "key" };
 
@@ -39,8 +55,9 @@ function makeRequest(body) {
 
 beforeEach(() => {
   nodeMaybeSingle.mockReset().mockResolvedValue({ data: { node_id: "node-1", revoked_at: null }, error: null });
-  nodesUpdate.mockReset().mockReturnValue({ eq: vi.fn().mockResolvedValue({ error: null }) });
+  nodesUpdate.mockReset().mockImplementation(() => updateChain());
   alertsInsert.mockReset().mockResolvedValue({ error: null });
+  updateChains.length = 0;
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
 afterEach(() => vi.restoreAllMocks());
@@ -62,7 +79,7 @@ describe("POST /api/agent/heartbeat observed_revision", () => {
     await onRequestPost({ env, request: makeRequest({ observed_revision: -1 }) });
     expect(nodesUpdate.mock.calls[0][0]).not.toHaveProperty("observed_revision");
 
-    nodesUpdate.mockClear().mockReturnValue({ eq: vi.fn().mockResolvedValue({ error: null }) });
+    nodesUpdate.mockClear();
     await onRequestPost({ env, request: makeRequest({ observed_revision: 1.5 }) });
     expect(nodesUpdate.mock.calls[0][0]).not.toHaveProperty("observed_revision");
   });
@@ -70,5 +87,27 @@ describe("POST /api/agent/heartbeat observed_revision", () => {
   it("accepts observed_revision of 0 (a node's initial state)", async () => {
     await onRequestPost({ env, request: makeRequest({ observed_revision: 0 }) });
     expect(nodesUpdate.mock.calls[0][0]).toMatchObject({ observed_revision: 0 });
+  });
+});
+
+describe("POST /api/agent/heartbeat enrollment token cleanup", () => {
+  it("clears a leftover enrollment token, but never while the node is PROVISIONING", async () => {
+    await onRequestPost({ env, request: makeRequest({}) });
+    const clearCall = nodesUpdate.mock.calls.findIndex(
+      ([patch]) => "enrollment_token_hash" in patch
+    );
+    expect(clearCall).toBeGreaterThan(0);
+    expect(nodesUpdate.mock.calls[clearCall][0]).toEqual({
+      enrollment_token_hash: null,
+      enrollment_token_expires_at: null,
+    });
+    // A fresh re-enrollment token (lifecycle.js -> PROVISIONING) must
+    // survive an old agent's heartbeat.
+    expect(updateChains[clearCall].filters).toContainEqual(["neq", "lifecycle_state", "PROVISIONING"]);
+  });
+
+  it("never clears the token as part of the telemetry update itself", async () => {
+    await onRequestPost({ env, request: makeRequest({}) });
+    expect(nodesUpdate.mock.calls[0][0]).not.toHaveProperty("enrollment_token_hash");
   });
 });

@@ -4,6 +4,9 @@ import { writeAdminAudit } from "../../lib/admin-audit.js";
 import { sha256Hex } from "../../lib/crypto.js";
 import { generateHexSecret, ENROLLMENT_TOKEN_TTL_MS } from "../../lib/node-enrollment.js";
 import { getProviderAdapter } from "../../lib/provider-adapter.js";
+import { getDnsAdapter, nodeHostname } from "../../lib/dns-adapter.js";
+import { startCreateNodeOperation, advanceOperation } from "../../lib/fleet-operations.js";
+import { fleetContext } from "../../lib/fleet-context.js";
 
 function jsonResponse(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -190,31 +193,16 @@ export async function onRequestPost({ env, request }) {
     return jsonResponse({ error: "region is required when provider is set" }, 400);
   }
 
+  if (provider) {
+    return createProviderNode({ env, supabaseAdmin, admin, nodeId, role, locationId, provider, region });
+  }
+
+  // Manual flow: an admin stands the VPS up by hand and runs the node
+  // bootstrap with the returned token (docs/NODE_BOOTSTRAP.md).
   try {
     const enrollmentToken = generateHexSecret();
     const enrollmentTokenHash = await sha256Hex(enrollmentToken);
     const expiresAt = new Date(Date.now() + ENROLLMENT_TOKEN_TTL_MS).toISOString();
-
-    let providerInstanceId = null;
-    let ipAddress = null;
-    let resolvedRegion = null;
-    if (provider) {
-      let adapter;
-      try {
-        adapter = getProviderAdapter(provider, env);
-      } catch {
-        return jsonResponse({ error: `Unsupported provider: ${provider}` }, 400);
-      }
-      try {
-        const instance = await adapter.createInstance({ nodeId, region, enrollmentToken });
-        providerInstanceId = instance.providerInstanceId;
-        ipAddress = instance.ipAddress;
-        resolvedRegion = instance.region ?? region;
-      } catch (err) {
-        console.error("admin/nodes POST: provider createInstance failed:", err.message);
-        return jsonResponse({ error: "Provider request failed" }, 502);
-      }
-    }
 
     const { error: insertError } = await supabaseAdmin.from("nodes").insert({
       node_id: nodeId,
@@ -223,52 +211,85 @@ export async function onRequestPost({ env, request }) {
       lifecycle_state: "PROVISIONING",
       enrollment_token_hash: enrollmentTokenHash,
       enrollment_token_expires_at: expiresAt,
-      provider,
-      provider_instance_id: providerInstanceId,
-      ip_address: ipAddress,
     });
-    if (insertError) {
-      // The VPS itself, if the provider branch above already created one,
-      // now exists with nothing tracking it -- tear it down rather than
-      // leaking a running, billed instance nobody can find in the fleet
-      // registry.
-      if (providerInstanceId) {
-        try {
-          const adapter = getProviderAdapter(provider, env);
-          await adapter.destroyInstance({ providerInstanceId });
-        } catch (cleanupErr) {
-          console.error(
-            "admin/nodes POST: failed to clean up orphaned provider instance:",
-            cleanupErr.message
-          );
-        }
-      }
-      if (insertError.code === "23505") {
-        return jsonResponse({ error: "A node with this id already exists" }, 409);
-      }
-      if (insertError.code === "23503") {
-        return jsonResponse({ error: "locationId does not exist" }, 400);
-      }
-      throw new Error(`nodes insert failed: ${insertError.message}`);
-    }
+    if (insertError) return insertErrorResponse(insertError);
 
     await writeAdminAudit(supabaseAdmin, {
       adminUserId: admin.userId,
       action: "admin.create_pending_node",
       targetType: "node",
       targetId: nodeId,
-      metadata: {
-        role,
-        location_id: locationId,
-        provider,
-        provider_instance_id: providerInstanceId,
-        region: resolvedRegion,
-      },
+      metadata: { role, location_id: locationId, provider: null },
     });
 
+    return jsonResponse({ ok: true, nodeId, enrollmentToken, expiresAt }, 201);
+  } catch (err) {
+    console.error("admin/nodes POST: unexpected error:", err.message);
+    return jsonResponse({ error: "Internal error" }, 500);
+  }
+}
+
+function insertErrorResponse(insertError) {
+  if (insertError.code === "23505") {
+    return jsonResponse({ error: "A node with this id already exists" }, 409);
+  }
+  if (insertError.code === "23503") {
+    return jsonResponse({ error: "locationId does not exist" }, 400);
+  }
+  throw new Error(`nodes insert failed: ${insertError.message}`);
+}
+
+/**
+ * Automated flow (spec 54 Phase 4): registers the node and a resumable
+ * CREATE_NODE operation, then advances it inline once for fast feedback.
+ * Everything after that -- server creation retries, DNS, waiting for the
+ * node to enroll and bootstrap, readiness probes, READY -- is driven by the
+ * reconciler (functions/api/internal/fleet-tick.js). The enrollment token
+ * is minted inside the operation and handed only to the provider's
+ * user_data; it is never returned to the admin's browser.
+ */
+async function createProviderNode({ env, supabaseAdmin, admin, nodeId, role, locationId, provider, region }) {
+  let hostname;
+  try {
+    getProviderAdapter(provider, env);
+    hostname = nodeHostname(nodeId, env);
+    if (!env.FLEET_SINGBOX_VPN_VERSION) throw new Error("FLEET_SINGBOX_VPN_VERSION is not configured");
+    getDnsAdapter(env);
+  } catch (err) {
+    console.error("admin/nodes POST: fleet provisioning not configured:", err.message);
+    return jsonResponse({ error: `Provider ${provider} is not available` }, 400);
+  }
+
+  try {
+    const { operation, error } = await startCreateNodeOperation(supabaseAdmin, {
+      nodeId,
+      role,
+      locationId,
+      provider,
+      region,
+      hostname,
+    });
+    if (error) return insertErrorResponse(error);
+
+    await writeAdminAudit(supabaseAdmin, {
+      adminUserId: admin.userId,
+      action: "admin.create_node",
+      targetType: "node",
+      targetId: nodeId,
+      metadata: { role, location_id: locationId, provider, region, operation_id: operation.id, hostname },
+    });
+
+    let progress = null;
+    try {
+      progress = await advanceOperation(fleetContext(supabaseAdmin, env), operation);
+    } catch (err) {
+      // Not an error for the caller: the reconciler resumes the operation.
+      console.error("admin/nodes POST: inline advance failed:", err.message);
+    }
+
     return jsonResponse(
-      { ok: true, nodeId, enrollmentToken, expiresAt, ipAddress, providerInstanceId },
-      201
+      { ok: true, nodeId, hostname, operationId: operation.id, progress },
+      202
     );
   } catch (err) {
     console.error("admin/nodes POST: unexpected error:", err.message);
