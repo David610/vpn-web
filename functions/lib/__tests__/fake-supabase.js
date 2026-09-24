@@ -41,7 +41,7 @@ export function makeFakeSupabase(seed = {}, options = {}) {
   // Mirrors provisioning_jobs.idempotency_key's UNIQUE constraint, which is
   // what makes a redelivered Stripe webhook a no-op rather than a second
   // round of provisioning jobs.
-  const UNIQUE = { provisioning_jobs: "idempotency_key" };
+  const UNIQUE = { provisioning_jobs: "idempotency_key", telegram_links: "telegram_user_id" };
 
   function from(table) {
     if (!(table in tables)) throw new Error(`unexpected table ${table}`);
