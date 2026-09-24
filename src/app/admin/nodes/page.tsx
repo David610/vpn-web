@@ -155,6 +155,15 @@ export default function AdminNodesPage() {
     async (e: FormEvent) => {
       e.preventDefault();
       if (!session || !newNodeId.trim()) return;
+      if (enrollment) {
+        // The previous node's one-time token only ever exists in this
+        // component's state — it is never re-fetchable (the server only
+        // stores its hash). Overwriting `enrollment` before the admin has
+        // copied it would discard it permanently, leaving that node stuck
+        // in PROVISIONING with an orphaned, unrecoverable token.
+        setCreateError("Dismiss the current enrollment token before creating another node.");
+        return;
+      }
       setCreating(true);
       setCreateError(null);
       try {
@@ -176,7 +185,7 @@ export default function AdminNodesPage() {
         setCreating(false);
       }
     },
-    [session, newNodeId, newNodeRole, load]
+    [session, newNodeId, newNodeRole, load, enrollment]
   );
 
   useEffect(() => {
@@ -227,7 +236,7 @@ export default function AdminNodesPage() {
         </div>
         <button
           type="submit"
-          disabled={creating || !newNodeId.trim()}
+          disabled={creating || !newNodeId.trim() || !!enrollment}
           className="rounded bg-gray-900 px-3 py-1 text-white disabled:opacity-50"
         >
           {creating ? "Creating…" : "Enroll node"}

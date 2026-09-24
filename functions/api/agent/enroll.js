@@ -65,6 +65,11 @@ export async function onRequestPost({ env, request }) {
       .eq("node_id", node.node_id)
       .eq("enrollment_token_hash", tokenHash)
       .eq("lifecycle_state", node.lifecycle_state)
+      // Re-check expiry at write time, not just at the SELECT above —
+      // consistent with every other guard here re-validating exactly
+      // what was read, for a token that expires in the (narrow) window
+      // between the two.
+      .gt("enrollment_token_expires_at", new Date().toISOString())
       .select("node_id")
       .maybeSingle();
     if (updateError) throw new Error(`nodes update failed: ${updateError.message}`);

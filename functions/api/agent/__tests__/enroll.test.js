@@ -4,6 +4,7 @@ const nodeMaybeSingle = vi.fn();
 const updateMaybeSingle = vi.fn();
 const nodeUpdateChain = {
   eq: vi.fn().mockReturnThis(),
+  gt: vi.fn().mockReturnThis(),
   select: vi.fn().mockReturnThis(),
   maybeSingle: updateMaybeSingle,
 };
@@ -46,6 +47,7 @@ beforeEach(() => {
   updateMaybeSingle.mockReset().mockResolvedValue({ data: { node_id: "de-fra-3" }, error: null });
   nodeUpdate.mockClear();
   nodeUpdateChain.eq.mockClear();
+  nodeUpdateChain.gt.mockClear();
 });
 
 describe("POST /api/agent/enroll", () => {
@@ -101,6 +103,7 @@ describe("POST /api/agent/enroll", () => {
     expect(nodeUpdateChain.eq).toHaveBeenCalledWith("node_id", "de-fra-3");
     expect(nodeUpdateChain.eq).toHaveBeenCalledWith("enrollment_token_hash", expect.any(String));
     expect(nodeUpdateChain.eq).toHaveBeenCalledWith("lifecycle_state", "PROVISIONING");
+    expect(nodeUpdateChain.gt).toHaveBeenCalledWith("enrollment_token_expires_at", expect.any(String));
   });
 
   it("returns 409 without a false success when another request wins the enroll race", async () => {
