@@ -94,15 +94,31 @@ describe("POST /api/agent/enroll", () => {
     expect(update.enrollment_token_expires_at).toBeNull();
     expect(update.api_key_hash).toMatch(/^[0-9a-f]{64}$/);
 
-    // Guarded on the token hash, not just node_id (a lost race must not
-    // silently re-consume an already-spent token).
+    // Guarded on the token hash AND the lifecycle_state this request
+    // read, not just node_id (a lost race must not silently re-consume
+    // an already-spent token, and must not overwrite a concurrent
+    // lifecycle change — see the test below).
     expect(nodeUpdateChain.eq).toHaveBeenCalledWith("node_id", "de-fra-3");
     expect(nodeUpdateChain.eq).toHaveBeenCalledWith("enrollment_token_hash", expect.any(String));
+    expect(nodeUpdateChain.eq).toHaveBeenCalledWith("lifecycle_state", "PROVISIONING");
   });
 
   it("returns 409 without a false success when another request wins the enroll race", async () => {
     updateMaybeSingle.mockResolvedValue({ data: null, error: null });
     const res = await onRequestPost({ env, request: makeRequest("good-token") });
     expect(res.status).toBe(409);
+  });
+
+  it("does not resurrect a node an admin quarantined between the read and the write", async () => {
+    // The SELECT above still sees the pre-quarantine PROVISIONING state
+    // (this request raced ahead of the admin's PATCH .../lifecycle), but
+    // by the time this UPDATE runs the admin's own optimistic-concurrency
+    // guard already flipped lifecycle_state to QUARANTINED — so the
+    // lifecycle_state='PROVISIONING' guard here matches zero rows.
+    updateMaybeSingle.mockResolvedValue({ data: null, error: null });
+    const res = await onRequestPost({ env, request: makeRequest("good-token") });
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body.apiKey).toBeUndefined();
   });
 });

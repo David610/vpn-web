@@ -170,6 +170,10 @@ export async function onRequestPost({ env, request }) {
   }
   const role = body?.role === "RELAY" ? "RELAY" : "EXIT";
   const locationId = typeof body?.locationId === "string" && body.locationId ? body.locationId : null;
+  const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (locationId !== null && !UUID_PATTERN.test(locationId)) {
+    return jsonResponse({ error: "locationId must be a UUID" }, 400);
+  }
 
   try {
     const enrollmentToken = generateHexSecret();
@@ -187,6 +191,9 @@ export async function onRequestPost({ env, request }) {
     if (insertError) {
       if (insertError.code === "23505") {
         return jsonResponse({ error: "A node with this id already exists" }, 409);
+      }
+      if (insertError.code === "23503") {
+        return jsonResponse({ error: "locationId does not exist" }, 400);
       }
       throw new Error(`nodes insert failed: ${insertError.message}`);
     }

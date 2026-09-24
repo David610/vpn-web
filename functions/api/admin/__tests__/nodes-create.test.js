@@ -55,8 +55,24 @@ describe("POST /api/admin/nodes", () => {
     expect(res.status).toBe(409);
   });
 
+  it("returns 400 for a malformed locationId rather than a raw DB error", async () => {
+    const res = await onRequestPost({ env, request: makeRequest({ nodeId: "de-fra-3", locationId: "not-a-uuid" }) });
+    expect(res.status).toBe(400);
+    expect(nodesInsert).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 for a well-formed but non-existent locationId", async () => {
+    nodesInsert.mockResolvedValue({ error: { code: "23503", message: "foreign key violation" } });
+    const res = await onRequestPost({
+      env,
+      request: makeRequest({ nodeId: "de-fra-3", locationId: "00000000-0000-4000-8000-000000000099" }),
+    });
+    expect(res.status).toBe(400);
+  });
+
   it("creates a PROVISIONING node with no api_key_hash and a hashed enrollment token, returning the raw token once", async () => {
-    const res = await onRequestPost({ env, request: makeRequest({ nodeId: "de-fra-3", role: "RELAY", locationId: "loc-1" }) });
+    const locationId = "00000000-0000-4000-8000-000000000001";
+    const res = await onRequestPost({ env, request: makeRequest({ nodeId: "de-fra-3", role: "RELAY", locationId }) });
     expect(res.status).toBe(201);
     const body = await res.json();
     expect(body.nodeId).toBe("de-fra-3");
@@ -67,7 +83,7 @@ describe("POST /api/admin/nodes", () => {
     expect(insertedRow).toMatchObject({
       node_id: "de-fra-3",
       role: "RELAY",
-      location_id: "loc-1",
+      location_id: locationId,
       lifecycle_state: "PROVISIONING",
     });
     expect(insertedRow).not.toHaveProperty("api_key_hash");

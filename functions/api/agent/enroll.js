@@ -45,11 +45,15 @@ export async function onRequestPost({ env, request }) {
     const rawApiKey = generateHexSecret();
     const apiKeyHash = await sha256Hex(rawApiKey);
 
-    // Guarded on enrollment_token_hash still matching, not just node_id —
-    // the same optimistic-concurrency pattern as the admin lifecycle
-    // endpoint (functions/api/admin/nodes/[id]/lifecycle.js): a token can
-    // be consumed exactly once even if two requests race to enroll with
-    // it (a duplicated/leaked token, or a retried bootstrap script).
+    // Guarded on enrollment_token_hash AND lifecycle_state still matching
+    // what this request read, not just node_id. The token-hash guard
+    // alone stops a duplicated token from being consumed twice, but the
+    // admin lifecycle endpoint (functions/api/admin/nodes/[id]/lifecycle.js)
+    // never touches enrollment_token_hash — so without the lifecycle_state
+    // guard too, an admin quarantining this node between our SELECT and
+    // this UPDATE would be silently overwritten back to WARMING_UP with a
+    // freshly issued API key, undoing a security containment action that
+    // is supposed to be one-way (node-lifecycle.js).
     const { data: updated, error: updateError } = await supabaseAdmin
       .from("nodes")
       .update({
@@ -60,6 +64,7 @@ export async function onRequestPost({ env, request }) {
       })
       .eq("node_id", node.node_id)
       .eq("enrollment_token_hash", tokenHash)
+      .eq("lifecycle_state", node.lifecycle_state)
       .select("node_id")
       .maybeSingle();
     if (updateError) throw new Error(`nodes update failed: ${updateError.message}`);
