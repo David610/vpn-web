@@ -32,7 +32,7 @@ export default function Nav() {
         </Link>
         {loading ? null : session ? (
           <>
-            <Link href="/dashboard" className="dm-nav__link">
+            <Link href="/account/" className="dm-nav__link">
               Account
             </Link>
             <button

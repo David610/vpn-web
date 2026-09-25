@@ -89,3 +89,25 @@ stats binary + gRPC agent client), that phase should start from
 `singbox-vpn/docs/TRAFFIC_ACCOUNTING.md`'s "What it would take" section, and
 this document's regression test should be removed/updated deliberately at
 that point — not worked around silently.
+
+## Addendum (2026-09-25): account-wide UsageCard retired with the old dashboard
+
+`src/components/UsageCard.tsx` and `GET /api/vpn/usage` predate this
+document's decision above — they show *account-wide* live/monthly traffic
+via a single VPN config's Clash-API totals, from back when an account had
+exactly one VPN profile. That single-profile assumption no longer holds
+under the ADR-0001 commercial model (one account, many subscriptions, many
+devices), and the account IA rebuild (`/account/*`, replacing `/dashboard`)
+has no page it fits cleanly into: it is neither per-device (already ruled
+out above) nor per-subscription (the account only has one Clash-API
+source, not one per subscription, so a per-subscription figure would be
+just as misattributed as a per-device one).
+
+`UsageCard` was not carried over to `/account/*` and is now dead code
+(nothing in `src/app/` imports it after `src/app/dashboard/page.tsx` was
+replaced with a redirect). It is left in place, unimported, rather than
+deleted, in case a future phase revisits `GET /api/vpn/usage` as part of
+scoping real per-subscription telemetry — deleting it now would just mean
+rewriting the same rendering logic later. Do not re-wire it into `/account/*`
+without first deciding what VPN-profile/Clash-API scope it should actually
+read from under the multi-subscription model.

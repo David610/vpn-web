@@ -30,7 +30,7 @@ export function SecurityCard({ session }: { session: Session }) {
       });
       const data = await res.json().catch(() => ({}));
       if (res.status === 403 && data.code === "reauth_required") {
-        window.location.href = "/login/?next=/dashboard/&reauth=1";
+        window.location.href = `/login/?next=${encodeURIComponent(window.location.pathname)}&reauth=1`;
         return;
       }
       if (!res.ok) throw new Error(data.error || "Could not change password.");

@@ -47,7 +47,7 @@ export function TelegramCard({ session }: { session: Session }) {
       });
       const data = await res.json().catch(() => ({}));
       if (res.status === 403 && data.code === "reauth_required") {
-        window.location.href = "/login/?next=/dashboard/&reauth=1";
+        window.location.href = `/login/?next=${encodeURIComponent(window.location.pathname)}&reauth=1`;
         return;
       }
       if (!res.ok) throw new Error(data.error || "Could not generate a linking code.");
@@ -69,7 +69,7 @@ export function TelegramCard({ session }: { session: Session }) {
       });
       const data = await res.json().catch(() => ({}));
       if (res.status === 403 && data.code === "reauth_required") {
-        window.location.href = "/login/?next=/dashboard/&reauth=1";
+        window.location.href = `/login/?next=${encodeURIComponent(window.location.pathname)}&reauth=1`;
         return;
       }
       if (!res.ok) throw new Error(data.error || "Could not unlink Telegram.");
@@ -113,7 +113,7 @@ export function TelegramCard({ session }: { session: Session }) {
           <>
             <p>
               Link your Telegram account to use the Arcana Mini App with the same devices and
-              seats as your dashboard.
+              subscriptions as your account.
             </p>
             {code ? (
               <div style={{ marginTop: "var(--space-4)" }}>
