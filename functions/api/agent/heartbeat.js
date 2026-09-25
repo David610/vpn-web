@@ -1,5 +1,7 @@
 import { createClient } from "@supabase/supabase-js";
 import { authenticateNode } from "../../lib/node-auth.js";
+import { canTransitionLifecycle } from "../../lib/node-lifecycle.js";
+import { evaluateProbeResult } from "../../lib/node-health-transition.js";
 
 function json(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -59,6 +61,36 @@ export async function onRequestPost({ env, request }) {
   // just rolled back to revision zero.
   const observedRevision = nonNegativeInteger(body.observed_revision);
   if (observedRevision != null) update.observed_revision = observedRevision;
+
+  const probeOk = typeof body.probe_ok === "boolean" ? body.probe_ok : null;
+  update.last_probe_ok = probeOk;
+  update.last_probe_at = new Date().toISOString();
+
+  const { data: currentNode } = await supabaseAdmin
+    .from("nodes")
+    .select("lifecycle_state, consecutive_probe_failures, consecutive_probe_successes")
+    .eq("node_id", nodeId)
+    .maybeSingle();
+
+  let transitioned = null;
+  if (currentNode) {
+    const evalResult = evaluateProbeResult({
+      probeOk,
+      currentFailures: currentNode.consecutive_probe_failures ?? 0,
+      currentSuccesses: currentNode.consecutive_probe_successes ?? 0,
+      lifecycleState: currentNode.lifecycle_state,
+    });
+    update.consecutive_probe_failures = evalResult.failures;
+    update.consecutive_probe_successes = evalResult.successes;
+    if (
+      env.FEATURE_AUTO_NODE_HEALTH === "true" &&
+      evalResult.nextState &&
+      canTransitionLifecycle(currentNode.lifecycle_state, evalResult.nextState)
+    ) {
+      update.lifecycle_state = evalResult.nextState;
+      transitioned = evalResult.nextState;
+    }
+  }
 
   // Null means "collector could not obtain this metric", not zero. Keeping
   // it explicit prevents an unavailable probe from looking healthy.
@@ -121,6 +153,18 @@ export async function onRequestPost({ env, request }) {
       update.memory_percent != null && update.memory_percent >= 95,
       "warning",
       `Node ${nodeId} memory usage is at or above 95%`
+    ),
+    reconcileAlert(
+      "node_degraded",
+      transitioned === "DEGRADED",
+      "warning",
+      `Node ${nodeId} automatically transitioned to DEGRADED after repeated failed health probes`
+    ),
+    reconcileAlert(
+      "node_failed",
+      transitioned === "FAILED",
+      "critical",
+      `Node ${nodeId} automatically transitioned to FAILED`
     ),
   ]);
 

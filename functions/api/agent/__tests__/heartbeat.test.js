@@ -90,6 +90,62 @@ describe("POST /api/agent/heartbeat observed_revision", () => {
   });
 });
 
+describe("POST /api/agent/heartbeat — Phase 8 health transitions", () => {
+  beforeEach(() => {
+    process.env.FEATURE_AUTO_NODE_HEALTH = "true";
+  });
+  afterEach(() => {
+    delete process.env.FEATURE_AUTO_NODE_HEALTH;
+  });
+
+  function mockNode(overrides) {
+    nodeMaybeSingle.mockResolvedValue({
+      data: {
+        node_id: "node-1",
+        revoked_at: null,
+        lifecycle_state: "READY",
+        consecutive_probe_failures: 0,
+        consecutive_probe_successes: 0,
+        last_seen_at: new Date().toISOString(),
+        ...overrides,
+      },
+      error: null,
+    });
+  }
+
+  it("stores probe_ok=null as last_probe_ok null, not false, and does not transition", async () => {
+    mockNode({});
+    await onRequestPost({ env: { ...env, FEATURE_AUTO_NODE_HEALTH: "true" }, request: makeRequest({}) });
+    expect(nodesUpdate.mock.calls[0][0]).toMatchObject({ last_probe_ok: null });
+    expect(nodesUpdate.mock.calls[0][0]).not.toHaveProperty("lifecycle_state");
+  });
+
+  it("transitions READY to DEGRADED after 3 consecutive failed probes", async () => {
+    mockNode({ consecutive_probe_failures: 2 });
+    await onRequestPost({ env: { ...env, FEATURE_AUTO_NODE_HEALTH: "true" }, request: makeRequest({ probe_ok: false }) });
+    expect(nodesUpdate.mock.calls[0][0]).toMatchObject({
+      consecutive_probe_failures: 3,
+      lifecycle_state: "DEGRADED",
+    });
+  });
+
+  it("does not transition when FEATURE_AUTO_NODE_HEALTH is not set, but still records the streak", async () => {
+    mockNode({ consecutive_probe_failures: 2 });
+    await onRequestPost({ env: { ...env }, request: makeRequest({ probe_ok: false }) });
+    const update = nodesUpdate.mock.calls[0][0];
+    expect(update.consecutive_probe_failures).toBe(3);
+    expect(update).not.toHaveProperty("lifecycle_state");
+  });
+
+  it("raises a node_degraded alert on automated transition to DEGRADED", async () => {
+    mockNode({ consecutive_probe_failures: 2 });
+    await onRequestPost({ env: { ...env, FEATURE_AUTO_NODE_HEALTH: "true" }, request: makeRequest({ probe_ok: false }) });
+    expect(alertsInsert).toHaveBeenCalledWith(
+      expect.objectContaining({ alert_type: "node_degraded", dedup_key: "node:node-1:node_degraded" })
+    );
+  });
+});
+
 describe("POST /api/agent/heartbeat enrollment token cleanup", () => {
   it("clears a leftover enrollment token, but never while the node is PROVISIONING", async () => {
     await onRequestPost({ env, request: makeRequest({}) });
