@@ -228,25 +228,30 @@ const REPLACE_NODE_HANDLERS = {
     let drainDeadline = step.detail?.drainDeadline;
 
     if (!drainDeadline) {
-      if (!canTransitionLifecycle(oldNode.lifecycle_state, "DRAINING")) {
-        throw new FatalStepError(`old node ${oldNodeId} is ${oldNode.lifecycle_state}, cannot drain`);
+      // Idempotent: a retry after a crash between this write and the
+      // drainDeadline being persisted below must not re-attempt a
+      // DRAINING->DRAINING transition (not a valid edge) and fail the
+      // whole operation -- only transition if not already there.
+      if (oldNode.lifecycle_state !== "DRAINING") {
+        if (!canTransitionLifecycle(oldNode.lifecycle_state, "DRAINING")) {
+          throw new FatalStepError(`old node ${oldNodeId} is ${oldNode.lifecycle_state}, cannot drain`);
+        }
+        const moved = await updateNode(
+          supabase,
+          oldNodeId,
+          { lifecycle_state: "DRAINING", lifecycle_state_changed_at: new Date().toISOString() },
+          { lifecycle_state: oldNode.lifecycle_state }
+        );
+        if (!moved) throw new FatalStepError(`old node ${oldNodeId} lifecycle changed concurrently`);
       }
-      const moved = await updateNode(
-        supabase,
-        oldNodeId,
-        { lifecycle_state: "DRAINING", lifecycle_state_changed_at: new Date().toISOString() },
-        { lifecycle_state: oldNode.lifecycle_state }
-      );
-      if (!moved) throw new FatalStepError(`old node ${oldNodeId} lifecycle changed concurrently`);
 
       const maxWaitHours = op.detail.maxWaitHours ?? DEFAULT_REPLACE_MAX_WAIT_HOURS;
       drainDeadline = new Date(Date.now() + maxWaitHours * 60 * 60 * 1000).toISOString();
-      // Let the DRAINING transition register for at least one poll cycle
-      // before the first assignment check runs -- this also guarantees this
-      // step never completes (and cascades straight into RETIRE_OLD_NODE)
-      // within the very same advanceOperation() call that also happened to
-      // finish MARK_READY for the new node.
-      return wait(DRAIN_POLL_INTERVAL_S, { drainDeadline, remaining: null });
+      // Wait one poll cycle before the first assignment check -- keeps this
+      // tick's job to just the transition, and (as a side effect) keeps it
+      // from cascading straight into RETIRE_OLD_NODE within the same
+      // advanceOperation() call that finished MARK_READY for the new node.
+      return wait(DRAIN_POLL_INTERVAL_S, { drainDeadline });
     }
 
     // Once draining, the old node must stay draining -- if it moved
@@ -265,12 +270,6 @@ const REPLACE_NODE_HANDLERS = {
     if (assignError) throw new Error(`device_node_assignments lookup failed: ${assignError.message}`);
     const remaining = (assignments ?? []).length;
 
-    if (typeof step.detail?.remaining !== "number") {
-      // First real assignment check: record it, but still wait one more
-      // cycle before deciding, for the same reason as above.
-      return wait(DRAIN_POLL_INTERVAL_S, { drainDeadline, remaining });
-    }
-
     if (remaining === 0) return done({ drainDeadline, remaining: 0 });
     if (Date.now() > new Date(drainDeadline).getTime()) {
       return done({ drainDeadline, remaining, forced: true });
@@ -288,37 +287,30 @@ const REPLACE_NODE_HANDLERS = {
     if (error) throw new Error(`nodes lookup failed: ${error.message}`);
     if (!oldNode) throw new FatalStepError(`old node ${oldNodeId} no longer exists`);
 
-    if (oldNode.lifecycle_state === "RETIRED") {
-      return done({ retired: true, alreadyRetired: true });
-    }
-    if (oldNode.lifecycle_state !== "DRAINING") {
+    if (oldNode.lifecycle_state === "DRAINING") {
+      const moved = await updateNode(
+        supabase,
+        oldNodeId,
+        {
+          lifecycle_state: "RETIRED",
+          retired_at: new Date().toISOString(),
+          lifecycle_state_changed_at: new Date().toISOString(),
+        },
+        { lifecycle_state: "DRAINING" }
+      );
+      if (!moved) throw new Error(`old node ${oldNodeId} lifecycle changed concurrently`);
+    } else if (oldNode.lifecycle_state !== "RETIRED") {
       throw new FatalStepError(`old node ${oldNodeId} is ${oldNode.lifecycle_state}, expected DRAINING or RETIRED`);
     }
 
-    // DRAIN_OLD_NODE may have completed via its own deadline with
-    // assignments still present (forced through). Don't destroy the
-    // instance out from under live traffic on the same tick -- keep
-    // polling here until it's actually clear.
-    const { data: assignments, error: assignError } = await supabase
-      .from("device_node_assignments")
-      .select("device_id")
-      .eq("node_id", oldNodeId);
-    if (assignError) throw new Error(`device_node_assignments lookup failed: ${assignError.message}`);
-    const remaining = (assignments ?? []).length;
-    if (remaining > 0) return wait(DRAIN_POLL_INTERVAL_S, { remaining });
-
-    const moved = await updateNode(
-      supabase,
-      oldNodeId,
-      {
-        lifecycle_state: "RETIRED",
-        retired_at: new Date().toISOString(),
-        lifecycle_state_changed_at: new Date().toISOString(),
-      },
-      { lifecycle_state: "DRAINING" }
-    );
-    if (!moved) throw new Error(`old node ${oldNodeId} lifecycle changed concurrently`);
-
+    // Re-attempt destroy even when this node was already RETIRED by an
+    // earlier tick of THIS SAME operation: the idempotency_key
+    // (REPLACE_NODE:<oldNodeId>) guarantees only this operation ever moves
+    // this specific old node to RETIRED, so "already RETIRED" here can only
+    // mean a prior tick's transition succeeded but destroyInstance then
+    // threw (triggering a MAX_STEP_ATTEMPTS retry) -- never a genuinely
+    // separate actor. destroyInstance is idempotent (404-as-success), so
+    // re-calling it is always safe and never leaks an instance on retry.
     if (oldNode.provider_instance_id) {
       const adapter = providers(oldNode.provider, env);
       await adapter.destroyInstance({ providerInstanceId: oldNode.provider_instance_id });

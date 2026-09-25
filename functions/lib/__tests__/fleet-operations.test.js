@@ -286,15 +286,17 @@ describe("REPLACE_NODE operation", () => {
     await driveNewNodeToReady();
     expect((await node()).lifecycle_state).toBe("READY");
 
-    // DRAIN_OLD_NODE: old node moves to DRAINING on first entry.
-    let result = await advance();
-    expect(result).toMatchObject({ step: "DRAIN_OLD_NODE", status: "RUNNING" });
+    // DRAIN_OLD_NODE's first-entry transition cascades within the same
+    // advance() call that completes MARK_READY (advanceOperation() runs
+    // every consecutive done() step in one call), so the old node is
+    // already DRAINING by the time driveNewNodeToReady() returns.
     const oldAfterFirstDrainTick = (await rows("nodes")).find((n) => n.node_id === OLD_NODE_ID);
     expect(oldAfterFirstDrainTick.lifecycle_state).toBe("DRAINING");
+    expect(oldAfterFirstDrainTick.lifecycle_state_changed_at).toBeTruthy();
 
     // Still has an assignment -> keeps waiting.
     await db.from("device_node_assignments").insert({ device_id: "dev-1", node_id: OLD_NODE_ID, hop: "EXIT" });
-    result = await advance();
+    let result = await advance();
     expect(result).toMatchObject({ step: "DRAIN_OLD_NODE", status: "RUNNING" });
 
     // Assignment clears -> DRAIN_OLD_NODE completes, RETIRE_OLD_NODE runs.
@@ -305,23 +307,32 @@ describe("REPLACE_NODE operation", () => {
     const oldFinal = (await rows("nodes")).find((n) => n.node_id === OLD_NODE_ID);
     expect(oldFinal.lifecycle_state).toBe("RETIRED");
     expect(oldFinal.retired_at).toBeTruthy();
+    expect(oldFinal.lifecycle_state_changed_at).toBeTruthy();
     expect(provider.destroyInstance).toHaveBeenCalledWith({ providerInstanceId: "old-instance-1" });
   });
 
-  it("forces the drain through once drainDeadline passes, even with assignments remaining", async () => {
+  it("forces the drain through once drainDeadline passes, even with assignments remaining, and actually retires", async () => {
     db = makeFakeSupabase(replaceSeed());
     ctx.supabase = db;
-    await driveNewNodeToReady();
-    await advance(); // starts DRAINING, records drainDeadline
+    await driveNewNodeToReady(); // old node already DRAINING, drainDeadline recorded
     await db.from("device_node_assignments").insert({ device_id: "dev-1", node_id: OLD_NODE_ID, hop: "EXIT" });
+
+    let result = await advance();
+    expect(result).toMatchObject({ step: "DRAIN_OLD_NODE", status: "RUNNING" });
 
     const drainStep = await step("DRAIN_OLD_NODE");
     // Force the recorded deadline into the past instead of waiting real time.
     await db.from("operation_steps").update({ detail: { ...drainStep.detail, drainDeadline: new Date(Date.now() - 1000).toISOString() } }).eq("id", drainStep.id);
 
-    const result = await advance();
-    expect(result.step).toBe("RETIRE_OLD_NODE");
-    expect((await rows("device_node_assignments")).length).toBe(1); // never force-deleted, just no longer blocks
+    result = await advance();
+    // Forcing through must actually complete the replacement, not just
+    // reach RETIRE_OLD_NODE and stall there waiting for assignments to
+    // clear -- that would defeat the whole point of the forced timeout.
+    expect(result).toEqual({ status: "COMPLETED" });
+    const oldFinal = (await rows("nodes")).find((n) => n.node_id === OLD_NODE_ID);
+    expect(oldFinal.lifecycle_state).toBe("RETIRED");
+    expect(provider.destroyInstance).toHaveBeenCalledWith({ providerInstanceId: "old-instance-1" });
+    expect((await rows("device_node_assignments")).length).toBe(1); // never force-deleted, just no longer blocks retirement
   });
 
   it("leaves the old node completely untouched if new-node provisioning fails permanently", async () => {
@@ -341,17 +352,39 @@ describe("REPLACE_NODE operation", () => {
     db = makeFakeSupabase(replaceSeed({ oldState: "FAILED" }));
     ctx.supabase = db;
     await driveNewNodeToReady();
-    const result = await advance();
-    expect(result.step).toBe("DRAIN_OLD_NODE");
+    // The first-entry transition already ran within driveNewNodeToReady()'s
+    // final tick (it cascades from MARK_READY completing).
     const old = (await rows("nodes")).find((n) => n.node_id === OLD_NODE_ID);
     expect(old.lifecycle_state).toBe("DRAINING");
   });
 
-  it("fails the step, not the new node, if the old node's state changed concurrently before draining", async () => {
+  it("fails the per-tick guard, not the new node, if the old node's state changed concurrently after draining began", async () => {
     db = makeFakeSupabase(replaceSeed());
     ctx.supabase = db;
-    await driveNewNodeToReady();
-    // Simulate an admin quarantining the old node between MARK_READY and this tick.
+    await driveNewNodeToReady(); // old node already DRAINING by now
+    // Simulate an admin quarantining the old node while it's mid-drain.
+    await db.from("nodes").update({ lifecycle_state: "QUARANTINED" }).eq("node_id", OLD_NODE_ID);
+
+    const result = await advance();
+    expect(result.status).toBe("FAILED");
+    expect((await node()).lifecycle_state).toBe("READY"); // new node unaffected
+    const old = (await rows("nodes")).find((n) => n.node_id === OLD_NODE_ID);
+    expect(old.lifecycle_state).toBe("QUARANTINED"); // untouched, not silently overwritten
+  });
+
+  it("fails the first-entry drain transition, not the new node, if the old node's state changed before MARK_READY completed", async () => {
+    db = makeFakeSupabase(replaceSeed());
+    ctx.supabase = db;
+    // Drive to the brink of MARK_READY completing without taking the final
+    // tick, so the old node can be quarantined BEFORE DRAIN_OLD_NODE's
+    // first-entry transition ever runs (not just after, which the previous
+    // test covers via the per-tick guard instead).
+    await advance();
+    await setNode({ lifecycle_state: "WARMING_UP" });
+    await advance();
+    await setNode({ bootstrap_stage: "COMPLETE", bootstrap_status: "OK", last_seen_at: new Date().toISOString() });
+    for (let i = 1; i < READINESS_CONSECUTIVE_PASSES; i++) await advance();
+
     await db.from("nodes").update({ lifecycle_state: "QUARANTINED" }).eq("node_id", OLD_NODE_ID);
 
     const result = await advance();
