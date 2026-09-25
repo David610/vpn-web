@@ -120,4 +120,22 @@ describe("autoReplaceFailedNodes", () => {
     expect(started).toEqual([{ oldNodeId: "de-fsn-001", newNodeId: "de-fsn-001-r1", operationId: "op-1" }]);
     expect(startReplaceNodeOperation).toHaveBeenCalled();
   });
+
+  it("passes canary: true when FEATURE_AUTO_NODE_REPLACE_CANARY is enabled", async () => {
+    const db = makeFakeSupabase({ nodes: [OLD], fleet_operations: [] });
+    await autoReplaceFailedNodes(db, { ...baseEnv, FEATURE_AUTO_NODE_REPLACE_CANARY: "true" });
+    expect(startReplaceNodeOperation).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({ canary: true })
+    );
+  });
+
+  it("defaults canary to false when FEATURE_AUTO_NODE_REPLACE_CANARY is unset", async () => {
+    const db = makeFakeSupabase({ nodes: [OLD], fleet_operations: [] });
+    await autoReplaceFailedNodes(db, baseEnv);
+    expect(startReplaceNodeOperation).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({ canary: false })
+    );
+  });
 });

@@ -40,6 +40,7 @@ export async function autoReplaceFailedNodes(supabase, env) {
     console.error("node-auto-replace: FLEET_AUTO_REPLACE_REGION is not configured");
     return [];
   }
+  const canary = env.FEATURE_AUTO_NODE_REPLACE_CANARY === "true";
 
   const cutoff = new Date(Date.now() - thresholdMs).toISOString();
   const { data: candidates, error } = await supabase
@@ -148,6 +149,7 @@ export async function autoReplaceFailedNodes(supabase, env) {
       region,
       hostname,
       oldNodeId: oldNode.node_id,
+      canary,
     });
     if (startError) {
       if (startError.code !== "23505") {

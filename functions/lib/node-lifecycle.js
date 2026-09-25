@@ -12,8 +12,10 @@
  *
  * Phase 8 added the health-based edges READY<->DEGRADED, READY->FAILED,
  * DEGRADED->FAILED and FAILED->READY. Phase 12a added FAILED->DRAINING (a
- * FAILED node can be replaced, same as a READY or DEGRADED one). Automation
- * does NOT get everything this table allows: functions/lib/node-health-transition.js
+ * FAILED node can be replaced, same as a READY or DEGRADED one). Phase 12b
+ * added the CANARY state (WARMING_UP->CANARY, CANARY->READY,
+ * CANARY->FAILED) for canary-mode replacement. Automation does NOT get
+ * everything this table allows: functions/lib/node-health-transition.js
  * and functions/lib/fleet-operations.js's REPLACE_NODE handlers each spell
  * out their own narrower set of automated moves, using canTransitionLifecycle
  * only as a secondary guard.
@@ -22,6 +24,7 @@
 export const NODE_LIFECYCLE_STATES = Object.freeze([
   "PROVISIONING",
   "WARMING_UP",
+  "CANARY",
   "READY",
   "DEGRADED",
   "DRAINING",
@@ -33,7 +36,16 @@ export const NODE_LIFECYCLE_STATES = Object.freeze([
 
 const ALLOWED_TRANSITIONS = Object.freeze({
   PROVISIONING: ["WARMING_UP", "FAILED", "QUARANTINED"],
-  WARMING_UP: ["READY", "FAILED", "QUARANTINED"],
+  WARMING_UP: ["READY", "CANARY", "FAILED", "QUARANTINED"],
+  // Phase 12b canary-mode replacement: a node marked CANARY instead of
+  // READY by fleet-operations.js's canary-aware MARK_READY is observed
+  // under a capped share of real traffic (scheduler.js) before promotion.
+  // AWAIT_CANARY (fleet-operations.js) is the primary writer of READY/FAILED;
+  // QUARANTINED/MAINTENANCE are admin-only escape hatches (final-review
+  // finding), mirroring READY's own admin overrides -- a canary node found
+  // compromised or needing manual intervention must be reachable the same
+  // way any other actively-serving node already is.
+  CANARY: ["READY", "FAILED", "QUARANTINED", "MAINTENANCE"],
   // FAILED here is the Phase 8 automated silence edge: a node that stops
   // heartbeating entirely (isNodeSilent in node-health-transition.js) is
   // moved straight to FAILED from READY, bypassing the probe-streak

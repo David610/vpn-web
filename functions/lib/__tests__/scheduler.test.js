@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
-import { selectNodeForDevice, scheduleNodeForDevice, scheduleDoubleHopForDevice } from "../scheduler.js";
+import { selectNodeForDevice, scheduleNodeForDevice, scheduleDoubleHopForDevice, scheduleAutoForDevice } from "../scheduler.js";
+import { CANARY_SESSION_CAP } from "../fleet-operations.js";
 
 describe("selectNodeForDevice (pure)", () => {
   it("returns null when there are no candidates", () => {
@@ -56,11 +57,12 @@ describe("scheduleNodeForDevice (DB-facing)", () => {
     let filteredNodes = nodes; // Track filtered results for lifecycle_state filtering
     const nodesQuery = {
       select: vi.fn().mockReturnThis(),
-      eq: vi.fn(function (column, value) {
-        // Simulate Postgrest filtering: when lifecycle_state = READY is applied,
-        // filter to only nodes with that lifecycle_state (or nodes without it, for backward compat)
-        if (column === "lifecycle_state" && value === "READY") {
-          filteredNodes = nodes.filter((node) => !node.lifecycle_state || node.lifecycle_state === "READY");
+      eq: vi.fn().mockReturnThis(),
+      in: vi.fn(function (column, values) {
+        if (column === "lifecycle_state") {
+          filteredNodes = nodes.filter(
+            (node) => !node.lifecycle_state || values.includes(node.lifecycle_state)
+          );
         }
         return this;
       }),
@@ -195,6 +197,43 @@ describe("scheduleNodeForDevice (DB-facing)", () => {
       scheduleNodeForDevice({ from }, { deviceId: "device-1", exitLocationId: "loc-1" })
     ).rejects.toThrow(/allowed_paths lookup failed/);
   });
+
+  it("includes a CANARY node as a candidate, capped at CANARY_SESSION_CAP regardless of its own max_sessions", async () => {
+    const { from, upsert } = makeSupabaseWithNodes({
+      allowedPath: { id: "path-1" },
+      sticky: null,
+      nodes: [
+        { node_id: "canary-node", configured_users: CANARY_SESSION_CAP, max_sessions: 1000, lifecycle_state: "CANARY" },
+        { node_id: "ready-node", configured_users: 50, max_sessions: 1000, lifecycle_state: "READY" },
+      ],
+    });
+    const result = await scheduleNodeForDevice({ from }, { deviceId: "device-1", exitLocationId: "loc-1" });
+    // canary-node is at its cap (configured_users === CANARY_SESSION_CAP),
+    // so it must not be picked even though it would otherwise look
+    // least-loaded against a node with max_sessions: 1000.
+    expect(result).toBe("ready-node");
+    expect(upsert).toHaveBeenCalledWith(
+      { device_id: "device-1", node_id: "ready-node", hop: "EXIT" },
+      { onConflict: "device_id,hop" }
+    );
+  });
+
+  it("picks an under-cap CANARY node over a more-loaded READY node", async () => {
+    const { from, upsert } = makeSupabaseWithNodes({
+      allowedPath: { id: "path-1" },
+      sticky: null,
+      nodes: [
+        { node_id: "canary-node", configured_users: 2, max_sessions: 1000, lifecycle_state: "CANARY" },
+        { node_id: "ready-node", configured_users: 50, max_sessions: 1000, lifecycle_state: "READY" },
+      ],
+    });
+    const result = await scheduleNodeForDevice({ from }, { deviceId: "device-1", exitLocationId: "loc-1" });
+    expect(result).toBe("canary-node");
+    expect(upsert).toHaveBeenCalledWith(
+      { device_id: "device-1", node_id: "canary-node", hop: "EXIT" },
+      { onConflict: "device_id,hop" }
+    );
+  });
 });
 
 describe("scheduleDoubleHopForDevice (DB-facing)", () => {
@@ -235,6 +274,7 @@ describe("scheduleDoubleHopForDevice (DB-facing)", () => {
             if (column === "role") role = value;
             return this;
           }),
+          in: vi.fn().mockReturnThis(),
         };
         query.then = (resolve) =>
           resolve({ data: role === "RELAY" ? relayNodes : exitNodes, error: null });
@@ -377,5 +417,68 @@ describe("scheduleDoubleHopForDevice (DB-facing)", () => {
         { deviceId: "device-1", entryLocationId: "loc-ru", exitLocationId: "loc-de" }
       )
     ).rejects.toThrow(/allowed_paths lookup failed/);
+  });
+
+  it("includes CANARY nodes for both hops, capped independently", async () => {
+    const { from, upsert } = makeSupabase({
+      allowedPath: { id: "path-1" },
+      relaySticky: null,
+      exitSticky: null,
+      relayNodes: [{ node_id: "relay-canary", configured_users: 1, max_sessions: 1000, lifecycle_state: "CANARY" }],
+      exitNodes: [{ node_id: "exit-canary", configured_users: 1, max_sessions: 1000, lifecycle_state: "CANARY" }],
+    });
+    const result = await scheduleDoubleHopForDevice(
+      { from },
+      { deviceId: "device-1", entryLocationId: "loc-ru", exitLocationId: "loc-de" }
+    );
+    expect(result).toEqual({ relayNodeId: "relay-canary", exitNodeId: "exit-canary" });
+    expect(upsert).toHaveBeenCalled();
+  });
+});
+
+describe("scheduleAutoForDevice (DB-facing)", () => {
+  function makeSupabaseAuto({ paths, sticky, nodes }) {
+    const upsert = vi.fn().mockResolvedValue({ error: null });
+    const from = vi.fn((table) => {
+      if (table === "allowed_paths") {
+        return {
+          select: vi.fn().mockReturnThis(),
+          is: vi.fn().mockReturnThis(),
+          eq: vi.fn().mockResolvedValue({ data: paths, error: null }),
+        };
+      }
+      if (table === "device_node_assignments") {
+        return {
+          select: vi.fn().mockReturnThis(),
+          eq: vi.fn().mockReturnThis(),
+          maybeSingle: vi.fn().mockResolvedValue({ data: sticky, error: null }),
+          upsert,
+        };
+      }
+      if (table === "nodes") {
+        const query = {
+          select: vi.fn().mockReturnThis(),
+          eq: vi.fn().mockReturnThis(),
+          in: vi.fn().mockReturnThis(),
+        };
+        query.then = (resolve) => resolve({ data: nodes, error: null });
+        return query;
+      }
+      throw new Error(`unexpected table ${table}`);
+    });
+    return { from, upsert };
+  }
+
+  it("includes a CANARY node as a candidate, capped like the direct scheduler", async () => {
+    const { from } = makeSupabaseAuto({
+      paths: [{ exit_location_id: "loc-1" }],
+      sticky: null,
+      nodes: [
+        { node_id: "canary-node", configured_users: CANARY_SESSION_CAP, max_sessions: 1000, lifecycle_state: "CANARY" },
+        { node_id: "ready-node", configured_users: 50, max_sessions: 1000, lifecycle_state: "READY" },
+      ],
+    });
+    const result = await scheduleAutoForDevice({ from }, { deviceId: "device-1" });
+    expect(result).toBe("ready-node");
   });
 });

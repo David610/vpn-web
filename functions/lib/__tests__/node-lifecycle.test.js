@@ -102,3 +102,29 @@ describe("allowedNextLifecycleStates", () => {
     expect(allowedNextLifecycleStates("READY")).not.toContain("MUTATED");
   });
 });
+
+describe("Phase 12b CANARY state", () => {
+  it("allows WARMING_UP to CANARY (canary-mode replacement)", () => {
+    expect(canTransitionLifecycle("WARMING_UP", "CANARY")).toBe(true);
+  });
+
+  it("allows CANARY to READY (canary promotion)", () => {
+    expect(canTransitionLifecycle("CANARY", "READY")).toBe(true);
+  });
+
+  it("allows CANARY to FAILED (canary abort)", () => {
+    expect(canTransitionLifecycle("CANARY", "FAILED")).toBe(true);
+  });
+
+  it("includes CANARY in the valid state list", () => {
+    expect(isValidLifecycleState("CANARY")).toBe(true);
+  });
+
+  it("allows CANARY to QUARANTINED (admin can quarantine a node mid-canary, e.g. found compromised)", () => {
+    expect(canTransitionLifecycle("CANARY", "QUARANTINED")).toBe(true);
+  });
+
+  it("allows CANARY to MAINTENANCE (admin operational override mid-canary)", () => {
+    expect(canTransitionLifecycle("CANARY", "MAINTENANCE")).toBe(true);
+  });
+});

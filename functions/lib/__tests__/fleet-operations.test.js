@@ -5,6 +5,7 @@ import {
   CREATE_NODE_STEPS,
   REPLACE_NODE_STEPS,
   READINESS_CONSECUTIVE_PASSES,
+  startReplaceNodeOperation,
 } from "../fleet-operations.js";
 
 const NODE_ID = "de-fsn-001";
@@ -57,8 +58,9 @@ function seed({ deadlineAt } = {}) {
 
 const OLD_NODE_ID = "de-fsn-old";
 
-function replaceSeed({ oldState = "READY", drainDeadline } = {}) {
+function replaceSeed({ oldState = "READY", canary = false } = {}) {
   const base = seed();
+  base.nodes[0].consecutive_probe_failures = 0;
   base.nodes.push({
     node_id: OLD_NODE_ID,
     role: "EXIT",
@@ -68,7 +70,7 @@ function replaceSeed({ oldState = "READY", drainDeadline } = {}) {
     ip_address: "198.51.100.1",
   });
   base.fleet_operations[0].type = "REPLACE_NODE";
-  base.fleet_operations[0].detail = { provider: "hetzner", region: "fsn1", oldNodeId: OLD_NODE_ID, maxWaitHours: 72 };
+  base.fleet_operations[0].detail = { provider: "hetzner", region: "fsn1", oldNodeId: OLD_NODE_ID, maxWaitHours: 72, canary };
   base.operation_steps = REPLACE_NODE_STEPS.map((name, i) => ({
     id: i + 1,
     operation_id: "op-1",
@@ -392,5 +394,177 @@ describe("REPLACE_NODE operation", () => {
     expect((await node()).lifecycle_state).toBe("READY"); // new node unaffected
     const old = (await rows("nodes")).find((n) => n.node_id === OLD_NODE_ID);
     expect(old.lifecycle_state).toBe("QUARANTINED"); // untouched, not silently overwritten
+  });
+
+  it("non-canary MARK_READY is unaffected: goes straight to READY, AWAIT_CANARY no-ops", async () => {
+    db = makeFakeSupabase(replaceSeed({ canary: false }));
+    ctx.supabase = db;
+    await driveNewNodeToReady();
+    expect((await node()).lifecycle_state).toBe("READY");
+    // AWAIT_CANARY must have completed within the same cascade as MARK_READY
+    // (it's a no-op for non-canary), landing straight on DRAIN_OLD_NODE's
+    // first entry -- same observable behavior as before this task existed.
+    const old = (await rows("nodes")).find((n) => n.node_id === OLD_NODE_ID);
+    expect(old.lifecycle_state).toBe("DRAINING");
+  });
+
+  it("canary mode: MARK_READY marks the node CANARY, not READY", async () => {
+    db = makeFakeSupabase(replaceSeed({ canary: true }));
+    ctx.supabase = db;
+    await driveNewNodeToReady();
+    expect((await node()).lifecycle_state).toBe("CANARY");
+    // The old node must be completely untouched -- DRAIN_OLD_NODE has not
+    // run, since AWAIT_CANARY is still waiting out the observation window.
+    const old = (await rows("nodes")).find((n) => n.node_id === OLD_NODE_ID);
+    expect(old.lifecycle_state).toBe("READY");
+  });
+
+  it("canary mode: promotes to READY once the observation window has elapsed with no failures", async () => {
+    db = makeFakeSupabase(replaceSeed({ canary: true }));
+    ctx.supabase = db;
+    await driveNewNodeToReady();
+    expect((await node()).lifecycle_state).toBe("CANARY");
+
+    // Force the CANARY entry timestamp into the past instead of waiting real time.
+    await setNode({ lifecycle_state_changed_at: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString() });
+
+    const result = await advance();
+    expect(result).toMatchObject({ step: "DRAIN_OLD_NODE", status: "RUNNING" });
+    expect((await node()).lifecycle_state).toBe("READY");
+  });
+
+  it("canary mode: aborts to FAILED once probe failures cross the threshold, old node untouched", async () => {
+    db = makeFakeSupabase(replaceSeed({ canary: true }));
+    ctx.supabase = db;
+    await driveNewNodeToReady();
+    expect((await node()).lifecycle_state).toBe("CANARY");
+
+    await setNode({ consecutive_probe_failures: 3 });
+
+    const result = await advance();
+    expect(result.status).toBe("FAILED");
+    expect((await node()).lifecycle_state).toBe("FAILED");
+    const old = (await rows("nodes")).find((n) => n.node_id === OLD_NODE_ID);
+    expect(old.lifecycle_state).toBe("READY"); // never touched
+  });
+
+  it("canary mode: a node with no probe capability still promotes on the window alone", async () => {
+    db = makeFakeSupabase(replaceSeed({ canary: true }));
+    ctx.supabase = db;
+    await driveNewNodeToReady();
+    await setNode({
+      lifecycle_state_changed_at: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(),
+      consecutive_probe_failures: null,
+    });
+
+    const result = await advance();
+    expect(result).toMatchObject({ step: "DRAIN_OLD_NODE", status: "RUNNING" });
+    expect((await node()).lifecycle_state).toBe("READY");
+  });
+
+  it("canary mode: still waiting mid-window, below the failure threshold", async () => {
+    db = makeFakeSupabase(replaceSeed({ canary: true }));
+    ctx.supabase = db;
+    await driveNewNodeToReady();
+    await setNode({ consecutive_probe_failures: 2 }); // below FAILURE_THRESHOLD (3)
+
+    const result = await advance();
+    expect(result).toMatchObject({ step: "AWAIT_CANARY", status: "RUNNING" });
+    expect((await node()).lifecycle_state).toBe("CANARY");
+  });
+
+  it("canary mode: fails loudly, not silently, if the new node's state changed concurrently (e.g. an admin quarantined it)", async () => {
+    db = makeFakeSupabase(replaceSeed({ canary: true }));
+    ctx.supabase = db;
+    await driveNewNodeToReady();
+    await setNode({ lifecycle_state: "QUARANTINED" });
+
+    const result = await advance();
+    expect(result.status).toBe("FAILED");
+    const old = (await rows("nodes")).find((n) => n.node_id === OLD_NODE_ID);
+    expect(old.lifecycle_state).toBe("READY"); // never touched
+  });
+
+  it("canary mode: idempotent -- resuming AWAIT_CANARY after the node already reached READY does not re-attempt the transition", async () => {
+    db = makeFakeSupabase(replaceSeed({ canary: true }));
+    ctx.supabase = db;
+    await driveNewNodeToReady();
+    await setNode({ lifecycle_state: "READY" }); // simulate a prior tick's promotion that already committed
+
+    const result = await advance();
+    expect(result).toMatchObject({ step: "DRAIN_OLD_NODE", status: "RUNNING" });
+  });
+
+  it("canary mode: aborts to FAILED if the node goes silent during the window, even with a below-threshold failure count", async () => {
+    db = makeFakeSupabase(replaceSeed({ canary: true }));
+    ctx.supabase = db;
+    await driveNewNodeToReady();
+    expect((await node()).lifecycle_state).toBe("CANARY");
+
+    // Silent: no heartbeat for well over HEARTBEAT_INTERVAL_MS * SILENCE_THRESHOLD_MULTIPLIER,
+    // but consecutive_probe_failures never had the chance to reach FAILURE_THRESHOLD
+    // because a dead agent sends no heartbeats at all, so no probe result ever arrives.
+    await setNode({
+      last_seen_at: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
+      consecutive_probe_failures: 0,
+    });
+
+    const result = await advance();
+    expect(result.status).toBe("FAILED");
+    expect((await node()).lifecycle_state).toBe("FAILED");
+    const old = (await rows("nodes")).find((n) => n.node_id === OLD_NODE_ID);
+    expect(old.lifecycle_state).toBe("READY"); // never touched, never drained
+  });
+});
+
+describe("startReplaceNodeOperation deadline budgets for canary", () => {
+  it("adds CANARY_OBSERVATION_MS to the operation deadline when canary is true", async () => {
+    const rpc = vi.fn().mockResolvedValue({ data: { id: "op-9" }, error: null });
+    const before = Date.now();
+    await startReplaceNodeOperation(
+      { rpc },
+      { newNodeId: "n2", role: "EXIT", locationId: "loc-1", provider: "hetzner", region: "fsn1", hostname: "n2.test", oldNodeId: "n1", maxWaitHours: 1, canary: true }
+    );
+    const canaryDeadline = new Date(rpc.mock.calls[0][1].p_deadline_at).getTime();
+
+    rpc.mockClear();
+    await startReplaceNodeOperation(
+      { rpc },
+      { newNodeId: "n2", role: "EXIT", locationId: "loc-1", provider: "hetzner", region: "fsn1", hostname: "n2.test", oldNodeId: "n1", maxWaitHours: 1, canary: false }
+    );
+    const nonCanaryDeadline = new Date(rpc.mock.calls[0][1].p_deadline_at).getTime();
+
+    // The canary deadline must budget at least the full observation window
+    // (2h) beyond the non-canary deadline, or a forced drain after the
+    // window elapses could hit the outer deadline first and strand the old
+    // node in DRAINING forever with its instance never destroyed.
+    expect(canaryDeadline - nonCanaryDeadline).toBeGreaterThanOrEqual(2 * 60 * 60 * 1000 - 1000);
+    expect(canaryDeadline).toBeGreaterThan(before);
+  });
+});
+
+describe("startReplaceNodeOperation canary option", () => {
+  it("passes canary through to the RPC's p_detail", async () => {
+    const rpc = vi.fn().mockResolvedValue({ data: { id: "op-9" }, error: null });
+    await startReplaceNodeOperation(
+      { rpc },
+      { newNodeId: "n2", role: "EXIT", locationId: "loc-1", provider: "hetzner", region: "fsn1", hostname: "n2.test", oldNodeId: "n1", canary: true }
+    );
+    expect(rpc).toHaveBeenCalledWith(
+      "register_node_replace_operation",
+      expect.objectContaining({ p_detail: { provider: "hetzner", region: "fsn1", canary: true } })
+    );
+  });
+
+  it("defaults canary to false when omitted", async () => {
+    const rpc = vi.fn().mockResolvedValue({ data: { id: "op-9" }, error: null });
+    await startReplaceNodeOperation(
+      { rpc },
+      { newNodeId: "n2", role: "EXIT", locationId: "loc-1", provider: "hetzner", region: "fsn1", hostname: "n2.test", oldNodeId: "n1" }
+    );
+    expect(rpc).toHaveBeenCalledWith(
+      "register_node_replace_operation",
+      expect.objectContaining({ p_detail: { provider: "hetzner", region: "fsn1", canary: false } })
+    );
   });
 });

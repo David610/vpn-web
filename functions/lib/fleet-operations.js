@@ -2,6 +2,7 @@ import { sha256Hex } from "./crypto.js";
 import { generateHexSecret, ENROLLMENT_TOKEN_TTL_MS } from "./node-enrollment.js";
 import { canTransitionLifecycle } from "./node-lifecycle.js";
 import { buildNodeBootstrapUserData } from "./node-bootstrap.js";
+import { FAILURE_THRESHOLD, HEARTBEAT_INTERVAL_MS, SILENCE_THRESHOLD_MULTIPLIER } from "./node-health-transition.js";
 
 /**
  * Resumable fleet operations (spec §24 sagas), persisted in
@@ -58,7 +59,7 @@ async function loadNode(supabase, nodeId) {
   const { data, error } = await supabase
     .from("nodes")
     .select(
-      "node_id, role, lifecycle_state, hostname, provider, provider_instance_id, ip_address, dns_record_id, last_seen_at, bootstrap_stage, bootstrap_status, bootstrap_message"
+      "node_id, role, lifecycle_state, hostname, provider, provider_instance_id, ip_address, dns_record_id, last_seen_at, bootstrap_stage, bootstrap_status, bootstrap_message, consecutive_probe_failures, lifecycle_state_changed_at"
     )
     .eq("node_id", nodeId)
     .maybeSingle();
@@ -210,10 +211,83 @@ export const DRAIN_POLL_INTERVAL_S = 300;
 // drainDeadline is what actually forces the drain through on schedule.
 const REPLACE_DEADLINE_BUFFER_MS = 60 * 60 * 1000;
 
-export const REPLACE_NODE_STEPS = [...CREATE_NODE_STEPS, "DRAIN_OLD_NODE", "RETIRE_OLD_NODE"];
+export const CANARY_OBSERVATION_MS = 2 * 60 * 60 * 1000; // 2 hours
+export const CANARY_SESSION_CAP = 10;
+
+export const REPLACE_NODE_STEPS = [...CREATE_NODE_STEPS, "AWAIT_CANARY", "DRAIN_OLD_NODE", "RETIRE_OLD_NODE"];
 
 const REPLACE_NODE_HANDLERS = {
   ...CREATE_NODE_HANDLERS,
+
+  // Overrides CREATE_NODE_HANDLERS.MARK_READY: when this operation is
+  // canary-mode, the new node goes to CANARY instead of READY, and
+  // AWAIT_CANARY (below) is what eventually promotes it. Non-canary
+  // REPLACE_NODE operations (detail.canary is false/absent) behave
+  // identically to CREATE_NODE_HANDLERS.MARK_READY.
+  async MARK_READY({ supabase }, op, node) {
+    if (node.lifecycle_state === "READY" || node.lifecycle_state === "CANARY") return done();
+    const targetState = op.detail.canary ? "CANARY" : "READY";
+    if (!canTransitionLifecycle(node.lifecycle_state, targetState)) {
+      throw new FatalStepError(`cannot mark ${node.lifecycle_state} node ${targetState}`);
+    }
+    const moved = await updateNode(
+      supabase,
+      node.node_id,
+      { lifecycle_state: targetState, lifecycle_state_changed_at: new Date().toISOString() },
+      { lifecycle_state: node.lifecycle_state }
+    );
+    if (!moved) throw new Error("node lifecycle changed concurrently");
+    return done();
+  },
+
+  async AWAIT_CANARY({ supabase }, op, node) {
+    if (!op.detail.canary || node.lifecycle_state === "READY") return done();
+    if (node.lifecycle_state !== "CANARY") {
+      throw new FatalStepError(`node entered ${node.lifecycle_state} during canary observation`);
+    }
+
+    const failures = node.consecutive_probe_failures ?? 0;
+    // A node that goes completely dark (agent/VM crashed) never sends
+    // another heartbeat, so it never earns another probe result and
+    // consecutive_probe_failures can sit frozen below FAILURE_THRESHOLD
+    // forever -- without this check a silent canary would be promoted to
+    // READY on the window elapsing alone, and the old node would then be
+    // drained out from under live traffic for a replacement that isn't
+    // actually reachable. Phase 8's own SILENCE_ELIGIBLE_STATES doesn't
+    // cover CANARY (only READY/DEGRADED), so this is CANARY's own silence
+    // check, not a call into isNodeSilent().
+    const silent =
+      node.last_seen_at &&
+      Date.now() - new Date(node.last_seen_at).getTime() > HEARTBEAT_INTERVAL_MS * SILENCE_THRESHOLD_MULTIPLIER;
+    if (silent || failures >= FAILURE_THRESHOLD) {
+      const moved = await updateNode(
+        supabase,
+        node.node_id,
+        { lifecycle_state: "FAILED", lifecycle_state_changed_at: new Date().toISOString() },
+        { lifecycle_state: "CANARY" }
+      );
+      if (!moved) throw new Error("node lifecycle changed concurrently");
+      throw new FatalStepError(
+        silent
+          ? `node ${node.node_id} went silent during canary observation`
+          : `node ${node.node_id} failed canary observation (${failures} consecutive probe failures)`
+      );
+    }
+
+    const elapsedMs = Date.now() - new Date(node.lifecycle_state_changed_at).getTime();
+    if (elapsedMs < CANARY_OBSERVATION_MS) {
+      return wait(DRAIN_POLL_INTERVAL_S, {});
+    }
+
+    const moved = await updateNode(
+      supabase,
+      node.node_id,
+      { lifecycle_state: "READY", lifecycle_state_changed_at: new Date().toISOString() },
+      { lifecycle_state: "CANARY" }
+    );
+    if (!moved) throw new Error("node lifecycle changed concurrently");
+    return done();
+  },
 
   async DRAIN_OLD_NODE({ supabase }, op, _newNode, step) {
     const oldNodeId = op.detail.oldNodeId;
@@ -356,16 +430,35 @@ export async function startCreateNodeOperation(
  */
 export async function startReplaceNodeOperation(
   supabase,
-  { newNodeId, role, locationId, provider, region, hostname, oldNodeId, maxWaitHours = DEFAULT_REPLACE_MAX_WAIT_HOURS }
+  {
+    newNodeId,
+    role,
+    locationId,
+    provider,
+    region,
+    hostname,
+    oldNodeId,
+    maxWaitHours = DEFAULT_REPLACE_MAX_WAIT_HOURS,
+    canary = false,
+  }
 ) {
-  const deadlineMs = CREATE_NODE_DEADLINE_MS + maxWaitHours * 60 * 60 * 1000 + REPLACE_DEADLINE_BUFFER_MS;
+  // Canary mode must budget the full observation window into the outer
+  // deadline too, or a forced drain that only starts after AWAIT_CANARY's
+  // window elapses can hit the outer deadline before DRAIN_OLD_NODE ever
+  // gets to force through -- stranding the old node in DRAINING forever
+  // with its provider instance never destroyed (final-review finding).
+  const deadlineMs =
+    CREATE_NODE_DEADLINE_MS +
+    (canary ? CANARY_OBSERVATION_MS : 0) +
+    maxWaitHours * 60 * 60 * 1000 +
+    REPLACE_DEADLINE_BUFFER_MS;
   const { data: operation, error } = await supabase.rpc("register_node_replace_operation", {
     p_node_id: newNodeId,
     p_role: role,
     p_location_id: locationId,
     p_provider: provider,
     p_hostname: hostname,
-    p_detail: { provider, region },
+    p_detail: { provider, region, canary },
     p_old_node_id: oldNodeId,
     p_max_wait_hours: maxWaitHours,
     p_steps: REPLACE_NODE_STEPS,
@@ -386,7 +479,7 @@ async function finishOperation(supabase, op, status, lastError = null) {
 
 async function failNodeIfBooting(supabase, nodeId) {
   if (!nodeId) return;
-  for (const from of ["PROVISIONING", "WARMING_UP"]) {
+  for (const from of ["PROVISIONING", "WARMING_UP", "CANARY"]) {
     await updateNode(
       supabase,
       nodeId,
