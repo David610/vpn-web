@@ -63,6 +63,7 @@ export async function onRequestPost({ env, request, params }) {
       return jsonResponse({ error: "maxWaitHours must be a whole number between 1 and 720" }, 400);
     }
   }
+  const canary = body?.canary === true;
 
   try {
     const { data: oldNode, error: lookupError } = await supabaseAdmin
@@ -101,6 +102,7 @@ export async function onRequestPost({ env, request, params }) {
       hostname,
       oldNodeId,
       maxWaitHours,
+      canary,
     });
     if (error) {
       if (error.code === "23505") {
@@ -120,7 +122,7 @@ export async function onRequestPost({ env, request, params }) {
       action: "admin.node_replace_initiated",
       targetType: "node",
       targetId: oldNodeId,
-      metadata: { oldNodeId, newNodeId, operationId: operation.id, provider, region, maxWaitHours },
+      metadata: { oldNodeId, newNodeId, operationId: operation.id, provider, region, maxWaitHours, canary },
     });
 
     let progress = null;

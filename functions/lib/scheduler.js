@@ -11,6 +11,8 @@
  * persist placement; the caller turns placement into VPN identities.
  */
 
+import { CANARY_SESSION_CAP } from "./fleet-operations.js";
+
 /**
  * Pure placement logic: no I/O, no Supabase client. `candidates` is
  * already filtered to nodes that are READY, role EXIT, in the requested
@@ -45,8 +47,12 @@ export function selectNodeForDevice({ candidates, stickyNodeId }) {
 }
 
 function isUnderCapacity(node) {
-  if (node.maxSessions == null) return true;
-  return (node.configuredUsers ?? 0) < node.maxSessions;
+  const effectiveMax =
+    node.lifecycleState === "CANARY"
+      ? Math.min(node.maxSessions ?? Infinity, CANARY_SESSION_CAP)
+      : node.maxSessions;
+  if (effectiveMax == null) return true;
+  return (node.configuredUsers ?? 0) < effectiveMax;
 }
 
 /**
@@ -88,9 +94,9 @@ export async function scheduleNodeForDevice(supabaseAdmin, { deviceId, exitLocat
 
   const { data: nodes, error: nodesError } = await supabaseAdmin
     .from("nodes")
-    .select("node_id, configured_users, max_sessions")
+    .select("node_id, configured_users, max_sessions, lifecycle_state")
     .eq("role", "EXIT")
-    .eq("lifecycle_state", "READY")
+    .in("lifecycle_state", ["READY", "CANARY"])
     .eq("location_id", exitLocationId);
   if (nodesError) throw new Error(`nodes lookup failed: ${nodesError.message}`);
 
@@ -99,6 +105,7 @@ export async function scheduleNodeForDevice(supabaseAdmin, { deviceId, exitLocat
       nodeId: node.node_id,
       configuredUsers: node.configured_users,
       maxSessions: node.max_sessions,
+      lifecycleState: node.lifecycle_state,
     }))
     .filter(isUnderCapacity);
 
@@ -171,15 +178,15 @@ export async function scheduleDoubleHopForDevice(
     await Promise.all([
       supabaseAdmin
         .from("nodes")
-        .select("node_id, configured_users, max_sessions")
+        .select("node_id, configured_users, max_sessions, lifecycle_state")
         .eq("role", "RELAY")
-        .eq("lifecycle_state", "READY")
+        .in("lifecycle_state", ["READY", "CANARY"])
         .eq("location_id", entryLocationId),
       supabaseAdmin
         .from("nodes")
-        .select("node_id, configured_users, max_sessions")
+        .select("node_id, configured_users, max_sessions, lifecycle_state")
         .eq("role", "EXIT")
-        .eq("lifecycle_state", "READY")
+        .in("lifecycle_state", ["READY", "CANARY"])
         .eq("location_id", exitLocationId),
     ]);
   if (relayNodesError) throw new Error(`nodes lookup failed: ${relayNodesError.message}`);
@@ -191,6 +198,7 @@ export async function scheduleDoubleHopForDevice(
         nodeId: node.node_id,
         configuredUsers: node.configured_users,
         maxSessions: node.max_sessions,
+        lifecycleState: node.lifecycle_state,
       }))
       .filter(isUnderCapacity);
 
@@ -253,9 +261,9 @@ export async function scheduleAutoForDevice(supabaseAdmin, { deviceId, preferred
 
   const { data: nodes, error: nodesError } = await supabaseAdmin
     .from("nodes")
-    .select("node_id, configured_users, max_sessions")
+    .select("node_id, configured_users, max_sessions, lifecycle_state")
     .eq("role", "EXIT")
-    .eq("lifecycle_state", "READY")
+    .in("lifecycle_state", ["READY", "CANARY"])
     .in("location_id", locationIds);
   if (nodesError) throw new Error(`nodes lookup failed: ${nodesError.message}`);
 
@@ -264,6 +272,7 @@ export async function scheduleAutoForDevice(supabaseAdmin, { deviceId, preferred
       nodeId: node.node_id,
       configuredUsers: node.configured_users,
       maxSessions: node.max_sessions,
+      lifecycleState: node.lifecycle_state,
     }))
     .filter(isUnderCapacity);
 
