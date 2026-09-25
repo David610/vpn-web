@@ -60,6 +60,18 @@ describe("canTransitionLifecycle", () => {
     expect(canTransitionLifecycle("READY", "BOGUS")).toBe(false);
   });
 
+  it("allows DEGRADED to FAILED — Phase 8 automated health transition", () => {
+    expect(canTransitionLifecycle("DEGRADED", "FAILED")).toBe(true);
+  });
+
+  it("allows FAILED to READY — Phase 8 automated recovery after silence", () => {
+    expect(canTransitionLifecycle("FAILED", "READY")).toBe(true);
+  });
+
+  it("does not allow READY to FAILED directly — must pass through DEGRADED", () => {
+    expect(canTransitionLifecycle("READY", "FAILED")).toBe(false);
+  });
+
   it("every declared state's transition targets are themselves valid states", () => {
     for (const state of NODE_LIFECYCLE_STATES) {
       for (const next of allowedNextLifecycleStates(state)) {
