@@ -4,6 +4,8 @@ const rpc = vi.fn();
 vi.mock("@supabase/supabase-js", () => ({ createClient: vi.fn(() => ({ rpc })) }));
 const advanceOperation = vi.fn();
 vi.mock("../../../lib/fleet-operations.js", () => ({ advanceOperation }));
+const autoReplaceFailedNodes = vi.fn();
+vi.mock("../../../lib/node-auto-replace.js", () => ({ autoReplaceFailedNodes }));
 
 const { onRequestPost } = await import("../fleet-tick.js");
 const env = { SUPABASE_URL: "https://s.test", SUPABASE_SERVICE_ROLE_KEY: "k", FLEET_TICK_SECRET: "s3cret" };
@@ -18,6 +20,7 @@ function req(secret) {
 beforeEach(() => {
   rpc.mockReset().mockResolvedValue({ data: [{ id: "op-1", type: "CREATE_NODE", node_id: "n1" }], error: null });
   advanceOperation.mockReset().mockResolvedValue({ status: "RUNNING", step: "AWAIT_ENROLLMENT" });
+  autoReplaceFailedNodes.mockReset().mockResolvedValue([]);
 });
 
 describe("POST /api/internal/fleet-tick", () => {
@@ -45,5 +48,29 @@ describe("POST /api/internal/fleet-tick", () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     const body = await (await onRequestPost({ env, request: req("s3cret") })).json();
     expect(body.results.map((r) => r.status)).toEqual(["ERROR", "COMPLETED"]);
+  });
+
+  it("calls autoReplaceFailedNodes and includes its result when FEATURE_AUTO_NODE_REPLACE is true", async () => {
+    autoReplaceFailedNodes.mockResolvedValue([{ oldNodeId: "n1", newNodeId: "n1-r1", operationId: "op-9" }]);
+    const res = await onRequestPost({
+      env: { ...env, FEATURE_AUTO_NODE_REPLACE: "true" },
+      request: req("s3cret"),
+    });
+    const body = await res.json();
+    expect(autoReplaceFailedNodes).toHaveBeenCalled();
+    expect(body.autoReplaced).toEqual([{ oldNodeId: "n1", newNodeId: "n1-r1", operationId: "op-9" }]);
+  });
+
+  it("does not call autoReplaceFailedNodes when the flag is unset", async () => {
+    const res = await onRequestPost({ env, request: req("s3cret") });
+    await res.json();
+    expect(autoReplaceFailedNodes).not.toHaveBeenCalled();
+  });
+
+  it("does not fail the tick if autoReplaceFailedNodes throws", async () => {
+    autoReplaceFailedNodes.mockRejectedValue(new Error("boom"));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const res = await onRequestPost({ env: { ...env, FEATURE_AUTO_NODE_REPLACE: "true" }, request: req("s3cret") });
+    expect(res.status).toBe(200);
   });
 });
