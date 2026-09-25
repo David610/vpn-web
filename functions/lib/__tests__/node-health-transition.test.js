@@ -5,9 +5,9 @@ import {
   evaluateProbeResult,
   FAILURE_THRESHOLD,
   SUCCESS_THRESHOLD,
+  SILENCE_ELIGIBLE_STATES,
+  HEARTBEAT_INTERVAL_MS,
 } from "../node-health-transition.js";
-
-const HEARTBEAT_INTERVAL_MS = 60_000;
 
 describe("isNodeSilent", () => {
   it("is not silent when last_seen_at is recent", () => {
@@ -46,6 +46,33 @@ describe("isNodeSilent", () => {
     const staleAt = new Date(Date.now() - 999_999_999).toISOString();
     const node = { last_seen_at: staleAt, lifecycle_state: "RETIRED" };
     expect(isNodeSilent(node, Date.now(), HEARTBEAT_INTERVAL_MS)).toBe(false);
+  });
+
+  it("is silent for a stale DEGRADED node", () => {
+    const staleAt = new Date(Date.now() - 999_999_999).toISOString();
+    const node = { last_seen_at: staleAt, lifecycle_state: "DEGRADED" };
+    expect(isNodeSilent(node, Date.now(), HEARTBEAT_INTERVAL_MS)).toBe(true);
+  });
+
+  // Only READY/DEGRADED are silence-eligible. PROVISIONING matters most: a
+  // silence-FAILED node re-enrolled by an admin keeps its stale
+  // last_seen_at until the new VPS enrolls and must not bounce back to
+  // FAILED in the meantime.
+  it.each(["PROVISIONING", "WARMING_UP", "MAINTENANCE", "DRAINING", "FAILED"])(
+    "is never silent for %s, even with a very stale last_seen_at",
+    (lifecycleState) => {
+      const staleAt = new Date(Date.now() - 999_999_999).toISOString();
+      const node = { last_seen_at: staleAt, lifecycle_state: lifecycleState };
+      expect(isNodeSilent(node, Date.now(), HEARTBEAT_INTERVAL_MS)).toBe(false);
+    }
+  );
+
+  it("exposes exactly READY and DEGRADED as silence-eligible", () => {
+    expect([...SILENCE_ELIGIBLE_STATES].sort()).toEqual(["DEGRADED", "READY"]);
+  });
+
+  it("uses the agent's 60s heartbeat interval", () => {
+    expect(HEARTBEAT_INTERVAL_MS).toBe(60_000);
   });
 });
 
@@ -109,4 +136,76 @@ describe("evaluateProbeResult", () => {
     const result = evaluateProbeResult({ probeOk: null, currentFailures: 2, currentSuccesses: 0, lifecycleState: "READY" });
     expect(result).toEqual({ failures: 2, successes: 0, nextState: null });
   });
+
+  // C1: admin-owned states (and WARMING_UP, owned by the CREATE_NODE
+  // operation) are never recovered to READY by automation, however long
+  // the success streak -- ALLOWED_TRANSITIONS permits X->READY for these
+  // only as an admin action.
+  it.each(["MAINTENANCE", "DRAINING", "WARMING_UP", "PROVISIONING"])(
+    "never recovers %s to READY on a long success streak",
+    (lifecycleState) => {
+      for (const currentSuccesses of [SUCCESS_THRESHOLD - 1, SUCCESS_THRESHOLD, 50]) {
+        const result = evaluateProbeResult({ probeOk: true, currentFailures: 0, currentSuccesses, lifecycleState });
+        expect(result.successes).toBeGreaterThanOrEqual(SUCCESS_THRESHOLD);
+        expect(result.nextState).toBeNull();
+      }
+    }
+  );
+
+  // C2: a failed probe only ever produces DEGRADED, and only from READY.
+  it.each(["DEGRADED", "WARMING_UP", "PROVISIONING", "MAINTENANCE", "DRAINING", "FAILED"])(
+    "never transitions %s on 3+ consecutive failed probes",
+    (lifecycleState) => {
+      for (const currentFailures of [FAILURE_THRESHOLD - 1, FAILURE_THRESHOLD, 50]) {
+        const result = evaluateProbeResult({ probeOk: false, currentFailures, currentSuccesses: 0, lifecycleState });
+        expect(result.failures).toBeGreaterThanOrEqual(FAILURE_THRESHOLD);
+        expect(result.nextState).toBeNull();
+      }
+    }
+  );
+
+  it("keeps a DEGRADED node DEGRADED (never FAILED) however long the failure streak", () => {
+    const result = evaluateProbeResult({ probeOk: false, currentFailures: FAILURE_THRESHOLD, currentSuccesses: 0, lifecycleState: "DEGRADED" });
+    expect(result).toEqual({ failures: FAILURE_THRESHOLD + 1, successes: 0, nextState: null });
+  });
+
+  it("does not recover DEGRADED below the success threshold", () => {
+    const result = evaluateProbeResult({ probeOk: true, currentFailures: 0, currentSuccesses: SUCCESS_THRESHOLD - 2, lifecycleState: "DEGRADED" });
+    expect(result.nextState).toBeNull();
+  });
+
+  it("exits FAILED to READY on a single passing probe, counting it as one success", () => {
+    const result = evaluateProbeResult({ probeOk: true, currentFailures: 2, currentSuccesses: 0, lifecycleState: "FAILED" });
+    expect(result).toEqual({ failures: 0, successes: 1, nextState: "READY" });
+  });
+
+  it("does not let stale pre-FAILED successes carry over when exiting FAILED", () => {
+    const result = evaluateProbeResult({ probeOk: true, currentFailures: 0, currentSuccesses: 3, lifecycleState: "FAILED" });
+    expect(result).toEqual({ failures: 0, successes: 1, nextState: "READY" });
+  });
+
+  it("keeps a FAILED node FAILED on a failed probe", () => {
+    const result = evaluateProbeResult({ probeOk: false, currentFailures: 0, currentSuccesses: 0, lifecycleState: "FAILED" });
+    expect(result.nextState).toBeNull();
+  });
+
+  // Null-probe ruling: a node with no Clash API configured can never send a
+  // passing probe, so any authenticated heartbeat is enough to leave FAILED.
+  it("recovers a FAILED node with no probe capability (probeOk null) to READY, streaks untouched", () => {
+    const result = evaluateProbeResult({ probeOk: null, currentFailures: 1, currentSuccesses: 0, lifecycleState: "FAILED" });
+    expect(result).toEqual({ failures: 1, successes: 0, nextState: "READY" });
+  });
+
+  it("treats an omitted probe (undefined) the same as null for FAILED recovery", () => {
+    const result = evaluateProbeResult({ probeOk: undefined, currentFailures: 0, currentSuccesses: 0, lifecycleState: "FAILED" });
+    expect(result.nextState).toBe("READY");
+  });
+
+  it.each(["READY", "DEGRADED", "MAINTENANCE", "DRAINING", "PROVISIONING", "WARMING_UP", "QUARANTINED", "RETIRED"])(
+    "never transitions %s on a null probe",
+    (lifecycleState) => {
+      const result = evaluateProbeResult({ probeOk: null, currentFailures: 0, currentSuccesses: 0, lifecycleState });
+      expect(result.nextState).toBeNull();
+    }
+  );
 });

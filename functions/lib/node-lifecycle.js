@@ -2,13 +2,20 @@
  * The fleet node lifecycle state machine (spec §7/§54 Phase 2). Pure and
  * side-effect-free by design (spec §42/§14: "keep core scheduler/
  * entitlement/state-transition logic pure and unit-testable") — no
- * Supabase client, no I/O. The admin API route
- * (functions/api/admin/nodes/[id]/lifecycle.js) is the only caller that
- * persists a transition.
+ * Supabase client, no I/O.
  *
- * Phase 2 wired up admin-triggered transitions. Phase 8
- * (functions/lib/node-health-transition.js) adds the automated
- * health-based edges: READY<->DEGRADED, DEGRADED->FAILED, FAILED->READY.
+ * ALLOWED_TRANSITIONS is the table of what an ADMIN may do by hand
+ * (functions/api/admin/nodes/[id]/lifecycle.js), plus the edges the
+ * CREATE_NODE operation (fleet-operations.js) and enrollment
+ * (agent/enroll.js) rely on. It is deliberately permissive and must not be
+ * narrowed to fit automation.
+ *
+ * Phase 8 added the health-based edges READY<->DEGRADED, READY->FAILED,
+ * DEGRADED->FAILED and FAILED->READY. Automation does NOT get everything
+ * this table allows: functions/lib/node-health-transition.js spells out
+ * the much narrower set of automated moves (never out of MAINTENANCE,
+ * DRAINING, PROVISIONING or WARMING_UP) and only uses canTransitionLifecycle
+ * as a secondary guard.
  */
 
 export const NODE_LIFECYCLE_STATES = Object.freeze([
@@ -38,10 +45,10 @@ const ALLOWED_TRANSITIONS = Object.freeze({
   DEGRADED: ["READY", "FAILED", "DRAINING", "MAINTENANCE", "QUARANTINED"],
   DRAINING: ["MAINTENANCE", "RETIRED", "READY", "QUARANTINED"],
   MAINTENANCE: ["READY", "DRAINING", "QUARANTINED"],
-  // READY here is the Phase 8 automated recovery edge: a heartbeat with a
-  // passing probe after a silence-triggered FAILED resumes normal streak
-  // evaluation. FAILED reached any other way (agent crash loop, etc.) still
-  // recovers the same way — a working probe is a working probe.
+  // READY here is the Phase 8 automated recovery edge: after a
+  // silence-triggered FAILED, a single heartbeat with a passing probe (or
+  // any heartbeat at all, for a node with no probe capability) resumes
+  // normal streak evaluation. See evaluateProbeResult.
   FAILED: ["PROVISIONING", "READY", "QUARANTINED", "RETIRED"],
   // Quarantine is deliberately a one-way security control (spec §45's
   // blast-radius containment): a node suspected of compromise never

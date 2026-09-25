@@ -1,19 +1,49 @@
 /**
  * Phase 8 pure decision logic for automated node-health lifecycle
- * transitions. No Supabase client, no I/O — functions/api/agent/heartbeat.js
- * is the only caller that persists a decision made here, following the same
- * separation node-lifecycle.js established.
+ * transitions. No Supabase client, no I/O, following the same separation
+ * node-lifecycle.js established. Two callers persist decisions made here:
+ * functions/api/agent/heartbeat.js (probe transitions for the heartbeating
+ * node, plus lazy silence detection for every other node) and
+ * functions/api/admin/nodes.js (lazy silence detection on the admin
+ * node-list read), both through functions/lib/node-silence-failover.js for
+ * the silence case.
+ *
+ * Automation vs. admin authority: node-lifecycle.js's ALLOWED_TRANSITIONS
+ * says what an ADMIN may do by hand, and is deliberately permissive (e.g.
+ * MAINTENANCE->READY, WARMING_UP->FAILED). Automation is allowed a much
+ * narrower set of moves, spelled out explicitly below rather than derived
+ * from that table:
+ *
+ *   READY    -> DEGRADED  (FAILURE_THRESHOLD consecutive failed probes)
+ *   DEGRADED -> READY     (SUCCESS_THRESHOLD consecutive passing probes)
+ *   FAILED   -> READY     (one passing probe, or any heartbeat at all from
+ *                          a node with no probe capability)
+ *   READY/DEGRADED -> FAILED  (silence only, via isNodeSilent)
+ *
+ * PROVISIONING, WARMING_UP, MAINTENANCE, DRAINING, QUARANTINED and RETIRED
+ * are never a source state for an automated transition: they belong to the
+ * admin, the CREATE_NODE operation (fleet-operations.js) or enrollment
+ * (agent/enroll.js). Callers still re-check canTransitionLifecycle() before
+ * writing, as defense in depth.
  */
-
-import { canTransitionLifecycle } from "./node-lifecycle.js";
 
 export const SILENCE_THRESHOLD_MULTIPLIER = 3;
 
-const NEVER_SILENCE_STATES = new Set(["QUARANTINED", "RETIRED"]);
+// Matches the agent's HEARTBEAT_INTERVAL (60s) in
+// apps/provisioning-agent/src/main.rs -- keep these in sync; a drift here
+// would change what "silent" means without a code change on the agent side.
+export const HEARTBEAT_INTERVAL_MS = 60_000;
+
+// The only states silence may move to FAILED. A PROVISIONING/WARMING_UP
+// node's last_seen_at can legitimately be stale (e.g. a silence-FAILED node
+// re-enrolled into PROVISIONING keeps its old last_seen_at until the new
+// VPS enrolls), and MAINTENANCE/DRAINING/QUARANTINED/RETIRED are
+// admin-owned states a node may be expected to be offline in.
+export const SILENCE_ELIGIBLE_STATES = new Set(["READY", "DEGRADED"]);
 
 export function isNodeSilent(node, nowMs, heartbeatIntervalMs) {
+  if (!SILENCE_ELIGIBLE_STATES.has(node.lifecycle_state)) return false;
   if (!node.last_seen_at) return false;
-  if (NEVER_SILENCE_STATES.has(node.lifecycle_state)) return false;
   const lastSeenMs = new Date(node.last_seen_at).getTime();
   if (!Number.isFinite(lastSeenMs)) return false;
   return nowMs - lastSeenMs > heartbeatIntervalMs * SILENCE_THRESHOLD_MULTIPLIER;
@@ -22,22 +52,42 @@ export function isNodeSilent(node, nowMs, heartbeatIntervalMs) {
 export const FAILURE_THRESHOLD = 3;
 export const SUCCESS_THRESHOLD = 5;
 
+/**
+ * Decides streak counters and any automated lifecycle transition for one
+ * heartbeat from the node itself. probeOk is true/false for a node whose
+ * agent ran a data-plane probe, or null/undefined for a node with no Clash
+ * API configured (the agent omits probe_ok entirely in that case).
+ */
 export function evaluateProbeResult({ probeOk, currentFailures, currentSuccesses, lifecycleState }) {
   if (probeOk === null || probeOk === undefined) {
-    return { failures: currentFailures, successes: currentSuccesses, nextState: null };
+    // A node with no probe capability neither earns nor loses streak
+    // credit. The one exception is FAILED: silence put it there, and for a
+    // node that cannot probe, authenticating and heartbeating at all is
+    // the only evidence of recovery that will ever arrive -- without this
+    // it could never leave FAILED automatically.
+    return {
+      failures: currentFailures,
+      successes: currentSuccesses,
+      nextState: lifecycleState === "FAILED" ? "READY" : null,
+    };
   }
 
   if (probeOk) {
+    if (lifecycleState === "FAILED") {
+      // Spec 4.3: FAILED is entered via silence, so the first passing
+      // probe is enough to exit it. It counts as one success, not as a
+      // full SUCCESS_THRESHOLD streak.
+      return { failures: 0, successes: 1, nextState: "READY" };
+    }
     const successes = currentSuccesses + 1;
-    const shouldRecover = successes >= SUCCESS_THRESHOLD && canTransitionLifecycle(lifecycleState, "READY");
+    const shouldRecover = lifecycleState === "DEGRADED" && successes >= SUCCESS_THRESHOLD;
     return { failures: 0, successes, nextState: shouldRecover ? "READY" : null };
   }
 
+  // A failed probe only ever produces DEGRADED, and only from READY.
+  // FAILED is silence-only (spec 4.3/4.4): a node still heartbeating with
+  // failing probes stays DEGRADED however long the streak grows.
   const failures = currentFailures + 1;
-  let nextState = null;
-  if (failures >= FAILURE_THRESHOLD) {
-    if (canTransitionLifecycle(lifecycleState, "DEGRADED")) nextState = "DEGRADED";
-    else if (canTransitionLifecycle(lifecycleState, "FAILED")) nextState = "FAILED";
-  }
-  return { failures, successes: 0, nextState };
+  const shouldDegrade = lifecycleState === "READY" && failures >= FAILURE_THRESHOLD;
+  return { failures, successes: 0, nextState: shouldDegrade ? "DEGRADED" : null };
 }

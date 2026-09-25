@@ -7,14 +7,7 @@ import { getProviderAdapter } from "../../lib/provider-adapter.js";
 import { getDnsAdapter, nodeHostname } from "../../lib/dns-adapter.js";
 import { startCreateNodeOperation, advanceOperation } from "../../lib/fleet-operations.js";
 import { fleetContext } from "../../lib/fleet-context.js";
-import { canTransitionLifecycle } from "../../lib/node-lifecycle.js";
-import { isNodeSilent } from "../../lib/node-health-transition.js";
-
-// Matches the agent's HEARTBEAT_INTERVAL (60s) in main.rs and
-// functions/api/agent/heartbeat.js's own copy of this constant -- keep
-// these in sync; a drift here would change what "silent" means without a
-// code change on the agent side.
-const HEARTBEAT_INTERVAL_MS = 60_000;
+import { failSilentNodes } from "../../lib/node-silence-failover.js";
 
 function jsonResponse(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -72,16 +65,14 @@ export async function onRequestGet({ env, request }) {
     // classify()'s display-only status string below, which uses its own
     // 90s/180s thresholds; this mutates the actual lifecycle_state for
     // nodes that have genuinely gone silent per isNodeSilent's
-    // SILENCE_THRESHOLD_MULTIPLIER.
+    // SILENCE_THRESHOLD_MULTIPLIER. Same shared helper (and so the same
+    // READY/DEGRADED-only eligibility) as agent/heartbeat.js: a
+    // PROVISIONING node being re-enrolled still carries its stale
+    // last_seen_at and must not be flipped back to FAILED here.
     if (env.FEATURE_AUTO_NODE_HEALTH === "true") {
+      const failedNodeIds = new Set(await failSilentNodes(supabaseAdmin, data ?? [], Date.now()));
       for (const node of data ?? []) {
-        if (
-          isNodeSilent(node, Date.now(), HEARTBEAT_INTERVAL_MS) &&
-          canTransitionLifecycle(node.lifecycle_state, "FAILED")
-        ) {
-          await supabaseAdmin.from("nodes").update({ lifecycle_state: "FAILED" }).eq("node_id", node.node_id);
-          node.lifecycle_state = "FAILED";
-        }
+        if (failedNodeIds.has(node.node_id)) node.lifecycle_state = "FAILED";
       }
     }
 

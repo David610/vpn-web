@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const getClaims = vi.fn();
 const adminMaybeSingle = vi.fn();
 const nodesUpdate = vi.fn();
+const alertsInsert = vi.fn();
 let nodesSelect;
 let samplesResult;
 let dailyResult;
@@ -13,6 +14,7 @@ vi.mock("@supabase/supabase-js", () => ({
     from: vi.fn((table) => {
       if (table === "admin_users") return { select: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(), maybeSingle: adminMaybeSingle };
       if (table === "nodes") return { select: nodesSelect, update: nodesUpdate };
+      if (table === "operational_alerts") return { insert: alertsInsert };
       if (table === "node_traffic_samples") {
         return {
           select: vi.fn().mockReturnThis(),
@@ -43,8 +45,29 @@ beforeEach(() => {
   adminMaybeSingle.mockReset().mockResolvedValue({ data: { role: "owner" }, error: null });
   samplesResult = { data: [], error: null };
   dailyResult = { data: [], error: null };
-  nodesUpdate.mockReset().mockReturnValue({ eq: vi.fn().mockResolvedValue({ error: null }) });
+  casMatches = true;
+  updateChains.length = 0;
+  nodesUpdate.mockReset().mockImplementation(() => updateChain());
+  alertsInsert.mockReset().mockResolvedValue({ error: null });
 });
+
+// Records the filters of each nodes update; a compare-and-set write ends in
+// .select().maybeSingle(), and casMatches=false simulates losing the race.
+let casMatches = true;
+const updateChains = [];
+function updateChain() {
+  const chain = { filters: [] };
+  chain.eq = vi.fn((...args) => {
+    chain.filters.push(args);
+    return chain;
+  });
+  chain.select = vi.fn(() => chain);
+  chain.maybeSingle = vi.fn(() =>
+    Promise.resolve({ data: casMatches ? { node_id: "matched" } : null, error: null })
+  );
+  updateChains.push(chain);
+  return chain;
+}
 
 /** A traffic sample `agoMs` in the past covering `interval` seconds. */
 function sample({ agoMs = 5_000, deltaUp = 0, deltaDown = 0, interval = 15, connections = 0 } = {}) {
@@ -202,15 +225,67 @@ describe("GET /api/admin/nodes", () => {
   });
 
   describe("Phase 8 silence detection", () => {
-    it("transitions a silent READY node to FAILED as a side effect of the list read", async () => {
-      const staleAt = new Date(Date.now() - 999_999_999).toISOString();
+    const autoEnv = { ...env, FEATURE_AUTO_NODE_HEALTH: "true" };
+    const staleAt = () => new Date(Date.now() - 999_999_999).toISOString();
+
+    it("transitions a silent READY node to FAILED (compare-and-set) and raises node_failed", async () => {
       nodesSelect = vi.fn().mockResolvedValue({
-        data: [{ node_id: "node-1", last_seen_at: staleAt, revoked_at: null, lifecycle_state: "READY" }],
+        data: [{ node_id: "node-1", last_seen_at: staleAt(), revoked_at: null, lifecycle_state: "READY" }],
         error: null,
       });
-      await onRequestGet({ env: { ...env, FEATURE_AUTO_NODE_HEALTH: "true" }, request: makeRequest() });
-      expect(nodesUpdate.mock.calls.some((call) => call[0].lifecycle_state === "FAILED")).toBe(true);
+      const body = await (await onRequestGet({ env: autoEnv, request: makeRequest() })).json();
+      expect(nodesUpdate.mock.calls).toEqual([[{ lifecycle_state: "FAILED" }]]);
+      expect(updateChains[0].filters).toEqual([
+        ["node_id", "node-1"],
+        ["lifecycle_state", "READY"],
+      ]);
+      expect(alertsInsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          alert_type: "node_failed",
+          severity: "critical",
+          dedup_key: "node:node-1:node_failed",
+          node_id: "node-1",
+        })
+      );
+      expect(body.nodes[0].lifecycleState).toBe("FAILED");
     });
+
+    it("transitions a silent DEGRADED node to FAILED", async () => {
+      nodesSelect = vi.fn().mockResolvedValue({
+        data: [{ node_id: "node-1", last_seen_at: staleAt(), revoked_at: null, lifecycle_state: "DEGRADED" }],
+        error: null,
+      });
+      await onRequestGet({ env: autoEnv, request: makeRequest() });
+      expect(updateChains[0].filters).toContainEqual(["lifecycle_state", "DEGRADED"]);
+    });
+
+    it("neither reports FAILED nor raises an alert when the compare-and-set loses the race", async () => {
+      casMatches = false;
+      nodesSelect = vi.fn().mockResolvedValue({
+        data: [{ node_id: "node-1", last_seen_at: staleAt(), revoked_at: null, lifecycle_state: "READY" }],
+        error: null,
+      });
+      const body = await (await onRequestGet({ env: autoEnv, request: makeRequest() })).json();
+      expect(alertsInsert).not.toHaveBeenCalled();
+      expect(body.nodes[0].lifecycleState).toBe("READY");
+    });
+
+    // I2: a silence-FAILED node an admin re-enrolls goes FAILED ->
+    // PROVISIONING with its old, stale last_seen_at; the next dashboard load
+    // must not flip it straight back to FAILED before the new VPS enrolls.
+    it.each(["PROVISIONING", "WARMING_UP", "MAINTENANCE", "DRAINING", "QUARANTINED", "RETIRED", "FAILED"])(
+      "never silence-fails a stale %s node",
+      async (lifecycleState) => {
+        nodesSelect = vi.fn().mockResolvedValue({
+          data: [{ node_id: "node-1", last_seen_at: staleAt(), revoked_at: null, lifecycle_state: lifecycleState }],
+          error: null,
+        });
+        const body = await (await onRequestGet({ env: autoEnv, request: makeRequest() })).json();
+        expect(nodesUpdate).not.toHaveBeenCalled();
+        expect(alertsInsert).not.toHaveBeenCalled();
+        expect(body.nodes[0].lifecycleState).toBe(lifecycleState);
+      }
+    );
 
     it("does not transition a recently seen node", async () => {
       const recent = new Date(Date.now() - 10_000).toISOString();
@@ -218,14 +293,13 @@ describe("GET /api/admin/nodes", () => {
         data: [{ node_id: "node-1", last_seen_at: recent, revoked_at: null, lifecycle_state: "READY" }],
         error: null,
       });
-      await onRequestGet({ env: { ...env, FEATURE_AUTO_NODE_HEALTH: "true" }, request: makeRequest() });
+      await onRequestGet({ env: autoEnv, request: makeRequest() });
       expect(nodesUpdate).not.toHaveBeenCalled();
     });
 
     it("does not transition when FEATURE_AUTO_NODE_HEALTH is not set", async () => {
-      const staleAt = new Date(Date.now() - 999_999_999).toISOString();
       nodesSelect = vi.fn().mockResolvedValue({
-        data: [{ node_id: "node-1", last_seen_at: staleAt, revoked_at: null, lifecycle_state: "READY" }],
+        data: [{ node_id: "node-1", last_seen_at: staleAt(), revoked_at: null, lifecycle_state: "READY" }],
         error: null,
       });
       await onRequestGet({ env, request: makeRequest() });
