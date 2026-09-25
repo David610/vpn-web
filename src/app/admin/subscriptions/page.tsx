@@ -1,27 +1,27 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 import { AdminShell } from "@/components/admin/AdminShell";
 import { StatusBadge } from "@/components/admin/StatusBadge";
 import { useAdminSession } from "@/hooks/useAdminSession";
 import { adminFetch } from "@/lib/adminFetch";
 
-type Customer = {
-  userId: string;
+type Subscription = {
+  id: string;
   accountId: string;
-  accountRole: string;
-  memberCount: number;
-  email: string | null;
-  subscriptionStatus: string | null;
+  ownerEmail: string | null;
+  name: string;
+  status: string;
+  cancelAtPeriodEnd: boolean;
   currentPeriodEnd: string | null;
-  vpnAccountId: number | null;
-  nodeId: string | null;
-  enabled: boolean | null;
+  extraPacks: number;
+  capacity: number;
+  activeDevices: number;
+  createdAt: string;
 };
 
 type ResponseBody = {
-  customers: Customer[];
+  subscriptions: Subscription[];
   page: number;
   perPage: number;
   total: number;
@@ -30,9 +30,9 @@ type ResponseBody = {
 
 const PAGE_SIZE = 50;
 
-export default function AdminCustomersPage() {
+export default function AdminSubscriptionsPage() {
   const { session } = useAdminSession();
-  const [customers, setCustomers] = useState<Customer[] | null>(null);
+  const [subscriptions, setSubscriptions] = useState<Subscription[] | null>(null);
   const [input, setInput] = useState("");
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(1);
@@ -48,29 +48,22 @@ export default function AdminCustomersPage() {
   }, [input]);
 
   const url = useMemo(() => {
-    const params = new URLSearchParams({
-      page: String(page),
-      per_page: String(PAGE_SIZE),
-    });
+    const params = new URLSearchParams({ page: String(page), per_page: String(PAGE_SIZE) });
     if (query) params.set("q", query);
-    return `/api/admin/customers?${params.toString()}`;
+    return `/api/admin/subscriptions?${params.toString()}`;
   }, [page, query]);
 
   useEffect(() => {
     if (!session) return;
     let cancelled = false;
     setError(null);
-
     adminFetch<ResponseBody>(url, session.access_token)
       .then((body) => {
         if (cancelled) return;
-        setCustomers(body.customers);
+        setSubscriptions(body.subscriptions);
         setMeta({ total: body.total, totalPages: body.totalPages });
       })
-      .catch((err) => {
-        if (!cancelled) setError(err.message);
-      });
-
+      .catch((err) => !cancelled && setError(err.message));
     return () => {
       cancelled = true;
     };
@@ -79,20 +72,20 @@ export default function AdminCustomersPage() {
   return (
     <AdminShell>
       <div className="mb-4 flex items-baseline justify-between gap-4">
-        <h1 className="text-xl font-semibold">Customers</h1>
+        <h1 className="text-xl font-semibold">Subscriptions</h1>
         <span className="text-xs text-gray-500">{meta.total} total</span>
       </div>
 
       <input
         className="mb-4 w-full max-w-sm rounded border px-3 py-2"
-        placeholder="Search by email, user id, or VPN user id"
+        placeholder="Search by owner email, name, or Stripe subscription id"
         value={input}
         onChange={(e) => setInput(e.target.value)}
       />
 
       {error ? (
         <p className="text-red-600">{error}</p>
-      ) : !customers ? (
+      ) : !subscriptions ? (
         <p>Loading…</p>
       ) : (
         <>
@@ -100,49 +93,26 @@ export default function AdminCustomersPage() {
             <table className="w-full text-left text-sm">
               <thead>
                 <tr className="border-b text-gray-500">
-                  <th className="py-2">Customer</th>
-                  <th>Role</th>
+                  <th className="py-2">Owner</th>
                   <th>Subscription</th>
-                  <th>VPN</th>
-                  <th>Node</th>
+                  <th>Status</th>
+                  <th>Devices</th>
+                  <th>Extra packs</th>
                   <th>Period ends</th>
                 </tr>
               </thead>
               <tbody>
-                {customers.map((c) => (
-                  <tr key={c.userId} className="border-b">
-                    <td className="py-2">
-                      <Link
-                        href={`/admin/customers/detail?id=${c.userId}`}
-                        className="text-neutral-900 underline underline-offset-2 hover:text-neutral-600"
-                      >
-                        {c.email ?? c.userId}
-                      </Link>
-                    </td>
-                    <td className="text-gray-500">
-                      {c.accountRole === "owner" && c.memberCount > 1
-                        ? `owner of ${c.memberCount}`
-                        : c.accountRole}
-                    </td>
+                {subscriptions.map((s) => (
+                  <tr key={s.id} className="border-b">
+                    <td className="py-2">{s.ownerEmail ?? s.accountId}</td>
+                    <td>{s.name}</td>
                     <td>
-                      {c.subscriptionStatus ? (
-                        <StatusBadge status={c.subscriptionStatus} />
-                      ) : (
-                        "—"
-                      )}
+                      <StatusBadge status={s.cancelAtPeriodEnd ? "cancelling" : s.status} />
                     </td>
+                    <td>{s.activeDevices} / {s.capacity}</td>
+                    <td>{s.extraPacks}</td>
                     <td>
-                      {c.vpnAccountId ? (
-                        <StatusBadge status={c.enabled ? "active" : "canceled"} />
-                      ) : (
-                        "—"
-                      )}
-                    </td>
-                    <td>{c.nodeId ?? "—"}</td>
-                    <td>
-                      {c.currentPeriodEnd
-                        ? new Date(c.currentPeriodEnd).toLocaleDateString()
-                        : "—"}
+                      {s.currentPeriodEnd ? new Date(s.currentPeriodEnd).toLocaleDateString() : "—"}
                     </td>
                   </tr>
                 ))}

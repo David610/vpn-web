@@ -8,7 +8,9 @@ import { adminFetch } from "@/lib/adminFetch";
 
 type Overview = {
   customers: { total: number; active: number; trialing: number; past_due: number; canceled: number };
-  members: { active: number; pending_invites: number; admin_grants: number; paid_extra_seats: number };
+  subscriptions?: { live: number; cancelling: number; extra_packs: number; accounts_with_several: number };
+  devices?: { active: number; capacity: number; over_capacity: number; without_subscription: number; unschedulable: number };
+  members?: { admin_grants: number };
   vpn: { accounts: number; enabled: number; disabled: number };
   jobs: { pending: number; claimed: number; failed: number };
   nodes: { online: number; offline: number };
@@ -76,10 +78,11 @@ export default function AdminOverviewPage() {
           <MetricCard label="Free trials" value={overview.customers.trialing} />
           <MetricCard label="Past due" value={overview.customers.past_due} />
 
-          <MetricCard label="Members" value={overview.members.active} />
-          <MetricCard label="Pending invites" value={overview.members.pending_invites} />
-          <MetricCard label="Paid extra seats" value={overview.members.paid_extra_seats} />
-          <MetricCard label="Support grants" value={overview.members.admin_grants} />
+          <MetricCard label="Live subscriptions" value={overview.subscriptions?.live ?? "—"} />
+          <MetricCard label="Extra device packs" value={overview.subscriptions?.extra_packs ?? "—"} />
+          <MetricCard label="Devices / capacity" value={overview.devices ? `${overview.devices.active} / ${overview.devices.capacity}` : "—"} />
+          <MetricCard label="Devices over capacity" value={overview.devices?.over_capacity ?? "—"} />
+          <MetricCard label="Support grants" value={overview.members?.admin_grants ?? "—"} />
 
           <MetricCard label="VPN enabled" value={overview.vpn.enabled} />
           <MetricCard label="VPN disabled" value={overview.vpn.disabled} />

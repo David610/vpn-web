@@ -196,7 +196,7 @@ function AdminCustomerDetailContent() {
                   <div className="flex items-center justify-between gap-3">
                     <div>
                       <StatusBadge status={displayStatus} />
-                      <span className="ml-2">{g.seatLimit} seats</span>
+                      <span className="ml-2">{g.seatLimit} devices</span>
                     </div>
                     {g.status === "active" && !naturallyExpired && (
                       <ConfirmButton
