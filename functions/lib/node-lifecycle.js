@@ -11,11 +11,12 @@
  * narrowed to fit automation.
  *
  * Phase 8 added the health-based edges READY<->DEGRADED, READY->FAILED,
- * DEGRADED->FAILED and FAILED->READY. Automation does NOT get everything
- * this table allows: functions/lib/node-health-transition.js spells out
- * the much narrower set of automated moves (never out of MAINTENANCE,
- * DRAINING, PROVISIONING or WARMING_UP) and only uses canTransitionLifecycle
- * as a secondary guard.
+ * DEGRADED->FAILED and FAILED->READY. Phase 12a added FAILED->DRAINING (a
+ * FAILED node can be replaced, same as a READY or DEGRADED one). Automation
+ * does NOT get everything this table allows: functions/lib/node-health-transition.js
+ * and functions/lib/fleet-operations.js's REPLACE_NODE handlers each spell
+ * out their own narrower set of automated moves, using canTransitionLifecycle
+ * only as a secondary guard.
  */
 
 export const NODE_LIFECYCLE_STATES = Object.freeze([
@@ -49,7 +50,13 @@ const ALLOWED_TRANSITIONS = Object.freeze({
   // silence-triggered FAILED, a single heartbeat with a passing probe (or
   // any heartbeat at all, for a node with no probe capability) resumes
   // normal streak evaluation. See evaluateProbeResult.
-  FAILED: ["PROVISIONING", "READY", "QUARANTINED", "RETIRED"],
+  // DRAINING here is the Phase 12a replace-node edge: a FAILED node being
+  // replaced (functions/lib/fleet-operations.js's DRAIN_OLD_NODE step) must
+  // reach DRAINING the same way a READY or DEGRADED node being replaced
+  // does -- a FAILED node's own passive-drain path (its devices reconnecting
+  // via the scheduler's READY-only filter) does not depend on whether the
+  // old node is reachable at all.
+  FAILED: ["PROVISIONING", "READY", "DRAINING", "QUARANTINED", "RETIRED"],
   // Quarantine is deliberately a one-way security control (spec §45's
   // blast-radius containment): a node suspected of compromise never
   // returns to serving traffic from this state. The only way out is

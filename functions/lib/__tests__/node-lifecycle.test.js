@@ -72,6 +72,10 @@ describe("canTransitionLifecycle", () => {
     expect(canTransitionLifecycle("READY", "FAILED")).toBe(true);
   });
 
+  it("allows FAILED to DRAINING (Phase 12a replace-node drain path)", () => {
+    expect(canTransitionLifecycle("FAILED", "DRAINING")).toBe(true);
+  });
+
   it("every declared state's transition targets are themselves valid states", () => {
     for (const state of NODE_LIFECYCLE_STATES) {
       for (const next of allowedNextLifecycleStates(state)) {
