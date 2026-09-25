@@ -494,6 +494,53 @@ describe("REPLACE_NODE operation", () => {
     const result = await advance();
     expect(result).toMatchObject({ step: "DRAIN_OLD_NODE", status: "RUNNING" });
   });
+
+  it("canary mode: aborts to FAILED if the node goes silent during the window, even with a below-threshold failure count", async () => {
+    db = makeFakeSupabase(replaceSeed({ canary: true }));
+    ctx.supabase = db;
+    await driveNewNodeToReady();
+    expect((await node()).lifecycle_state).toBe("CANARY");
+
+    // Silent: no heartbeat for well over HEARTBEAT_INTERVAL_MS * SILENCE_THRESHOLD_MULTIPLIER,
+    // but consecutive_probe_failures never had the chance to reach FAILURE_THRESHOLD
+    // because a dead agent sends no heartbeats at all, so no probe result ever arrives.
+    await setNode({
+      last_seen_at: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
+      consecutive_probe_failures: 0,
+    });
+
+    const result = await advance();
+    expect(result.status).toBe("FAILED");
+    expect((await node()).lifecycle_state).toBe("FAILED");
+    const old = (await rows("nodes")).find((n) => n.node_id === OLD_NODE_ID);
+    expect(old.lifecycle_state).toBe("READY"); // never touched, never drained
+  });
+});
+
+describe("startReplaceNodeOperation deadline budgets for canary", () => {
+  it("adds CANARY_OBSERVATION_MS to the operation deadline when canary is true", async () => {
+    const rpc = vi.fn().mockResolvedValue({ data: { id: "op-9" }, error: null });
+    const before = Date.now();
+    await startReplaceNodeOperation(
+      { rpc },
+      { newNodeId: "n2", role: "EXIT", locationId: "loc-1", provider: "hetzner", region: "fsn1", hostname: "n2.test", oldNodeId: "n1", maxWaitHours: 1, canary: true }
+    );
+    const canaryDeadline = new Date(rpc.mock.calls[0][1].p_deadline_at).getTime();
+
+    rpc.mockClear();
+    await startReplaceNodeOperation(
+      { rpc },
+      { newNodeId: "n2", role: "EXIT", locationId: "loc-1", provider: "hetzner", region: "fsn1", hostname: "n2.test", oldNodeId: "n1", maxWaitHours: 1, canary: false }
+    );
+    const nonCanaryDeadline = new Date(rpc.mock.calls[0][1].p_deadline_at).getTime();
+
+    // The canary deadline must budget at least the full observation window
+    // (2h) beyond the non-canary deadline, or a forced drain after the
+    // window elapses could hit the outer deadline first and strand the old
+    // node in DRAINING forever with its instance never destroyed.
+    expect(canaryDeadline - nonCanaryDeadline).toBeGreaterThanOrEqual(2 * 60 * 60 * 1000 - 1000);
+    expect(canaryDeadline).toBeGreaterThan(before);
+  });
 });
 
 describe("startReplaceNodeOperation canary option", () => {

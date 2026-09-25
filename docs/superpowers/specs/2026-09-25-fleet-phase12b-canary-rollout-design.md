@@ -177,3 +177,20 @@ alert path Phase 8 already raises for any node entering `FAILED`.
 - Admin UI surfacing canary status explicitly, rather than via the generic
   Jobs view.
 - Phase 12c: capacity-aware scheduling refinement generally.
+
+**Known limitation, not fixed by this phase** (final-review finding): a
+canary that aborts to `FAILED` via `AWAIT_CANARY`'s probe-failure-streak
+check is indistinguishable, from Phase 8's `evaluateProbeResult`'s point of
+view, from a node that entered `FAILED` via silence. If
+`FEATURE_AUTO_NODE_HEALTH` is also enabled, Phase 8's existing
+`FAILED -> READY` auto-recovery (one passing probe, or any heartbeat at all
+for a probe-incapable node) will promote a flapping, just-aborted canary
+straight back to `READY` — with no session cap and no operation watching
+it — defeating the abort. This is the same class of gap Phase 12a's spec
+already flagged as a hard precondition for `FEATURE_AUTO_NODE_HEALTH`: a
+`failed_reason` column (or equivalent), set only by the path that actually
+caused a `FAILED` transition, and consulted by `evaluateProbeResult` before
+auto-recovering. Until that column exists, deploying canary mode
+(`canary: true` / `FEATURE_AUTO_NODE_REPLACE_CANARY`) alongside
+`FEATURE_AUTO_NODE_HEALTH` carries this risk; deploying only one of the two
+does not.

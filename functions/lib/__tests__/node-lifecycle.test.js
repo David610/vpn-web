@@ -119,4 +119,12 @@ describe("Phase 12b CANARY state", () => {
   it("includes CANARY in the valid state list", () => {
     expect(isValidLifecycleState("CANARY")).toBe(true);
   });
+
+  it("allows CANARY to QUARANTINED (admin can quarantine a node mid-canary, e.g. found compromised)", () => {
+    expect(canTransitionLifecycle("CANARY", "QUARANTINED")).toBe(true);
+  });
+
+  it("allows CANARY to MAINTENANCE (admin operational override mid-canary)", () => {
+    expect(canTransitionLifecycle("CANARY", "MAINTENANCE")).toBe(true);
+  });
 });

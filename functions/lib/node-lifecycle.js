@@ -40,8 +40,12 @@ const ALLOWED_TRANSITIONS = Object.freeze({
   // Phase 12b canary-mode replacement: a node marked CANARY instead of
   // READY by fleet-operations.js's canary-aware MARK_READY is observed
   // under a capped share of real traffic (scheduler.js) before promotion.
-  // AWAIT_CANARY (fleet-operations.js) is the only writer of either edge.
-  CANARY: ["READY", "FAILED"],
+  // AWAIT_CANARY (fleet-operations.js) is the primary writer of READY/FAILED;
+  // QUARANTINED/MAINTENANCE are admin-only escape hatches (final-review
+  // finding), mirroring READY's own admin overrides -- a canary node found
+  // compromised or needing manual intervention must be reachable the same
+  // way any other actively-serving node already is.
+  CANARY: ["READY", "FAILED", "QUARANTINED", "MAINTENANCE"],
   // FAILED here is the Phase 8 automated silence edge: a node that stops
   // heartbeating entirely (isNodeSilent in node-health-transition.js) is
   // moved straight to FAILED from READY, bypassing the probe-streak

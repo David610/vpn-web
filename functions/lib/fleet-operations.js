@@ -2,7 +2,7 @@ import { sha256Hex } from "./crypto.js";
 import { generateHexSecret, ENROLLMENT_TOKEN_TTL_MS } from "./node-enrollment.js";
 import { canTransitionLifecycle } from "./node-lifecycle.js";
 import { buildNodeBootstrapUserData } from "./node-bootstrap.js";
-import { FAILURE_THRESHOLD } from "./node-health-transition.js";
+import { FAILURE_THRESHOLD, HEARTBEAT_INTERVAL_MS, SILENCE_THRESHOLD_MULTIPLIER } from "./node-health-transition.js";
 
 /**
  * Resumable fleet operations (spec §24 sagas), persisted in
@@ -247,7 +247,19 @@ const REPLACE_NODE_HANDLERS = {
     }
 
     const failures = node.consecutive_probe_failures ?? 0;
-    if (failures >= FAILURE_THRESHOLD) {
+    // A node that goes completely dark (agent/VM crashed) never sends
+    // another heartbeat, so it never earns another probe result and
+    // consecutive_probe_failures can sit frozen below FAILURE_THRESHOLD
+    // forever -- without this check a silent canary would be promoted to
+    // READY on the window elapsing alone, and the old node would then be
+    // drained out from under live traffic for a replacement that isn't
+    // actually reachable. Phase 8's own SILENCE_ELIGIBLE_STATES doesn't
+    // cover CANARY (only READY/DEGRADED), so this is CANARY's own silence
+    // check, not a call into isNodeSilent().
+    const silent =
+      node.last_seen_at &&
+      Date.now() - new Date(node.last_seen_at).getTime() > HEARTBEAT_INTERVAL_MS * SILENCE_THRESHOLD_MULTIPLIER;
+    if (silent || failures >= FAILURE_THRESHOLD) {
       const moved = await updateNode(
         supabase,
         node.node_id,
@@ -256,7 +268,9 @@ const REPLACE_NODE_HANDLERS = {
       );
       if (!moved) throw new Error("node lifecycle changed concurrently");
       throw new FatalStepError(
-        `node ${node.node_id} failed canary observation (${failures} consecutive probe failures)`
+        silent
+          ? `node ${node.node_id} went silent during canary observation`
+          : `node ${node.node_id} failed canary observation (${failures} consecutive probe failures)`
       );
     }
 
@@ -428,7 +442,16 @@ export async function startReplaceNodeOperation(
     canary = false,
   }
 ) {
-  const deadlineMs = CREATE_NODE_DEADLINE_MS + maxWaitHours * 60 * 60 * 1000 + REPLACE_DEADLINE_BUFFER_MS;
+  // Canary mode must budget the full observation window into the outer
+  // deadline too, or a forced drain that only starts after AWAIT_CANARY's
+  // window elapses can hit the outer deadline before DRAIN_OLD_NODE ever
+  // gets to force through -- stranding the old node in DRAINING forever
+  // with its provider instance never destroyed (final-review finding).
+  const deadlineMs =
+    CREATE_NODE_DEADLINE_MS +
+    (canary ? CANARY_OBSERVATION_MS : 0) +
+    maxWaitHours * 60 * 60 * 1000 +
+    REPLACE_DEADLINE_BUFFER_MS;
   const { data: operation, error } = await supabase.rpc("register_node_replace_operation", {
     p_node_id: newNodeId,
     p_role: role,
