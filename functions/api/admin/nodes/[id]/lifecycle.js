@@ -51,7 +51,7 @@ export async function onRequestPatch({ env, request, params }) {
     // RETIRED is terminal (see node-lifecycle.js) so retired_at, once set,
     // is a reliable "this node stopped serving traffic at" timestamp —
     // never overwritten by a later transition, since none is possible.
-    const update = { lifecycle_state: body.state };
+    const update = { lifecycle_state: body.state, lifecycle_state_changed_at: new Date().toISOString() };
     if (body.state === "RETIRED") update.retired_at = new Date().toISOString();
 
     // A node can re-enter PROVISIONING (e.g. FAILED -> PROVISIONING, a

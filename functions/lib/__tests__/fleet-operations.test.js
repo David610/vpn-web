@@ -224,4 +224,19 @@ describe("CREATE_NODE operation", () => {
     expect((await node()).lifecycle_state).toBe("WARMING_UP");
     expect((await step("VERIFY_READINESS")).detail).toMatchObject({ consecutivePasses: 0, heartbeatFresh: false });
   });
+
+  it("sets lifecycle_state_changed_at when MARK_READY transitions the node to READY", async () => {
+    await setNode({ lifecycle_state: "WARMING_UP", bootstrap_stage: "COMPLETE", bootstrap_status: "OK", last_seen_at: new Date().toISOString() });
+    for (let i = 0; i < READINESS_CONSECUTIVE_PASSES; i++) await advance();
+    const changedAt = new Date((await node()).lifecycle_state_changed_at).getTime();
+    expect(changedAt).toBeGreaterThan(Date.now() - 5000);
+  });
+
+  it("sets lifecycle_state_changed_at when a deadline-exceeded operation fails a booting node", async () => {
+    db = makeFakeSupabase(seed({ deadlineAt: new Date(Date.now() - 1000).toISOString() }));
+    ctx.supabase = db;
+    await advance();
+    const changedAt = new Date((await node()).lifecycle_state_changed_at).getTime();
+    expect(changedAt).toBeGreaterThan(Date.now() - 5000);
+  });
 });

@@ -195,7 +195,7 @@ const CREATE_NODE_HANDLERS = {
     const moved = await updateNode(
       supabase,
       node.node_id,
-      { lifecycle_state: "READY" },
+      { lifecycle_state: "READY", lifecycle_state_changed_at: new Date().toISOString() },
       { lifecycle_state: node.lifecycle_state }
     );
     if (!moved) throw new Error("node lifecycle changed concurrently");
@@ -243,7 +243,12 @@ async function finishOperation(supabase, op, status, lastError = null) {
 async function failNodeIfBooting(supabase, nodeId) {
   if (!nodeId) return;
   for (const from of ["PROVISIONING", "WARMING_UP"]) {
-    await updateNode(supabase, nodeId, { lifecycle_state: "FAILED" }, { lifecycle_state: from });
+    await updateNode(
+      supabase,
+      nodeId,
+      { lifecycle_state: "FAILED", lifecycle_state_changed_at: new Date().toISOString() },
+      { lifecycle_state: from }
+    );
   }
 }
 
