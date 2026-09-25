@@ -1,5 +1,8 @@
 import { createClient } from "@supabase/supabase-js";
 import { authenticateNode } from "../../lib/node-auth.js";
+import { canTransitionLifecycle } from "../../lib/node-lifecycle.js";
+import { evaluateProbeResult, SILENCE_ELIGIBLE_STATES } from "../../lib/node-health-transition.js";
+import { failSilentNodes } from "../../lib/node-silence-failover.js";
 
 function json(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -60,12 +63,73 @@ export async function onRequestPost({ env, request }) {
   const observedRevision = nonNegativeInteger(body.observed_revision);
   if (observedRevision != null) update.observed_revision = observedRevision;
 
+  const probeOk = typeof body.probe_ok === "boolean" ? body.probe_ok : null;
+  update.last_probe_ok = probeOk;
+  // last_probe_at is when a probe result last actually arrived, not when
+  // the node was last heard from (that is last_seen_at/telemetry_at). A
+  // node with no Clash API configured therefore keeps it null.
+  if (probeOk !== null) update.last_probe_at = new Date().toISOString();
+
+  const autoHealth = env.FEATURE_AUTO_NODE_HEALTH === "true";
+
+  const { data: currentNode } = await supabaseAdmin
+    .from("nodes")
+    .select("lifecycle_state, consecutive_probe_failures, consecutive_probe_successes")
+    .eq("node_id", nodeId)
+    .maybeSingle();
+
+  let nextState = null;
+  if (currentNode) {
+    const evalResult = evaluateProbeResult({
+      probeOk,
+      currentFailures: currentNode.consecutive_probe_failures ?? 0,
+      currentSuccesses: currentNode.consecutive_probe_successes ?? 0,
+      lifecycleState: currentNode.lifecycle_state,
+    });
+    update.consecutive_probe_failures = evalResult.failures;
+    update.consecutive_probe_successes = evalResult.successes;
+    if (
+      autoHealth &&
+      evalResult.nextState &&
+      canTransitionLifecycle(currentNode.lifecycle_state, evalResult.nextState)
+    ) {
+      nextState = evalResult.nextState;
+    }
+  }
+
   // Null means "collector could not obtain this metric", not zero. Keeping
   // it explicit prevents an unavailable probe from looking healthy.
+  // Telemetry and streak counters are written unconditionally and never
+  // carry lifecycle_state: losing the lifecycle race below must not also
+  // lose this heartbeat's data.
   const { error } = await supabaseAdmin.from("nodes").update(update).eq("node_id", nodeId);
   if (error) {
     console.error("agent/heartbeat: node update failed:", error.message);
     return json({ error: "Internal error" }, 500);
+  }
+
+  // The lifecycle_state this node is in after this request, for alert
+  // reconciliation below; undefined when it cannot be known.
+  let resultingState = currentNode?.lifecycle_state;
+  if (nextState) {
+    // Compare-and-set on the state evaluateProbeResult decided from, like
+    // admin/nodes/[id]/lifecycle.js: an admin QUARANTINE (or any other
+    // transition) landing between our read and this write must win. Zero
+    // rows just means this tick's automated transition did not apply.
+    const { data: moved, error: transitionError } = await supabaseAdmin
+      .from("nodes")
+      .update({ lifecycle_state: nextState })
+      .eq("node_id", nodeId)
+      .eq("lifecycle_state", currentNode.lifecycle_state)
+      .select("node_id")
+      .maybeSingle();
+    if (transitionError) {
+      console.error("agent/heartbeat: lifecycle transition failed:", transitionError.message);
+      resultingState = undefined;
+    } else {
+      // Lost the race: the state is now whatever someone else set.
+      resultingState = moved ? nextState : undefined;
+    }
   }
 
   // An authenticated heartbeat proves the node holds its permanent key, so
@@ -109,6 +173,42 @@ export async function onRequestPost({ env, request }) {
     }
   }
 
+  if (autoHealth) {
+    // The .in() filter is only a query-size optimization derived from the
+    // same shared constant; isNodeSilent (inside failSilentNodes) is the
+    // actual eligibility rule, identical to admin/nodes.js's.
+    const { data: candidateNodes } = await supabaseAdmin
+      .from("nodes")
+      .select("node_id, lifecycle_state, last_seen_at")
+      .in("lifecycle_state", [...SILENCE_ELIGIBLE_STATES])
+      .neq("node_id", nodeId);
+    await failSilentNodes(supabaseAdmin, candidateNodes ?? [], Date.now());
+  }
+
+  // Health alerts track the node's resulting state, not whether a
+  // transition happened on this particular request: node_degraded stays
+  // open for as long as the node is DEGRADED and resolves once it leaves.
+  // node_failed is raised by failSilentNodes (silence is the only way into
+  // FAILED) and resolved here on the node's first heartbeat out of FAILED.
+  // Skipped entirely when the resulting state is unknown (lost race).
+  const healthAlerts =
+    resultingState === undefined
+      ? []
+      : [
+          reconcileAlert(
+            "node_degraded",
+            autoHealth && resultingState === "DEGRADED",
+            "warning",
+            `Node ${nodeId} is DEGRADED after repeated failed data-plane health probes`
+          ),
+          reconcileAlert(
+            "node_failed",
+            autoHealth && resultingState === "FAILED",
+            "critical",
+            `Node ${nodeId} is FAILED`
+          ),
+        ];
+
   await Promise.all([
     reconcileAlert(
       "disk_high",
@@ -122,6 +222,7 @@ export async function onRequestPost({ env, request }) {
       "warning",
       `Node ${nodeId} memory usage is at or above 95%`
     ),
+    ...healthAlerts,
   ]);
 
   return json({ ok: true, node_id: nodeId });

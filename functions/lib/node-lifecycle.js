@@ -2,13 +2,20 @@
  * The fleet node lifecycle state machine (spec §7/§54 Phase 2). Pure and
  * side-effect-free by design (spec §42/§14: "keep core scheduler/
  * entitlement/state-transition logic pure and unit-testable") — no
- * Supabase client, no I/O. The admin API route
- * (functions/api/admin/nodes/[id]/lifecycle.js) is the only caller that
- * persists a transition.
+ * Supabase client, no I/O.
  *
- * Phase 2 only wires up admin-triggered transitions; automated
- * health-based transitions (READY -> DEGRADED on failed probes, etc.) are
- * Phase 8 and are not modeled here yet.
+ * ALLOWED_TRANSITIONS is the table of what an ADMIN may do by hand
+ * (functions/api/admin/nodes/[id]/lifecycle.js), plus the edges the
+ * CREATE_NODE operation (fleet-operations.js) and enrollment
+ * (agent/enroll.js) rely on. It is deliberately permissive and must not be
+ * narrowed to fit automation.
+ *
+ * Phase 8 added the health-based edges READY<->DEGRADED, READY->FAILED,
+ * DEGRADED->FAILED and FAILED->READY. Automation does NOT get everything
+ * this table allows: functions/lib/node-health-transition.js spells out
+ * the much narrower set of automated moves (never out of MAINTENANCE,
+ * DRAINING, PROVISIONING or WARMING_UP) and only uses canTransitionLifecycle
+ * as a secondary guard.
  */
 
 export const NODE_LIFECYCLE_STATES = Object.freeze([
@@ -26,11 +33,23 @@ export const NODE_LIFECYCLE_STATES = Object.freeze([
 const ALLOWED_TRANSITIONS = Object.freeze({
   PROVISIONING: ["WARMING_UP", "FAILED", "QUARANTINED"],
   WARMING_UP: ["READY", "FAILED", "QUARANTINED"],
-  READY: ["DEGRADED", "DRAINING", "MAINTENANCE", "QUARANTINED"],
-  DEGRADED: ["READY", "DRAINING", "MAINTENANCE", "QUARANTINED"],
+  // FAILED here is the Phase 8 automated silence edge: a node that stops
+  // heartbeating entirely (isNodeSilent in node-health-transition.js) is
+  // moved straight to FAILED from READY, bypassing the probe-streak
+  // hysteresis in evaluateProbeResult -- a silent node sends no heartbeats
+  // of its own, so it can never traverse READY->DEGRADED via a failed
+  // probe first. A node that is still heartbeating but failing probes
+  // still goes through DEGRADED via evaluateProbeResult as before; this
+  // edge exists only for the orthogonal "gone completely dark" case.
+  READY: ["DEGRADED", "FAILED", "DRAINING", "MAINTENANCE", "QUARANTINED"],
+  DEGRADED: ["READY", "FAILED", "DRAINING", "MAINTENANCE", "QUARANTINED"],
   DRAINING: ["MAINTENANCE", "RETIRED", "READY", "QUARANTINED"],
   MAINTENANCE: ["READY", "DRAINING", "QUARANTINED"],
-  FAILED: ["PROVISIONING", "QUARANTINED", "RETIRED"],
+  // READY here is the Phase 8 automated recovery edge: after a
+  // silence-triggered FAILED, a single heartbeat with a passing probe (or
+  // any heartbeat at all, for a node with no probe capability) resumes
+  // normal streak evaluation. See evaluateProbeResult.
+  FAILED: ["PROVISIONING", "READY", "QUARANTINED", "RETIRED"],
   // Quarantine is deliberately a one-way security control (spec §45's
   // blast-radius containment): a node suspected of compromise never
   // returns to serving traffic from this state. The only way out is

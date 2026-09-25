@@ -53,14 +53,22 @@ describe("scheduleNodeForDevice (DB-facing)", () => {
   // thenable-returning on the last call by resolving a promise directly.
   function makeSupabaseWithNodes({ allowedPath, sticky, nodes, upsertError = null }) {
     const upsert = vi.fn().mockResolvedValue({ error: upsertError });
+    let filteredNodes = nodes; // Track filtered results for lifecycle_state filtering
     const nodesQuery = {
       select: vi.fn().mockReturnThis(),
-      eq: vi.fn().mockReturnThis(),
+      eq: vi.fn(function (column, value) {
+        // Simulate Postgrest filtering: when lifecycle_state = READY is applied,
+        // filter to only nodes with that lifecycle_state (or nodes without it, for backward compat)
+        if (column === "lifecycle_state" && value === "READY") {
+          filteredNodes = nodes.filter((node) => !node.lifecycle_state || node.lifecycle_state === "READY");
+        }
+        return this;
+      }),
     };
     // Make the query awaitable: awaiting a plain object with no `.then`
     // just resolves to itself, so give it a `.then` that resolves to the
     // final { data, error } payload.
-    nodesQuery.then = (resolve) => resolve({ data: nodes, error: null });
+    nodesQuery.then = (resolve) => resolve({ data: filteredNodes, error: null });
 
     const from = vi.fn((table) => {
       if (table === "allowed_paths") {
@@ -125,6 +133,27 @@ describe("scheduleNodeForDevice (DB-facing)", () => {
     expect(result).toBe("has-room");
     expect(upsert).toHaveBeenCalledWith(
       { device_id: "device-1", node_id: "has-room", hop: "EXIT" },
+      { onConflict: "device_id,hop" }
+    );
+  });
+
+  it("excludes nodes with DEGRADED or FAILED lifecycle_state from candidates", async () => {
+    const { from, upsert } = makeSupabaseWithNodes({
+      allowedPath: { id: "path-1" },
+      sticky: null,
+      nodes: [
+        { node_id: "ready-node", configured_users: 5, max_sessions: 100, lifecycle_state: "READY" },
+        { node_id: "degraded-node", configured_users: 5, max_sessions: 100, lifecycle_state: "DEGRADED" },
+        { node_id: "failed-node", configured_users: 5, max_sessions: 100, lifecycle_state: "FAILED" },
+      ],
+    });
+    const result = await scheduleNodeForDevice(
+      { from },
+      { deviceId: "device-1", exitLocationId: "loc-1" }
+    );
+    expect(result).toBe("ready-node");
+    expect(upsert).toHaveBeenCalledWith(
+      { device_id: "device-1", node_id: "ready-node", hop: "EXIT" },
       { onConflict: "device_id,hop" }
     );
   });

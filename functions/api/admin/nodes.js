@@ -7,6 +7,7 @@ import { getProviderAdapter } from "../../lib/provider-adapter.js";
 import { getDnsAdapter, nodeHostname } from "../../lib/dns-adapter.js";
 import { startCreateNodeOperation, advanceOperation } from "../../lib/fleet-operations.js";
 import { fleetContext } from "../../lib/fleet-context.js";
+import { failSilentNodes } from "../../lib/node-silence-failover.js";
 
 function jsonResponse(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -58,6 +59,22 @@ export async function onRequestGet({ env, request }) {
     if (error) throw new Error(`nodes query failed: ${error.message}`);
     if (samplesError) throw new Error(`node_traffic_samples query failed: ${samplesError.message}`);
     if (dailyError) throw new Error(`node_traffic_daily query failed: ${dailyError.message}`);
+
+    // Phase 8 lazy silence detection: reuses the rows already fetched above
+    // for the list response -- no extra query needed. Unrelated to
+    // classify()'s display-only status string below, which uses its own
+    // 90s/180s thresholds; this mutates the actual lifecycle_state for
+    // nodes that have genuinely gone silent per isNodeSilent's
+    // SILENCE_THRESHOLD_MULTIPLIER. Same shared helper (and so the same
+    // READY/DEGRADED-only eligibility) as agent/heartbeat.js: a
+    // PROVISIONING node being re-enrolled still carries its stale
+    // last_seen_at and must not be flipped back to FAILED here.
+    if (env.FEATURE_AUTO_NODE_HEALTH === "true") {
+      const failedNodeIds = new Set(await failSilentNodes(supabaseAdmin, data ?? [], Date.now()));
+      for (const node of data ?? []) {
+        if (failedNodeIds.has(node.node_id)) node.lifecycle_state = "FAILED";
+      }
+    }
 
     const latestByNode = new Map();
     for (const sample of samples ?? []) {
