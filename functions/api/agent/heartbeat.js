@@ -1,7 +1,12 @@
 import { createClient } from "@supabase/supabase-js";
 import { authenticateNode } from "../../lib/node-auth.js";
 import { canTransitionLifecycle } from "../../lib/node-lifecycle.js";
-import { evaluateProbeResult } from "../../lib/node-health-transition.js";
+import { evaluateProbeResult, isNodeSilent } from "../../lib/node-health-transition.js";
+
+// Matches the agent's HEARTBEAT_INTERVAL (60s) in main.rs -- keep these in
+// sync; a drift here would change what "silent" means without a code change
+// on the agent side.
+const HEARTBEAT_INTERVAL_MS = 60_000;
 
 function json(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -137,6 +142,22 @@ export async function onRequestPost({ env, request }) {
         .eq("status", "open");
       if (resolveError) {
         console.error("agent/heartbeat: alert resolve failed:", resolveError.message);
+      }
+    }
+  }
+
+  if (env.FEATURE_AUTO_NODE_HEALTH === "true") {
+    const { data: candidateNodes } = await supabaseAdmin
+      .from("nodes")
+      .select("node_id, lifecycle_state, last_seen_at")
+      .in("lifecycle_state", ["READY", "DEGRADED"])
+      .neq("node_id", nodeId);
+    for (const candidate of candidateNodes ?? []) {
+      if (
+        isNodeSilent(candidate, Date.now(), HEARTBEAT_INTERVAL_MS) &&
+        canTransitionLifecycle(candidate.lifecycle_state, "FAILED")
+      ) {
+        await supabaseAdmin.from("nodes").update({ lifecycle_state: "FAILED" }).eq("node_id", candidate.node_id);
       }
     }
   }

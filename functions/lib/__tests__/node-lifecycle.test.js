@@ -68,8 +68,8 @@ describe("canTransitionLifecycle", () => {
     expect(canTransitionLifecycle("FAILED", "READY")).toBe(true);
   });
 
-  it("does not allow READY to FAILED directly — must pass through DEGRADED", () => {
-    expect(canTransitionLifecycle("READY", "FAILED")).toBe(false);
+  it("allows READY to FAILED directly — Phase 8 silence edge (a silent node never traverses DEGRADED via a probe it can't send)", () => {
+    expect(canTransitionLifecycle("READY", "FAILED")).toBe(true);
   });
 
   it("every declared state's transition targets are themselves valid states", () => {

@@ -7,6 +7,14 @@ import { getProviderAdapter } from "../../lib/provider-adapter.js";
 import { getDnsAdapter, nodeHostname } from "../../lib/dns-adapter.js";
 import { startCreateNodeOperation, advanceOperation } from "../../lib/fleet-operations.js";
 import { fleetContext } from "../../lib/fleet-context.js";
+import { canTransitionLifecycle } from "../../lib/node-lifecycle.js";
+import { isNodeSilent } from "../../lib/node-health-transition.js";
+
+// Matches the agent's HEARTBEAT_INTERVAL (60s) in main.rs and
+// functions/api/agent/heartbeat.js's own copy of this constant -- keep
+// these in sync; a drift here would change what "silent" means without a
+// code change on the agent side.
+const HEARTBEAT_INTERVAL_MS = 60_000;
 
 function jsonResponse(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -58,6 +66,24 @@ export async function onRequestGet({ env, request }) {
     if (error) throw new Error(`nodes query failed: ${error.message}`);
     if (samplesError) throw new Error(`node_traffic_samples query failed: ${samplesError.message}`);
     if (dailyError) throw new Error(`node_traffic_daily query failed: ${dailyError.message}`);
+
+    // Phase 8 lazy silence detection: reuses the rows already fetched above
+    // for the list response -- no extra query needed. Unrelated to
+    // classify()'s display-only status string below, which uses its own
+    // 90s/180s thresholds; this mutates the actual lifecycle_state for
+    // nodes that have genuinely gone silent per isNodeSilent's
+    // SILENCE_THRESHOLD_MULTIPLIER.
+    if (env.FEATURE_AUTO_NODE_HEALTH === "true") {
+      for (const node of data ?? []) {
+        if (
+          isNodeSilent(node, Date.now(), HEARTBEAT_INTERVAL_MS) &&
+          canTransitionLifecycle(node.lifecycle_state, "FAILED")
+        ) {
+          await supabaseAdmin.from("nodes").update({ lifecycle_state: "FAILED" }).eq("node_id", node.node_id);
+          node.lifecycle_state = "FAILED";
+        }
+      }
+    }
 
     const latestByNode = new Map();
     for (const sample of samples ?? []) {

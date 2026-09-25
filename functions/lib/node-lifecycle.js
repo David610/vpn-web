@@ -26,10 +26,15 @@ export const NODE_LIFECYCLE_STATES = Object.freeze([
 const ALLOWED_TRANSITIONS = Object.freeze({
   PROVISIONING: ["WARMING_UP", "FAILED", "QUARANTINED"],
   WARMING_UP: ["READY", "FAILED", "QUARANTINED"],
-  READY: ["DEGRADED", "DRAINING", "MAINTENANCE", "QUARANTINED"],
-  // FAILED here is the Phase 8 automated edge: a node that goes silent
-  // (functions/lib/node-health-transition.js) is moved straight to FAILED
-  // from either READY or DEGRADED.
+  // FAILED here is the Phase 8 automated silence edge: a node that stops
+  // heartbeating entirely (isNodeSilent in node-health-transition.js) is
+  // moved straight to FAILED from READY, bypassing the probe-streak
+  // hysteresis in evaluateProbeResult -- a silent node sends no heartbeats
+  // of its own, so it can never traverse READY->DEGRADED via a failed
+  // probe first. A node that is still heartbeating but failing probes
+  // still goes through DEGRADED via evaluateProbeResult as before; this
+  // edge exists only for the orthogonal "gone completely dark" case.
+  READY: ["DEGRADED", "FAILED", "DRAINING", "MAINTENANCE", "QUARANTINED"],
   DEGRADED: ["READY", "FAILED", "DRAINING", "MAINTENANCE", "QUARANTINED"],
   DRAINING: ["MAINTENANCE", "RETIRED", "READY", "QUARANTINED"],
   MAINTENANCE: ["READY", "DRAINING", "QUARANTINED"],

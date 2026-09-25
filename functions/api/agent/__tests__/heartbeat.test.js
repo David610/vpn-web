@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 const nodeMaybeSingle = vi.fn();
 const nodesUpdate = vi.fn();
 const alertsInsert = vi.fn();
+const nodesListSelect = vi.fn();
 
 vi.mock("@supabase/supabase-js", () => ({
   createClient: vi.fn(() => ({
@@ -13,6 +14,8 @@ vi.mock("@supabase/supabase-js", () => ({
           eq: vi.fn().mockReturnThis(),
           maybeSingle: nodeMaybeSingle,
           update: nodesUpdate,
+          in: vi.fn().mockReturnThis(),
+          neq: vi.fn((...args) => nodesListSelect(...args)),
         };
       }
       if (table === "operational_alerts") {
@@ -57,6 +60,7 @@ beforeEach(() => {
   nodeMaybeSingle.mockReset().mockResolvedValue({ data: { node_id: "node-1", revoked_at: null }, error: null });
   nodesUpdate.mockReset().mockImplementation(() => updateChain());
   alertsInsert.mockReset().mockResolvedValue({ error: null });
+  nodesListSelect.mockReset().mockResolvedValue({ data: [], error: null });
   updateChains.length = 0;
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
@@ -143,6 +147,17 @@ describe("POST /api/agent/heartbeat — Phase 8 health transitions", () => {
     expect(alertsInsert).toHaveBeenCalledWith(
       expect.objectContaining({ alert_type: "node_degraded", dedup_key: "node:node-1:node_degraded" })
     );
+  });
+
+  it("transitions a different, silent node to FAILED as a side effect of this heartbeat", async () => {
+    // node-1 (the heartbeating node) is healthy; node-2 is silent.
+    mockNode({});
+    nodesListSelect.mockResolvedValue({
+      data: [{ node_id: "node-2", lifecycle_state: "READY", last_seen_at: new Date(Date.now() - 999_999_999).toISOString() }],
+      error: null,
+    });
+    await onRequestPost({ env: { ...env, FEATURE_AUTO_NODE_HEALTH: "true" }, request: makeRequest({ probe_ok: true }) });
+    expect(nodesUpdate.mock.calls.some((call) => call[0].lifecycle_state === "FAILED")).toBe(true);
   });
 });
 

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const getClaims = vi.fn();
 const adminMaybeSingle = vi.fn();
+const nodesUpdate = vi.fn();
 let nodesSelect;
 let samplesResult;
 let dailyResult;
@@ -11,7 +12,7 @@ vi.mock("@supabase/supabase-js", () => ({
     auth: { getClaims },
     from: vi.fn((table) => {
       if (table === "admin_users") return { select: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(), maybeSingle: adminMaybeSingle };
-      if (table === "nodes") return { select: nodesSelect };
+      if (table === "nodes") return { select: nodesSelect, update: nodesUpdate };
       if (table === "node_traffic_samples") {
         return {
           select: vi.fn().mockReturnThis(),
@@ -42,6 +43,7 @@ beforeEach(() => {
   adminMaybeSingle.mockReset().mockResolvedValue({ data: { role: "owner" }, error: null });
   samplesResult = { data: [], error: null };
   dailyResult = { data: [], error: null };
+  nodesUpdate.mockReset().mockReturnValue({ eq: vi.fn().mockResolvedValue({ error: null }) });
 });
 
 /** A traffic sample `agoMs` in the past covering `interval` seconds. */
@@ -197,5 +199,37 @@ describe("GET /api/admin/nodes", () => {
     const body = await (await onRequestGet({ env, request: makeRequest() })).json();
     expect(body.nodes[0].traffic.todayBytesUp).toBe(111);
     expect(body.nodes[0].traffic.todayBytesDown).toBe(222);
+  });
+
+  describe("Phase 8 silence detection", () => {
+    it("transitions a silent READY node to FAILED as a side effect of the list read", async () => {
+      const staleAt = new Date(Date.now() - 999_999_999).toISOString();
+      nodesSelect = vi.fn().mockResolvedValue({
+        data: [{ node_id: "node-1", last_seen_at: staleAt, revoked_at: null, lifecycle_state: "READY" }],
+        error: null,
+      });
+      await onRequestGet({ env: { ...env, FEATURE_AUTO_NODE_HEALTH: "true" }, request: makeRequest() });
+      expect(nodesUpdate.mock.calls.some((call) => call[0].lifecycle_state === "FAILED")).toBe(true);
+    });
+
+    it("does not transition a recently seen node", async () => {
+      const recent = new Date(Date.now() - 10_000).toISOString();
+      nodesSelect = vi.fn().mockResolvedValue({
+        data: [{ node_id: "node-1", last_seen_at: recent, revoked_at: null, lifecycle_state: "READY" }],
+        error: null,
+      });
+      await onRequestGet({ env: { ...env, FEATURE_AUTO_NODE_HEALTH: "true" }, request: makeRequest() });
+      expect(nodesUpdate).not.toHaveBeenCalled();
+    });
+
+    it("does not transition when FEATURE_AUTO_NODE_HEALTH is not set", async () => {
+      const staleAt = new Date(Date.now() - 999_999_999).toISOString();
+      nodesSelect = vi.fn().mockResolvedValue({
+        data: [{ node_id: "node-1", last_seen_at: staleAt, revoked_at: null, lifecycle_state: "READY" }],
+        error: null,
+      });
+      await onRequestGet({ env, request: makeRequest() });
+      expect(nodesUpdate).not.toHaveBeenCalled();
+    });
   });
 });
