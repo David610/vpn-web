@@ -55,8 +55,12 @@ export async function onRequestPost({ env, request, params }) {
   let maxWaitHours = DEFAULT_REPLACE_MAX_WAIT_HOURS;
   if (body?.maxWaitHours !== undefined) {
     maxWaitHours = Number(body.maxWaitHours);
-    if (!Number.isFinite(maxWaitHours) || maxWaitHours <= 0 || maxWaitHours > 720) {
-      return jsonResponse({ error: "maxWaitHours must be a number between 1 and 720" }, 400);
+    // Must be a whole number: register_node_replace_operation's
+    // p_max_wait_hours parameter is a Postgres integer, and a fractional
+    // value would fail the RPC call with a cast error (a 500) instead of
+    // this clean 400.
+    if (!Number.isInteger(maxWaitHours) || maxWaitHours < 1 || maxWaitHours > 720) {
+      return jsonResponse({ error: "maxWaitHours must be a whole number between 1 and 720" }, 400);
     }
   }
 

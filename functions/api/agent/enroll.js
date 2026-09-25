@@ -95,6 +95,7 @@ export async function onRequestPost({ env, request }) {
       .update({
         api_key_hash: apiKeySha256,
         lifecycle_state: "WARMING_UP",
+        lifecycle_state_changed_at: new Date().toISOString(),
       })
       .eq("node_id", node.node_id)
       .eq("enrollment_token_hash", tokenHash)

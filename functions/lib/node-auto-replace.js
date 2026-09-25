@@ -44,7 +44,7 @@ export async function autoReplaceFailedNodes(supabase, env) {
   const cutoff = new Date(Date.now() - thresholdMs).toISOString();
   const { data: candidates, error } = await supabase
     .from("nodes")
-    .select("node_id, role, location_id, provider, lifecycle_state_changed_at")
+    .select("node_id, role, location_id, provider, provider_instance_id, lifecycle_state_changed_at")
     .eq("lifecycle_state", "FAILED")
     .lte("lifecycle_state_changed_at", cutoff);
   if (error) {
@@ -53,21 +53,46 @@ export async function autoReplaceFailedNodes(supabase, env) {
   }
   if (!candidates || candidates.length === 0) return [];
 
+  const candidateIds = candidates.map((n) => n.node_id);
   const keys = candidates.map((n) => `REPLACE_NODE:${n.node_id}`);
-  const { data: existingOps, error: opsError } = await supabase
-    .from("fleet_operations")
-    .select("idempotency_key")
-    .in("idempotency_key", keys);
+  const [
+    { data: existingOps, error: opsError },
+    { data: failedOwnerOps, error: failedOwnerError },
+  ] = await Promise.all([
+    supabase.from("fleet_operations").select("idempotency_key").in("idempotency_key", keys),
+    // A node whose OWN provisioning attempt (CREATE_NODE, or an earlier
+    // REPLACE_NODE that made it the new node) already FAILED never actually
+    // served traffic -- it doesn't need "replacement", it needs its own
+    // retry or manual cleanup. Without this exclusion, a failed replacement
+    // attempt's new node (e.g. de-fsn-001-r1, itself later marked FAILED by
+    // failNodeIfBooting/the operation deadline) would get auto-"replaced"
+    // in turn, while the real problem node (de-fsn-001) sits forever
+    // unaddressed -- its own REPLACE_NODE idempotency key was already
+    // consumed by the failed attempt, so it can never be retried by this
+    // function again.
+    supabase.from("fleet_operations").select("node_id").eq("status", "FAILED").in("node_id", candidateIds),
+  ]);
   if (opsError) {
     console.error("node-auto-replace: existing-operation query failed:", opsError.message);
     return [];
   }
+  if (failedOwnerError) {
+    console.error("node-auto-replace: failed-owner-operation query failed:", failedOwnerError.message);
+    return [];
+  }
   const alreadyReplacing = new Set((existingOps ?? []).map((o) => o.idempotency_key));
+  const neverReadyNodeIds = new Set((failedOwnerOps ?? []).map((o) => o.node_id));
 
   const started = [];
   for (const oldNode of candidates) {
     const key = `REPLACE_NODE:${oldNode.node_id}`;
     if (alreadyReplacing.has(key)) continue;
+    if (!oldNode.provider_instance_id || neverReadyNodeIds.has(oldNode.node_id)) {
+      console.error(
+        `node-auto-replace: node ${oldNode.node_id} never reached READY (failed provisioning attempt), skipping auto-replace`
+      );
+      continue;
+    }
     if (!oldNode.provider) {
       console.error(`node-auto-replace: node ${oldNode.node_id} has no provider on record, skipping`);
       continue;

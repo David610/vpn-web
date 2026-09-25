@@ -34,6 +34,7 @@ const OLD = {
   role: "EXIT",
   location_id: "loc-1",
   provider: "hetzner",
+  provider_instance_id: "old-instance-1",
   lifecycle_state: "FAILED",
   lifecycle_state_changed_at: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
 };
@@ -81,6 +82,24 @@ describe("autoReplaceFailedNodes", () => {
   it("skips a node with no provider on record", async () => {
     const noProvider = { ...OLD, provider: null };
     const db = makeFakeSupabase({ nodes: [noProvider], fleet_operations: [] });
+    const started = await autoReplaceFailedNodes(db, baseEnv);
+    expect(started).toEqual([]);
+    expect(startReplaceNodeOperation).not.toHaveBeenCalled();
+  });
+
+  it("skips a node that never got a provider instance (its own CREATE_NODE attempt never even created a server)", async () => {
+    const neverProvisioned = { ...OLD, provider_instance_id: null };
+    const db = makeFakeSupabase({ nodes: [neverProvisioned], fleet_operations: [] });
+    const started = await autoReplaceFailedNodes(db, baseEnv);
+    expect(started).toEqual([]);
+    expect(startReplaceNodeOperation).not.toHaveBeenCalled();
+  });
+
+  it("skips a node whose own owning operation (CREATE_NODE or an earlier REPLACE_NODE) already FAILED -- it never reached READY, so it doesn't need replacing", async () => {
+    const db = makeFakeSupabase({
+      nodes: [OLD],
+      fleet_operations: [{ id: "op-failed", type: "REPLACE_NODE", status: "FAILED", node_id: "de-fsn-001", idempotency_key: "REPLACE_NODE:de-fsn-000" }],
+    });
     const started = await autoReplaceFailedNodes(db, baseEnv);
     expect(started).toEqual([]);
     expect(startReplaceNodeOperation).not.toHaveBeenCalled();
