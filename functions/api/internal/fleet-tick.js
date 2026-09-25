@@ -2,6 +2,7 @@ import { createClient } from "@supabase/supabase-js";
 import { advanceOperation } from "../../lib/fleet-operations.js";
 import { fleetContext, isValidFleetTickSecret } from "../../lib/fleet-context.js";
 import { finalizeAccountDeletions } from "../../lib/account-service.js";
+import { autoReplaceFailedNodes } from "../../lib/node-auto-replace.js";
 
 function json(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -60,5 +61,14 @@ export async function onRequestPost({ env, request }) {
   } catch (err) {
     console.error("fleet-tick: account deletion finalize failed:", err.message);
   }
-  return json({ leased: results.length, results, deletedAccounts });
+
+  let autoReplaced = [];
+  if (env.FEATURE_AUTO_NODE_REPLACE === "true") {
+    try {
+      autoReplaced = await autoReplaceFailedNodes(supabaseAdmin, env);
+    } catch (err) {
+      console.error("fleet-tick: auto-replace failed:", err.message);
+    }
+  }
+  return json({ leased: results.length, results, deletedAccounts, autoReplaced });
 }

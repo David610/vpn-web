@@ -234,7 +234,7 @@ describe("GET /api/admin/nodes", () => {
         error: null,
       });
       const body = await (await onRequestGet({ env: autoEnv, request: makeRequest() })).json();
-      expect(nodesUpdate.mock.calls).toEqual([[{ lifecycle_state: "FAILED" }]]);
+      expect(nodesUpdate.mock.calls[0][0]).toMatchObject({ lifecycle_state: "FAILED", lifecycle_state_changed_at: expect.any(String) });
       expect(updateChains[0].filters).toEqual([
         ["node_id", "node-1"],
         ["lifecycle_state", "READY"],

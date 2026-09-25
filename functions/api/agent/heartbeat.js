@@ -118,7 +118,7 @@ export async function onRequestPost({ env, request }) {
     // rows just means this tick's automated transition did not apply.
     const { data: moved, error: transitionError } = await supabaseAdmin
       .from("nodes")
-      .update({ lifecycle_state: nextState })
+      .update({ lifecycle_state: nextState, lifecycle_state_changed_at: new Date().toISOString() })
       .eq("node_id", nodeId)
       .eq("lifecycle_state", currentNode.lifecycle_state)
       .select("node_id")

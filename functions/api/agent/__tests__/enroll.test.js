@@ -118,7 +118,8 @@ describe("POST /api/agent/enroll", () => {
     expect(body).toEqual({ nodeId: "de-fra-3", alreadyEnrolled: false });
 
     const update = nodeUpdate.mock.calls[0][0];
-    expect(update).toEqual({ api_key_hash: KEY_HASH, lifecycle_state: "WARMING_UP" });
+    expect(update).toMatchObject({ api_key_hash: KEY_HASH, lifecycle_state: "WARMING_UP" });
+    expect(new Date(update.lifecycle_state_changed_at).getTime()).toBeGreaterThan(Date.now() - 5000);
     // The token hash is deliberately NOT cleared here: an idempotent retry
     // after a lost response must still find the row (see next tests).
     expect(update).not.toHaveProperty("enrollment_token_hash");

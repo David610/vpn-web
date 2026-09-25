@@ -171,6 +171,10 @@ export function makeFakeSupabase(seed = {}, options = {}) {
         state.filters.push((r) => r[col] > val);
         return chain;
       },
+      lte(col, val) {
+        state.filters.push((r) => r[col] <= val);
+        return chain;
+      },
       like(col, pattern) {
         const rx = new RegExp(`^${pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/%/g, ".*")}$`);
         state.filters.push((r) => rx.test(r[col]));

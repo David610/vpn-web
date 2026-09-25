@@ -148,7 +148,7 @@ describe("POST /api/agent/heartbeat — Phase 8 health transitions", () => {
 
   function casWrite(nodeId, from, to) {
     return {
-      patch: { lifecycle_state: to },
+      patch: { lifecycle_state: to, lifecycle_state_changed_at: expect.any(String) },
       filters: [
         ["eq", "node_id", nodeId],
         ["eq", "lifecycle_state", from],
@@ -232,6 +232,7 @@ describe("POST /api/agent/heartbeat — Phase 8 health transitions", () => {
 
   it("exits FAILED to READY on a single passing probe and resolves node_failed", async () => {
     mockNode({ lifecycle_state: "FAILED", consecutive_probe_failures: 1 });
+    const before = Date.now();
     await onRequestPost({ env: autoEnv, request: makeRequest({ probe_ok: true }) });
     expect(nodesUpdate.mock.calls[0][0]).toMatchObject({
       consecutive_probe_failures: 0,
@@ -239,6 +240,12 @@ describe("POST /api/agent/heartbeat — Phase 8 health transitions", () => {
     });
     expect(lifecycleWrites()).toEqual([casWrite("node-1", "FAILED", "READY")]);
     expect(resolvedDedupKeys()).toContain("node:node-1:node_failed");
+    // Check that lifecycle_state_changed_at is set in the lifecycle transition update
+    const lifecycleUpdate = nodesUpdate.mock.calls.find(
+      ([patch]) => "lifecycle_state" in patch && patch.lifecycle_state === "READY"
+    )?.[0];
+    expect(lifecycleUpdate).toBeDefined();
+    expect(new Date(lifecycleUpdate.lifecycle_state_changed_at).getTime()).toBeGreaterThan(before - 1);
   });
 
   it("recovers a FAILED node with no probe capability on any authenticated heartbeat (null-probe ruling)", async () => {

@@ -83,6 +83,7 @@ describe("PATCH /api/admin/nodes/:id/lifecycle", () => {
   });
 
   it("applies an allowed transition, guards the write on the read state, and writes an audit row", async () => {
+    const before = Date.now();
     const res = await onRequestPatch({ env, request: makeRequest({ state: "DRAINING" }), params: { id: "node-1" } });
     expect(res.status).toBe(200);
     const body = await res.json();
@@ -101,6 +102,7 @@ describe("PATCH /api/admin/nodes/:id/lifecycle", () => {
         metadata: { from: "READY", to: "DRAINING", reissued_enrollment_token: false },
       })
     );
+    expect(new Date(nodeUpdate.mock.calls[0][0].lifecycle_state_changed_at).getTime()).toBeGreaterThan(before - 1);
   });
 
   it("stamps retired_at only when transitioning to RETIRED", async () => {
