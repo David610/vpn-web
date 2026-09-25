@@ -157,4 +157,29 @@ describe("POST /api/admin/nodes/:id/replace", () => {
     expect(res.status).toBe(403);
     expect(startReplaceNodeOperation).not.toHaveBeenCalled();
   });
+
+  it("passes canary: true through to startReplaceNodeOperation when requested", async () => {
+    const res = await onRequestPost({
+      env,
+      request: makeRequest({ newNodeId: "de-fsn-002", region: "fsn1", canary: true }),
+      params: { id: "de-fsn-001" },
+    });
+    expect(res.status).toBe(202);
+    expect(startReplaceNodeOperation).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ canary: true })
+    );
+  });
+
+  it("defaults canary to false when omitted", async () => {
+    await onRequestPost({
+      env,
+      request: makeRequest({ newNodeId: "de-fsn-002", region: "fsn1" }),
+      params: { id: "de-fsn-001" },
+    });
+    expect(startReplaceNodeOperation).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ canary: false })
+    );
+  });
 });
