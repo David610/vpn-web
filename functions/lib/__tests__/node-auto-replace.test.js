@@ -95,13 +95,29 @@ describe("autoReplaceFailedNodes", () => {
     expect(startReplaceNodeOperation).not.toHaveBeenCalled();
   });
 
-  it("skips a node whose own owning operation (CREATE_NODE or an earlier REPLACE_NODE) already FAILED -- it never reached READY, so it doesn't need replacing", async () => {
+  it("skips a node whose own owning operation (CREATE_NODE or an earlier REPLACE_NODE) already FAILED before reaching READY -- it never served traffic, so it doesn't need replacing", async () => {
     const db = makeFakeSupabase({
       nodes: [OLD],
       fleet_operations: [{ id: "op-failed", type: "REPLACE_NODE", status: "FAILED", node_id: "de-fsn-001", idempotency_key: "REPLACE_NODE:de-fsn-000" }],
+      operation_steps: [{ id: 1, operation_id: "op-failed", name: "AWAIT_ENROLLMENT", status: "RUNNING" }],
     });
     const started = await autoReplaceFailedNodes(db, baseEnv);
     expect(started).toEqual([]);
     expect(startReplaceNodeOperation).not.toHaveBeenCalled();
+  });
+
+  it("still auto-replaces a node whose owning REPLACE_NODE operation reached READY (completed MARK_READY) before later failing for an unrelated reason", async () => {
+    const db = makeFakeSupabase({
+      nodes: [OLD],
+      // e.g. an admin quarantined the OLD node mid-drain, failing
+      // DRAIN_OLD_NODE with the NEW node already long since READY and
+      // serving traffic -- this node genuinely needs replacing if it later
+      // dies on its own, not a "never reached READY" skip.
+      fleet_operations: [{ id: "op-failed-after-ready", type: "REPLACE_NODE", status: "FAILED", node_id: "de-fsn-001", idempotency_key: "REPLACE_NODE:de-fsn-000" }],
+      operation_steps: [{ id: 1, operation_id: "op-failed-after-ready", name: "MARK_READY", status: "COMPLETED" }],
+    });
+    const started = await autoReplaceFailedNodes(db, baseEnv);
+    expect(started).toEqual([{ oldNodeId: "de-fsn-001", newNodeId: "de-fsn-001-r1", operationId: "op-1" }]);
+    expect(startReplaceNodeOperation).toHaveBeenCalled();
   });
 });

@@ -61,16 +61,25 @@ export async function autoReplaceFailedNodes(supabase, env) {
   ] = await Promise.all([
     supabase.from("fleet_operations").select("idempotency_key").in("idempotency_key", keys),
     // A node whose OWN provisioning attempt (CREATE_NODE, or an earlier
-    // REPLACE_NODE that made it the new node) already FAILED never actually
-    // served traffic -- it doesn't need "replacement", it needs its own
-    // retry or manual cleanup. Without this exclusion, a failed replacement
-    // attempt's new node (e.g. de-fsn-001-r1, itself later marked FAILED by
-    // failNodeIfBooting/the operation deadline) would get auto-"replaced"
-    // in turn, while the real problem node (de-fsn-001) sits forever
-    // unaddressed -- its own REPLACE_NODE idempotency key was already
-    // consumed by the failed attempt, so it can never be retried by this
-    // function again.
-    supabase.from("fleet_operations").select("node_id").eq("status", "FAILED").in("node_id", candidateIds),
+    // REPLACE_NODE that made it the new node) already FAILED before ever
+    // reaching READY never actually served traffic -- it doesn't need
+    // "replacement", it needs its own retry or manual cleanup. Without this
+    // exclusion, a failed replacement attempt's new node (e.g.
+    // de-fsn-001-r1, itself later marked FAILED by failNodeIfBooting/the
+    // operation deadline) would get auto-"replaced" in turn, while the real
+    // problem node (de-fsn-001) sits forever unaddressed -- its own
+    // REPLACE_NODE idempotency key was already consumed by the failed
+    // attempt, so it can never be retried by this function again.
+    //
+    // Only ops whose FAILED status was reached before MARK_READY matter
+    // here: a REPLACE_NODE op can also fail AFTER its new node reached
+    // READY (e.g. DRAIN_OLD_NODE hits a concurrent admin quarantine on the
+    // OLD node, or RETIRE_OLD_NODE's destroyInstance exhausts retries) --
+    // that new node genuinely served traffic and must remain eligible if it
+    // later fails on its own, so a status-only check would wrongly exclude
+    // it forever. Fetched with node_id/id so the MARK_READY check below can
+    // join back to operation_steps.
+    supabase.from("fleet_operations").select("id, node_id").eq("status", "FAILED").in("node_id", candidateIds),
   ]);
   if (opsError) {
     console.error("node-auto-replace: existing-operation query failed:", opsError.message);
@@ -81,7 +90,28 @@ export async function autoReplaceFailedNodes(supabase, env) {
     return [];
   }
   const alreadyReplacing = new Set((existingOps ?? []).map((o) => o.idempotency_key));
-  const neverReadyNodeIds = new Set((failedOwnerOps ?? []).map((o) => o.node_id));
+
+  const failedOps = failedOwnerOps ?? [];
+  let reachedReadyOpIds = new Set();
+  if (failedOps.length > 0) {
+    const { data: markReadySteps, error: stepsError } = await supabase
+      .from("operation_steps")
+      .select("operation_id")
+      .eq("name", "MARK_READY")
+      .eq("status", "COMPLETED")
+      .in(
+        "operation_id",
+        failedOps.map((o) => o.id)
+      );
+    if (stepsError) {
+      console.error("node-auto-replace: operation_steps query failed:", stepsError.message);
+      return [];
+    }
+    reachedReadyOpIds = new Set((markReadySteps ?? []).map((s) => s.operation_id));
+  }
+  const neverReadyNodeIds = new Set(
+    failedOps.filter((o) => !reachedReadyOpIds.has(o.id)).map((o) => o.node_id)
+  );
 
   const started = [];
   for (const oldNode of candidates) {
