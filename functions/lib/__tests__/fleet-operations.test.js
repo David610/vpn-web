@@ -3,6 +3,7 @@ import { makeFakeSupabase } from "./fake-supabase.js";
 import {
   advanceOperation,
   CREATE_NODE_STEPS,
+  REPLACE_NODE_STEPS,
   READINESS_CONSECUTIVE_PASSES,
 } from "../fleet-operations.js";
 
@@ -54,6 +55,41 @@ function seed({ deadlineAt } = {}) {
   };
 }
 
+const OLD_NODE_ID = "de-fsn-old";
+
+function replaceSeed({ oldState = "READY", drainDeadline } = {}) {
+  const base = seed();
+  base.nodes.push({
+    node_id: OLD_NODE_ID,
+    role: "EXIT",
+    lifecycle_state: oldState,
+    provider: "hetzner",
+    provider_instance_id: "old-instance-1",
+    ip_address: "198.51.100.1",
+  });
+  base.fleet_operations[0].type = "REPLACE_NODE";
+  base.fleet_operations[0].detail = { provider: "hetzner", region: "fsn1", oldNodeId: OLD_NODE_ID, maxWaitHours: 72 };
+  base.operation_steps = REPLACE_NODE_STEPS.map((name, i) => ({
+    id: i + 1,
+    operation_id: "op-1",
+    step_index: i,
+    name,
+    status: "PENDING",
+    attempts: 0,
+    detail: {},
+  }));
+  base.device_node_assignments = [];
+  return base;
+}
+
+async function driveNewNodeToReady() {
+  await advance(); // CREATE_INSTANCE + PUBLISH_DNS -> AWAIT_ENROLLMENT
+  await setNode({ lifecycle_state: "WARMING_UP" });
+  await advance(); // -> AWAIT_BOOTSTRAP
+  await setNode({ bootstrap_stage: "COMPLETE", bootstrap_status: "OK", last_seen_at: new Date().toISOString() });
+  for (let i = 0; i < READINESS_CONSECUTIVE_PASSES; i++) await advance();
+}
+
 let db;
 let provider;
 let dnsAdapter;
@@ -89,6 +125,7 @@ beforeEach(() => {
       ipAddress: "203.0.113.9",
       region: "fsn1",
     }),
+    destroyInstance: vi.fn().mockResolvedValue(undefined),
   };
   dnsAdapter = { upsertAddressRecord: vi.fn().mockResolvedValue({ recordId: "rec-1" }) };
   probe = vi.fn().mockResolvedValue({ ok: true, checks: { subscription_tls: { ok: true }, reality_tcp: { ok: true } } });
@@ -238,5 +275,89 @@ describe("CREATE_NODE operation", () => {
     await advance();
     const changedAt = new Date((await node()).lifecycle_state_changed_at).getTime();
     expect(changedAt).toBeGreaterThan(Date.now() - 5000);
+  });
+});
+
+describe("REPLACE_NODE operation", () => {
+  it("drives the new node to READY, then drains and retires the old node once assignments clear", async () => {
+    db = makeFakeSupabase(replaceSeed());
+    ctx.supabase = db;
+
+    await driveNewNodeToReady();
+    expect((await node()).lifecycle_state).toBe("READY");
+
+    // DRAIN_OLD_NODE: old node moves to DRAINING on first entry.
+    let result = await advance();
+    expect(result).toMatchObject({ step: "DRAIN_OLD_NODE", status: "RUNNING" });
+    const oldAfterFirstDrainTick = (await rows("nodes")).find((n) => n.node_id === OLD_NODE_ID);
+    expect(oldAfterFirstDrainTick.lifecycle_state).toBe("DRAINING");
+
+    // Still has an assignment -> keeps waiting.
+    await db.from("device_node_assignments").insert({ device_id: "dev-1", node_id: OLD_NODE_ID, hop: "EXIT" });
+    result = await advance();
+    expect(result).toMatchObject({ step: "DRAIN_OLD_NODE", status: "RUNNING" });
+
+    // Assignment clears -> DRAIN_OLD_NODE completes, RETIRE_OLD_NODE runs.
+    await db.from("device_node_assignments").delete().eq("device_id", "dev-1");
+    result = await advance();
+    expect(result).toEqual({ status: "COMPLETED" });
+
+    const oldFinal = (await rows("nodes")).find((n) => n.node_id === OLD_NODE_ID);
+    expect(oldFinal.lifecycle_state).toBe("RETIRED");
+    expect(oldFinal.retired_at).toBeTruthy();
+    expect(provider.destroyInstance).toHaveBeenCalledWith({ providerInstanceId: "old-instance-1" });
+  });
+
+  it("forces the drain through once drainDeadline passes, even with assignments remaining", async () => {
+    db = makeFakeSupabase(replaceSeed());
+    ctx.supabase = db;
+    await driveNewNodeToReady();
+    await advance(); // starts DRAINING, records drainDeadline
+    await db.from("device_node_assignments").insert({ device_id: "dev-1", node_id: OLD_NODE_ID, hop: "EXIT" });
+
+    const drainStep = await step("DRAIN_OLD_NODE");
+    // Force the recorded deadline into the past instead of waiting real time.
+    await db.from("operation_steps").update({ detail: { ...drainStep.detail, drainDeadline: new Date(Date.now() - 1000).toISOString() } }).eq("id", drainStep.id);
+
+    const result = await advance();
+    expect(result.step).toBe("RETIRE_OLD_NODE");
+    expect((await rows("device_node_assignments")).length).toBe(1); // never force-deleted, just no longer blocks
+  });
+
+  it("leaves the old node completely untouched if new-node provisioning fails permanently", async () => {
+    db = makeFakeSupabase(replaceSeed({ oldState: "DEGRADED" }));
+    ctx.supabase = db;
+    provider.createInstance.mockRejectedValue(new Error("Hetzner API returned 503"));
+
+    for (let i = 0; i < 8; i++) await advance(); // MAX_STEP_ATTEMPTS in fleet-operations.js
+
+    const oldFinal = (await rows("nodes")).find((n) => n.node_id === OLD_NODE_ID);
+    expect(oldFinal.lifecycle_state).toBe("DEGRADED");
+    expect(oldFinal.lifecycle_state_changed_at).toBeUndefined();
+    expect(provider.destroyInstance).not.toHaveBeenCalled();
+  });
+
+  it("accepts a FAILED old node as a valid drain-start state", async () => {
+    db = makeFakeSupabase(replaceSeed({ oldState: "FAILED" }));
+    ctx.supabase = db;
+    await driveNewNodeToReady();
+    const result = await advance();
+    expect(result.step).toBe("DRAIN_OLD_NODE");
+    const old = (await rows("nodes")).find((n) => n.node_id === OLD_NODE_ID);
+    expect(old.lifecycle_state).toBe("DRAINING");
+  });
+
+  it("fails the step, not the new node, if the old node's state changed concurrently before draining", async () => {
+    db = makeFakeSupabase(replaceSeed());
+    ctx.supabase = db;
+    await driveNewNodeToReady();
+    // Simulate an admin quarantining the old node between MARK_READY and this tick.
+    await db.from("nodes").update({ lifecycle_state: "QUARANTINED" }).eq("node_id", OLD_NODE_ID);
+
+    const result = await advance();
+    expect(result.status).toBe("FAILED");
+    expect((await node()).lifecycle_state).toBe("READY"); // new node unaffected
+    const old = (await rows("nodes")).find((n) => n.node_id === OLD_NODE_ID);
+    expect(old.lifecycle_state).toBe("QUARANTINED"); // untouched, not silently overwritten
   });
 });

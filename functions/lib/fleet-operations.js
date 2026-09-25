@@ -203,7 +203,131 @@ const CREATE_NODE_HANDLERS = {
   },
 };
 
-const HANDLERS = { CREATE_NODE: CREATE_NODE_HANDLERS };
+export const DEFAULT_REPLACE_MAX_WAIT_HOURS = 72;
+export const DRAIN_POLL_INTERVAL_S = 300;
+// Buffer beyond CREATE_NODE_DEADLINE_MS + the drain wait, so the operation's
+// own outer deadline_at is a pure safety net -- DRAIN_OLD_NODE's own
+// drainDeadline is what actually forces the drain through on schedule.
+const REPLACE_DEADLINE_BUFFER_MS = 60 * 60 * 1000;
+
+export const REPLACE_NODE_STEPS = [...CREATE_NODE_STEPS, "DRAIN_OLD_NODE", "RETIRE_OLD_NODE"];
+
+const REPLACE_NODE_HANDLERS = {
+  ...CREATE_NODE_HANDLERS,
+
+  async DRAIN_OLD_NODE({ supabase }, op, _newNode, step) {
+    const oldNodeId = op.detail.oldNodeId;
+    const { data: oldNode, error } = await supabase
+      .from("nodes")
+      .select("node_id, lifecycle_state")
+      .eq("node_id", oldNodeId)
+      .maybeSingle();
+    if (error) throw new Error(`nodes lookup failed: ${error.message}`);
+    if (!oldNode) throw new FatalStepError(`old node ${oldNodeId} no longer exists`);
+
+    let drainDeadline = step.detail?.drainDeadline;
+
+    if (!drainDeadline) {
+      if (!canTransitionLifecycle(oldNode.lifecycle_state, "DRAINING")) {
+        throw new FatalStepError(`old node ${oldNodeId} is ${oldNode.lifecycle_state}, cannot drain`);
+      }
+      const moved = await updateNode(
+        supabase,
+        oldNodeId,
+        { lifecycle_state: "DRAINING", lifecycle_state_changed_at: new Date().toISOString() },
+        { lifecycle_state: oldNode.lifecycle_state }
+      );
+      if (!moved) throw new FatalStepError(`old node ${oldNodeId} lifecycle changed concurrently`);
+
+      const maxWaitHours = op.detail.maxWaitHours ?? DEFAULT_REPLACE_MAX_WAIT_HOURS;
+      drainDeadline = new Date(Date.now() + maxWaitHours * 60 * 60 * 1000).toISOString();
+      // Let the DRAINING transition register for at least one poll cycle
+      // before the first assignment check runs -- this also guarantees this
+      // step never completes (and cascades straight into RETIRE_OLD_NODE)
+      // within the very same advanceOperation() call that also happened to
+      // finish MARK_READY for the new node.
+      return wait(DRAIN_POLL_INTERVAL_S, { drainDeadline, remaining: null });
+    }
+
+    // Once draining, the old node must stay draining -- if it moved
+    // elsewhere concurrently (e.g. an admin quarantined it), fail loudly
+    // rather than silently overwrite that action.
+    if (oldNode.lifecycle_state !== "DRAINING") {
+      throw new FatalStepError(
+        `old node ${oldNodeId} lifecycle changed concurrently (now ${oldNode.lifecycle_state})`
+      );
+    }
+
+    const { data: assignments, error: assignError } = await supabase
+      .from("device_node_assignments")
+      .select("device_id")
+      .eq("node_id", oldNodeId);
+    if (assignError) throw new Error(`device_node_assignments lookup failed: ${assignError.message}`);
+    const remaining = (assignments ?? []).length;
+
+    if (typeof step.detail?.remaining !== "number") {
+      // First real assignment check: record it, but still wait one more
+      // cycle before deciding, for the same reason as above.
+      return wait(DRAIN_POLL_INTERVAL_S, { drainDeadline, remaining });
+    }
+
+    if (remaining === 0) return done({ drainDeadline, remaining: 0 });
+    if (Date.now() > new Date(drainDeadline).getTime()) {
+      return done({ drainDeadline, remaining, forced: true });
+    }
+    return wait(DRAIN_POLL_INTERVAL_S, { drainDeadline, remaining });
+  },
+
+  async RETIRE_OLD_NODE({ supabase, providers, env }, op) {
+    const oldNodeId = op.detail.oldNodeId;
+    const { data: oldNode, error } = await supabase
+      .from("nodes")
+      .select("node_id, lifecycle_state, provider, provider_instance_id")
+      .eq("node_id", oldNodeId)
+      .maybeSingle();
+    if (error) throw new Error(`nodes lookup failed: ${error.message}`);
+    if (!oldNode) throw new FatalStepError(`old node ${oldNodeId} no longer exists`);
+
+    if (oldNode.lifecycle_state === "RETIRED") {
+      return done({ retired: true, alreadyRetired: true });
+    }
+    if (oldNode.lifecycle_state !== "DRAINING") {
+      throw new FatalStepError(`old node ${oldNodeId} is ${oldNode.lifecycle_state}, expected DRAINING or RETIRED`);
+    }
+
+    // DRAIN_OLD_NODE may have completed via its own deadline with
+    // assignments still present (forced through). Don't destroy the
+    // instance out from under live traffic on the same tick -- keep
+    // polling here until it's actually clear.
+    const { data: assignments, error: assignError } = await supabase
+      .from("device_node_assignments")
+      .select("device_id")
+      .eq("node_id", oldNodeId);
+    if (assignError) throw new Error(`device_node_assignments lookup failed: ${assignError.message}`);
+    const remaining = (assignments ?? []).length;
+    if (remaining > 0) return wait(DRAIN_POLL_INTERVAL_S, { remaining });
+
+    const moved = await updateNode(
+      supabase,
+      oldNodeId,
+      {
+        lifecycle_state: "RETIRED",
+        retired_at: new Date().toISOString(),
+        lifecycle_state_changed_at: new Date().toISOString(),
+      },
+      { lifecycle_state: "DRAINING" }
+    );
+    if (!moved) throw new Error(`old node ${oldNodeId} lifecycle changed concurrently`);
+
+    if (oldNode.provider_instance_id) {
+      const adapter = providers(oldNode.provider, env);
+      await adapter.destroyInstance({ providerInstanceId: oldNode.provider_instance_id });
+    }
+    return done({ retired: true });
+  },
+};
+
+const HANDLERS = { CREATE_NODE: CREATE_NODE_HANDLERS, REPLACE_NODE: REPLACE_NODE_HANDLERS };
 
 // ------------------------------------------------------------ creation --
 
@@ -226,6 +350,34 @@ export async function startCreateNodeOperation(
     p_detail: { provider, region },
     p_steps: CREATE_NODE_STEPS,
     p_deadline_at: new Date(Date.now() + CREATE_NODE_DEADLINE_MS).toISOString(),
+  });
+  if (error) return { error };
+  return { operation };
+}
+
+/**
+ * Registers a PROVISIONING new node and its REPLACE_NODE operation (plus
+ * steps) atomically via register_node_replace_operation(). Idempotent on
+ * oldNodeId (not newNodeId): the operation's idempotency_key derives from
+ * the OLD node, so a second replace attempt for the same old node fails
+ * cleanly with 23505 regardless of what newNodeId it names.
+ */
+export async function startReplaceNodeOperation(
+  supabase,
+  { newNodeId, role, locationId, provider, region, hostname, oldNodeId, maxWaitHours = DEFAULT_REPLACE_MAX_WAIT_HOURS }
+) {
+  const deadlineMs = CREATE_NODE_DEADLINE_MS + maxWaitHours * 60 * 60 * 1000 + REPLACE_DEADLINE_BUFFER_MS;
+  const { data: operation, error } = await supabase.rpc("register_node_replace_operation", {
+    p_node_id: newNodeId,
+    p_role: role,
+    p_location_id: locationId,
+    p_provider: provider,
+    p_hostname: hostname,
+    p_detail: { provider, region },
+    p_old_node_id: oldNodeId,
+    p_max_wait_hours: maxWaitHours,
+    p_steps: REPLACE_NODE_STEPS,
+    p_deadline_at: new Date(Date.now() + deadlineMs).toISOString(),
   });
   if (error) return { error };
   return { operation };
