@@ -34,6 +34,43 @@ describe("buildNodeBootstrapUserData", () => {
     expect(BOOTSTRAP_SCRIPT).toContain('--reality-handshake-server "$REALITY_HANDSHAKE_SERVER"');
   });
 
+  it("reads the REALITY key files and reports them as the transport on INSTALL OK", () => {
+    expect(BOOTSTRAP_SCRIPT).toContain("/etc/vpn/compat/reality/public.key");
+    expect(BOOTSTRAP_SCRIPT).toContain("/etc/vpn/compat/reality/short_id.txt");
+    expect(BOOTSTRAP_SCRIPT).toContain('"transport":"vless-reality"');
+    expect(BOOTSTRAP_SCRIPT).toContain('"reality_fingerprint":"chrome"');
+    expect(BOOTSTRAP_SCRIPT).toContain('"vless_flow":"xtls-rprx-vision"');
+    // tls_server_name is the REALITY decoy SNI -- the handshake server the
+    // node was given, not its own public hostname.
+    expect(BOOTSTRAP_SCRIPT).toContain('"tls_server_name":"%s"');
+    const installReport = BOOTSTRAP_SCRIPT.indexOf('report INSTALL OK "singbox-vpn');
+    expect(installReport).toBeGreaterThan(-1);
+    expect(BOOTSTRAP_SCRIPT.slice(installReport, installReport + 200)).toContain(
+      "$(transport_report_json)"
+    );
+  });
+
+  it("never fails the INSTALL stage when the REALITY key files are absent", () => {
+    // transport_report_json must fall back to an empty string (falsy in
+    // bash's `[ -n "$transport" ]`), not `set -e`-abort the script, when
+    // the files don't exist -- 2>/dev/null || true on both reads.
+    const fnStart = BOOTSTRAP_SCRIPT.indexOf("transport_report_json()");
+    expect(fnStart).toBeGreaterThan(-1);
+    const fnBody = BOOTSTRAP_SCRIPT.slice(fnStart, BOOTSTRAP_SCRIPT.indexOf("\n}", fnStart) + 2);
+    expect(fnBody).toContain("2>/dev/null || true");
+    expect(fnBody).toMatch(/echo ""/);
+  });
+
+  it("splices a transport object into report()'s body only when given one", () => {
+    const reportStart = BOOTSTRAP_SCRIPT.indexOf("report() {");
+    const reportBody = BOOTSTRAP_SCRIPT.slice(reportStart, BOOTSTRAP_SCRIPT.indexOf("\n}", reportStart) + 2);
+    expect(reportBody).toContain('"transport":%s');
+    // Not "${4:-}" -- inside this file's JS template literal, "${4:-}"
+    // parses as a JS interpolation slot (4:- is not a valid expression)
+    // and breaks the whole file. "$#"-gated assignment avoids the clash.
+    expect(reportBody).toContain('[ "$#" -ge 4 ] && transport="$4"');
+  });
+
   it("puts the token only in the 0600 env file -- never in a URL or a command line", () => {
     const ud = buildNodeBootstrapUserData(valid);
     expect(ud.split(valid.enrollmentToken).length - 1).toBe(1);
