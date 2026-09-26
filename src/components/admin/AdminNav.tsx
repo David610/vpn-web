@@ -16,7 +16,7 @@ const LINKS = [
 ];
 
 export function AdminNav() {
-  const pathname = usePathname();
+  const pathname = (usePathname() ?? "").replace(/\/+$/, "") || "/";
   return (
     <nav className="border-b bg-white px-6 py-3 overflow-x-auto">
       <div className="mx-auto flex max-w-6xl gap-6 w-max min-w-full">
@@ -24,7 +24,7 @@ export function AdminNav() {
           <Link
             key={link.href}
             href={link.href}
-            className={`whitespace-nowrap ${pathname === link.href ? "font-semibold text-black" : "text-gray-500"}`}
+            className={`whitespace-nowrap ${(pathname === link.href || (link.label === "Fleet" && pathname.startsWith("/admin/fleet"))) ? "font-semibold text-black" : "text-gray-500"}`}
           >
             {link.label}
           </Link>

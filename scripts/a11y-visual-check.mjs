@@ -137,6 +137,66 @@ const ADMIN_SUBSCRIPTIONS_BODY = {
   page: 1, perPage: 50, total: 1, totalPages: 1,
 };
 
+const NOW = new Date().toISOString();
+const ADMIN_NODES_BODY = {
+  nodes: [
+    { nodeId: "de-fra-1", status: "online", lastSeenAt: NOW, telemetryAt: NOW, agentVersion: "1.4.0", vpnVersion: "v1.2.3", singboxVersion: "1.11.0", uptimeSeconds: 864000, cpuPercent: 12.5, memoryPercent: 40.1, diskPercent: 22, networkRxBps: 1200000, networkTxBps: 900000, configuredUsers: 42, activeUsersRecent: 17, role: "EXIT", lifecycleState: "READY", location: { displayName: "Frankfurt", countryCode: "DE" }, desiredRevision: 3, observedRevision: 3, traffic: { sampledAt: NOW, connectionsOpen: 31, bpsUp: 800000, bpsDown: 2400000, todayBytesUp: 1e9, todayBytesDown: 5e9 } },
+    { nodeId: "se-sto-1", status: "degraded", lastSeenAt: NOW, telemetryAt: NOW, agentVersion: "1.4.0", vpnVersion: "v1.2.3", singboxVersion: "1.11.0", uptimeSeconds: 3600, cpuPercent: 71, memoryPercent: 66, diskPercent: 30, networkRxBps: 300000, networkTxBps: 200000, configuredUsers: 9, activeUsersRecent: 2, role: "RELAY", lifecycleState: "DRAINING", location: { displayName: "Stockholm", countryCode: "SE" }, desiredRevision: 4, observedRevision: 3, traffic: { sampledAt: null, connectionsOpen: null, bpsUp: null, bpsDown: null, todayBytesUp: 0, todayBytesDown: 0 } },
+  ],
+};
+const ADMIN_FLEET_TOPOLOGY_BODY = {
+  locations: [
+    { id: "loc-de", countryCode: "DE", city: "Frankfurt", displayName: "Frankfurt", enabled: true, nodes: 2, exitNodes: 2, relayNodes: 0, readyNodes: 2, states: { READY: 2 } },
+    { id: "loc-se", countryCode: "SE", city: "Stockholm", displayName: "Stockholm", enabled: true, nodes: 1, exitNodes: 0, relayNodes: 1, readyNodes: 0, states: { DRAINING: 1 } },
+  ],
+  allowedPaths: [
+    { id: "p1", kind: "DIRECT", entry: null, exit: "Frankfurt", enabled: true, requiredEntitlement: null },
+    { id: "p2", kind: "DOUBLE_HOP", entry: "Stockholm", exit: "Frankfurt", enabled: false, requiredEntitlement: "double_hop" },
+  ],
+};
+const ADMIN_FLEET_ASSIGNMENTS_BODY = {
+  byNode: [{ nodeId: "de-fra-1", exit: 40, relay: 0, total: 40 }, { nodeId: "se-sto-1", exit: 0, relay: 6, total: 6 }],
+  total: 46,
+  assignments: [
+    { deviceId: "3f2a9c1e-0000-0000-0000-000000000001", nodeId: "de-fra-1", hop: "EXIT", assignedAt: NOW, accountId: "a1b2c3d4-0000-0000-0000-000000000000", subscriptionId: "s1", platform: "ios", deviceStatus: "ACTIVE", placementStatus: "PLACED" },
+  ],
+  limit: 100,
+};
+const ADMIN_FLEET_OPERATIONS_BODY = {
+  operations: [
+    { id: "9d8c7b6a-0000-0000-0000-000000000000", type: "REPLACE_NODE", status: "RUNNING", nodeId: "de-fra-2", attempts: 1, lastError: null, nextAttemptAt: NOW, deadlineAt: NOW, createdAt: NOW, updatedAt: NOW, detail: {}, steps: [
+      { index: 0, name: "CREATE_SERVER", status: "COMPLETED", nodeId: "de-fra-2", attempts: 1, error: null, startedAt: NOW, completedAt: NOW, detail: {} },
+      { index: 1, name: "PUBLISH_DNS", status: "RUNNING", nodeId: "de-fra-2", attempts: 1, error: null, startedAt: NOW, completedAt: null, detail: {} },
+    ] },
+  ],
+};
+const ADMIN_FLEET_HEALTH_BODY = {
+  nodes: [
+    { nodeId: "de-fra-1", role: "EXIT", lifecycleState: "READY", lifecycleStateChangedAt: NOW, failedReason: null, location: "Frankfurt (DE)", probe: { lastAt: NOW, lastOk: true, consecutiveFailures: 0, consecutiveSuccesses: 12 }, capacity: { assignedDevices: 40, maxSessions: 200, utilization: 0.2, capacityMbps: 1000, cpuPercent: 12, memoryPercent: 40 }, revision: { desired: 3, observed: 3, inSync: true }, versions: { agent: "1.4.0", vpn: "v1.2.3", singbox: "1.11.0" }, bootstrap: { stage: "done", status: "OK" } },
+    { nodeId: "se-sto-1", role: "RELAY", lifecycleState: "DRAINING", lifecycleStateChangedAt: NOW, failedReason: null, location: "Stockholm (SE)", probe: { lastAt: NOW, lastOk: false, consecutiveFailures: 2, consecutiveSuccesses: 0 }, capacity: { assignedDevices: 6, maxSessions: 100, utilization: 0.06, capacityMbps: 500, cpuPercent: 71, memoryPercent: 66 }, revision: { desired: 4, observed: 3, inSync: false }, versions: { agent: "1.4.0", vpn: "v1.2.3", singbox: "1.11.0" }, bootstrap: { stage: null, status: null } },
+  ],
+  revisions: [{ nodeId: "se-sto-1", revision: 4, reason: "rotate reality short id", createdAt: NOW }],
+  events: [{ id: 1, action: "admin.node_lifecycle_transition", nodeId: "se-sto-1", createdAt: NOW }],
+};
+const ADMIN_FLEET_READINESS_BODY = {
+  flags: [
+    { name: "FEATURE_MULTI_NODE_SCHEDULING", enabled: true, purpose: "Scheduler places devices across nodes" },
+    { name: "FEATURE_AUTO_NODE_HEALTH", enabled: false, purpose: "Probe/silence-driven lifecycle changes" },
+  ],
+  variables: [
+    { name: "HETZNER_API_TOKEN", group: "Fleet provisioning", sensitive: true, required: true, purpose: "Create/delete node VMs", present: true },
+    { name: "FLEET_REALITY_HANDSHAKE_SERVER", group: "Fleet provisioning", sensitive: false, required: true, purpose: "REALITY camouflage handshake target", present: false },
+    { name: "ROUTE_SIGNING_PRIVATE_KEY", group: "Route signing", sensitive: true, required: true, purpose: "Signs /v1/routes directory", present: true },
+  ],
+  provisioningReady: false,
+  missing: ["FLEET_REALITY_HANDSHAKE_SERVER"],
+};
+ADMIN_SETTINGS_BODY.readiness = [
+  { name: "SUPABASE_URL", group: "Core", sensitive: false, required: true, purpose: "Supabase project URL", present: true },
+  ...ADMIN_FLEET_READINESS_BODY.variables,
+  { name: "FEATURE_AUTO_NODE_HEALTH", group: "Fleet automation flags", sensitive: false, required: false, purpose: "Probe/silence-driven lifecycle changes", present: false, enabled: false },
+];
+
 const PAGES = [
   { path: "/account/", label: "account-overview" },
   { path: "/account/subscriptions/", label: "account-subscriptions" },
@@ -148,6 +208,12 @@ const PAGES = [
   { path: "/admin/", label: "admin-overview", admin: true },
   { path: "/admin/subscriptions/", label: "admin-subscriptions", admin: true },
   { path: "/admin/settings/", label: "admin-settings", admin: true },
+  { path: "/admin/nodes/", label: "admin-fleet-nodes", admin: true },
+  { path: "/admin/fleet/locations/", label: "admin-fleet-locations", admin: true },
+  { path: "/admin/fleet/assignments/", label: "admin-fleet-assignments", admin: true },
+  { path: "/admin/fleet/operations/", label: "admin-fleet-operations", admin: true },
+  { path: "/admin/fleet/health/", label: "admin-fleet-health", admin: true },
+  { path: "/admin/fleet/readiness/", label: "admin-fleet-readiness", admin: true },
 ];
 
 function jsonRoute(body) {
@@ -165,6 +231,12 @@ async function setupMocks(page) {
   await page.route("**/api/admin/overview", jsonRoute(ADMIN_OVERVIEW_BODY));
   await page.route("**/api/admin/settings", jsonRoute(ADMIN_SETTINGS_BODY));
   await page.route("**/api/admin/subscriptions**", jsonRoute(ADMIN_SUBSCRIPTIONS_BODY));
+  await page.route("**/api/admin/nodes", jsonRoute(ADMIN_NODES_BODY));
+  await page.route("**/api/admin/fleet/topology", jsonRoute(ADMIN_FLEET_TOPOLOGY_BODY));
+  await page.route("**/api/admin/fleet/assignments**", jsonRoute(ADMIN_FLEET_ASSIGNMENTS_BODY));
+  await page.route("**/api/admin/fleet/operations**", jsonRoute(ADMIN_FLEET_OPERATIONS_BODY));
+  await page.route("**/api/admin/fleet/health", jsonRoute(ADMIN_FLEET_HEALTH_BODY));
+  await page.route("**/api/admin/fleet/readiness", jsonRoute(ADMIN_FLEET_READINESS_BODY));
   await page.route("**/api/account/telegram", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ linked: false }) }));
 }
 

@@ -17,6 +17,7 @@ type Settings = {
     tickSecret: boolean;
   };
   services: { credentialEncryption: boolean; email: boolean; telegram: boolean; siteUrl: string | null };
+  readiness?: { name: string; group: string; sensitive: boolean; required: boolean; purpose: string; present: boolean; enabled?: boolean }[];
 };
 
 function StatusDot({ ok }: { ok: boolean }) {
@@ -120,6 +121,34 @@ export default function AdminSettingsPage() {
               </tbody>
             </table>
           </section>
+
+          {settings.readiness && (
+            <section>
+              <h2 className="mb-1 text-sm font-semibold text-gray-500">Production readiness</h2>
+              <p className="mb-3 text-xs text-gray-500">
+                Presence of each runtime variable. Values are never shown. Full inventory: docs/PRODUCTION_CONFIG.md.
+              </p>
+              {[...new Set(settings.readiness.map((v) => v.group))].map((group) => (
+                <div key={group} className="mb-6">
+                  <h3 className="mb-1 font-mono text-xs uppercase text-gray-500">{group}</h3>
+                  <table className="table">
+                    <tbody>
+                      {settings.readiness!.filter((v) => v.group === group).map((v) => (
+                        <tr key={v.name}>
+                          <td className="break-all font-mono text-xs">{v.name}</td>
+                          <td className="w-32">
+                            <span className={`dot ${v.present ? "dot--on" : v.required ? "dot--warn" : ""}`} />
+                            {v.enabled !== undefined ? (v.enabled ? "On" : "Off") : v.present ? "Set" : v.required ? "Missing" : "Not set"}
+                          </td>
+                          <td className="text-gray-500">{v.required ? "Required" : "Optional"}{v.sensitive ? " · secret" : ""} · {v.purpose}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ))}
+            </section>
+          )}
         </div>
       )}
     </AdminShell>
