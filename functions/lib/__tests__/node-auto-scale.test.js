@@ -124,6 +124,7 @@ const baseEnv = {
   FEATURE_AUTO_NODE_SCALE: "true",
   FLEET_AUTO_SCALE_REGION: "fsn1",
   FLEET_SINGBOX_VPN_VERSION: "v1.1.0",
+  FLEET_REALITY_HANDSHAKE_SERVER: "www.cloudflare.com",
 };
 
 const FULL_NODE = {
@@ -193,6 +194,14 @@ describe("autoScaleFullLocations", () => {
   it("skips a template node with no provider on record", async () => {
     const db = makeFakeSupabase({ nodes: [{ ...FULL_NODE, provider: null }] });
     const started = await autoScaleFullLocations(db, baseEnv);
+    expect(started).toEqual([]);
+    expect(startCreateNodeOperation).not.toHaveBeenCalled();
+  });
+
+  it("skips a group when FLEET_REALITY_HANDSHAKE_SERVER is not configured", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const db = makeFakeSupabase({ nodes: [FULL_NODE] });
+    const started = await autoScaleFullLocations(db, { ...baseEnv, FLEET_REALITY_HANDSHAKE_SERVER: undefined });
     expect(started).toEqual([]);
     expect(startCreateNodeOperation).not.toHaveBeenCalled();
   });

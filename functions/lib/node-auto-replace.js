@@ -133,6 +133,7 @@ export async function autoReplaceFailedNodes(supabase, env) {
     try {
       getProviderAdapter(oldNode.provider, env);
       if (!env.FLEET_SINGBOX_VPN_VERSION) throw new Error("FLEET_SINGBOX_VPN_VERSION is not configured");
+      if (!env.FLEET_REALITY_HANDSHAKE_SERVER) throw new Error("FLEET_REALITY_HANDSHAKE_SERVER is not configured");
       getDnsAdapter(env);
       hostname = nodeHostname(nextReplacementNodeId(oldNode.node_id), env);
     } catch (err) {

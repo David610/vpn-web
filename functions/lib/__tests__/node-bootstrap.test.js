@@ -8,6 +8,7 @@ const valid = {
   hostname: "de-fsn-001.nodes.example.test",
   enrollmentToken: "0123456789abcdef".repeat(4),
   singboxVpnVersion: "v1.1.0-rc.2",
+  realityHandshakeServer: "www.cloudflare.com",
 };
 
 describe("buildNodeBootstrapUserData", () => {
@@ -19,6 +20,18 @@ describe("buildNodeBootstrapUserData", () => {
     expect(ud).toContain("[systemctl, enable, arcana-node-bootstrap.service]");
     expect(ud).toContain("NODE_ROLE=exit");
     expect(ud).toContain(`ENROLLMENT_TOKEN=${valid.enrollmentToken}`);
+  });
+
+  // Real gap this closes: install.sh requires REALITY_HANDSHAKE_SERVER (or
+  // --reality-handshake-server) and refuses to guess a default -- it dies
+  // with a fatal error under --non-interactive if neither is supplied.
+  // Every automated fleet node create/replace call goes through this
+  // function with --non-interactive, so without this the INSTALL stage
+  // would fail on every single node.
+  it("passes REALITY_HANDSHAKE_SERVER through the env file and to install.sh's --reality-handshake-server flag", () => {
+    const ud = buildNodeBootstrapUserData(valid);
+    expect(ud).toContain(`REALITY_HANDSHAKE_SERVER=${valid.realityHandshakeServer}`);
+    expect(BOOTSTRAP_SCRIPT).toContain('--reality-handshake-server "$REALITY_HANDSHAKE_SERVER"');
   });
 
   it("puts the token only in the 0600 env file -- never in a URL or a command line", () => {
@@ -55,7 +68,14 @@ describe("buildNodeBootstrapUserData", () => {
     ["singboxVpnVersion", "main"],
     ["singboxVpnVersion", "v1.0.0;curl evil"],
     ["singboxVpnRepo", "evil repo"],
+    ["realityHandshakeServer", "$(id).example.test"],
+    ["realityHandshakeServer", "decoy.example.test;id"],
   ])("rejects an unsafe %s (%s) instead of templating it into a root shell script", (field, value) => {
     expect(() => buildNodeBootstrapUserData({ ...valid, [field]: value })).toThrow(/node bootstrap/);
+  });
+
+  it("rejects a missing realityHandshakeServer rather than letting install.sh die on the VPS later", () => {
+    const { realityHandshakeServer, ...withoutIt } = valid;
+    expect(() => buildNodeBootstrapUserData(withoutIt)).toThrow(/node bootstrap/);
   });
 });

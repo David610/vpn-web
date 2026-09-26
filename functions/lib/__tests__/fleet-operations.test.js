@@ -13,6 +13,7 @@ const HOSTNAME = "de-fsn-001.nodes.example.test";
 const env = {
   SITE_URL: "https://arcana.example.test",
   FLEET_SINGBOX_VPN_VERSION: "v1.1.0-rc.2",
+  FLEET_REALITY_HANDSHAKE_SERVER: "www.cloudflare.com",
 };
 
 function seed({ deadlineAt } = {}) {

@@ -87,6 +87,7 @@ export async function onRequestPost({ env, request, params }) {
       getProviderAdapter(provider, env);
       hostname = nodeHostname(newNodeId, env);
       if (!env.FLEET_SINGBOX_VPN_VERSION) throw new Error("FLEET_SINGBOX_VPN_VERSION is not configured");
+      if (!env.FLEET_REALITY_HANDSHAKE_SERVER) throw new Error("FLEET_REALITY_HANDSHAKE_SERVER is not configured");
       getDnsAdapter(env);
     } catch (err) {
       console.error("admin/nodes/:id/replace: fleet provisioning not configured:", err.message);

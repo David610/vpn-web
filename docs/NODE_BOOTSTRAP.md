@@ -57,7 +57,10 @@ all-powerful). It is single-use, bound to one key hash, and expires in 1 h.
 
 `HETZNER_API_TOKEN`, `CLOUDFLARE_DNS_API_TOKEN` (Zone.DNS:Edit on one zone),
 `CLOUDFLARE_DNS_ZONE_ID`, `FLEET_NODE_DOMAIN`, `FLEET_SINGBOX_VPN_VERSION`,
-`FLEET_TICK_SECRET`; optional `FLEET_HETZNER_SERVER_TYPE` (default `cx23`),
+`FLEET_TICK_SECRET`, `FLEET_REALITY_HANDSHAKE_SERVER` (a TLS 1.3 hostname
+you control or have deliberately selected as the REALITY decoy for every
+node in the fleet — `install.sh` refuses to guess one and dies under
+`--non-interactive` without it); optional `FLEET_HETZNER_SERVER_TYPE` (default `cx23`),
 `FLEET_HETZNER_IMAGE` (default `alma-9`). Schedule the reconciler once per
 project with `scripts/setup-fleet-cron.mjs`.
 

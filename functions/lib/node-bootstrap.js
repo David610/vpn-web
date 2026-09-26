@@ -220,7 +220,8 @@ stage_install() {
   curl -fsSL --connect-timeout 10 --max-time 120 --retry 5 --retry-connrefused -o "$installer" \
     "https://raw.githubusercontent.com/$SINGBOX_VPN_REPO/$SINGBOX_VPN_VERSION/install.sh"
   SINGBOX_VPN_VERSION="$SINGBOX_VPN_VERSION" SINGBOX_VPN_REPO="$SINGBOX_VPN_REPO" \
-    bash "$installer" --non-interactive --domain "$PUBLIC_HOST" --role "$NODE_ROLE" --node-id "$NODE_ID"
+    bash "$installer" --non-interactive --domain "$PUBLIC_HOST" --role "$NODE_ROLE" --node-id "$NODE_ID" \
+    --reality-handshake-server "$REALITY_HANDSHAKE_SERVER"
   [ -x /usr/local/bin/vpn-provisioning-agent ] || { log "release $SINGBOX_VPN_VERSION does not ship vpn-provisioning-agent"; return 1; }
   touch "$STATE_DIR/install.ok"
   report INSTALL OK "singbox-vpn $SINGBOX_VPN_VERSION installed"
@@ -308,7 +309,7 @@ WantedBy=multi-user.target`;
 /**
  * @param {{ workerUrl: string, nodeId: string, role: "EXIT"|"RELAY",
  *   hostname: string, enrollmentToken: string, singboxVpnVersion: string,
- *   singboxVpnRepo?: string }} params
+ *   singboxVpnRepo?: string, realityHandshakeServer: string }} params
  * @returns {string} cloud-init user_data
  */
 export function buildNodeBootstrapUserData(params) {
@@ -320,6 +321,11 @@ export function buildNodeBootstrapUserData(params) {
   assertMatch("singboxVpnVersion", params.singboxVpnVersion, VERSION);
   const repo = params.singboxVpnRepo ?? "David610/singbox-vpn";
   assertMatch("singboxVpnRepo", repo, REPO);
+  // install.sh requires REALITY_HANDSHAKE_SERVER (or --reality-handshake-server)
+  // and deliberately refuses to guess a default -- under --non-interactive
+  // (every automated fleet call) it dies instead of prompting. Reusing the
+  // hostname pattern matches install.sh's own preflight_validate_hostname.
+  assertMatch("realityHandshakeServer", params.realityHandshakeServer, HOSTNAME);
 
   const envFile = [
     `WORKER_URL=${workerUrl}`,
@@ -329,6 +335,7 @@ export function buildNodeBootstrapUserData(params) {
     `SINGBOX_VPN_VERSION=${params.singboxVpnVersion}`,
     `SINGBOX_VPN_REPO=${repo}`,
     `ENROLLMENT_TOKEN=${params.enrollmentToken}`,
+    `REALITY_HANDSHAKE_SERVER=${params.realityHandshakeServer}`,
   ].join("\n");
 
   const script = BOOTSTRAP_SCRIPT.replace("@@AGENT_UNIT@@", AGENT_UNIT);

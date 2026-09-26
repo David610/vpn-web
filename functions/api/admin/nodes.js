@@ -271,6 +271,7 @@ async function createProviderNode({ env, supabaseAdmin, admin, nodeId, role, loc
     getProviderAdapter(provider, env);
     hostname = nodeHostname(nodeId, env);
     if (!env.FLEET_SINGBOX_VPN_VERSION) throw new Error("FLEET_SINGBOX_VPN_VERSION is not configured");
+    if (!env.FLEET_REALITY_HANDSHAKE_SERVER) throw new Error("FLEET_REALITY_HANDSHAKE_SERVER is not configured");
     getDnsAdapter(env);
   } catch (err) {
     console.error("admin/nodes POST: fleet provisioning not configured:", err.message);
