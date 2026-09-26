@@ -63,9 +63,15 @@ export function sanitizeProtocolReport(raw) {
   const certDays = Number.isSafeInteger(raw.hysteria2_cert_days_remaining)
     ? Math.max(-3650, Math.min(3650, raw.hysteria2_cert_days_remaining))
     : null;
+  // An agent running with tls_insecure_for_tests skips Hysteria2
+  // certificate verification; its Hysteria2 verdicts prove nothing about
+  // what real clients see, so they are dropped (and the setting is
+  // surfaced loudly rather than silently trusted).
+  const tlsInsecure = raw.tls_insecure_for_tests === true;
   const results = [];
   for (const r of raw.results.slice(0, MAX_RESULTS_PER_REPORT)) {
     if (!r || typeof r !== "object") continue;
+    if (tlsInsecure && r.protocol === "hysteria2") continue;
     if (typeof r.target_node_id !== "string" || !NODE_ID_RE.test(r.target_node_id)) continue;
     if (!VANTAGES.includes(r.vantage) || !PROTOCOLS.includes(r.protocol)) continue;
     if (typeof r.ok !== "boolean") continue;
@@ -91,7 +97,7 @@ export function sanitizeProtocolReport(raw) {
       error: ERROR_CLASSES.has(r.error) ? r.error : null,
     });
   }
-  return { certDays, results };
+  return { certDays, results, tlsInsecure };
 }
 
 /**

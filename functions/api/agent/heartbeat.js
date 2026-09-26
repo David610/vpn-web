@@ -86,6 +86,9 @@ export async function onRequestPost({ env, request }) {
   // report must not cost the heartbeat.
   const protocolReport = sanitizeProtocolReport(body.protocol_probe);
   if (protocolReport) {
+    if (protocolReport.tlsInsecure) {
+      console.warn(`agent/heartbeat: node ${nodeId} runs protocol probes with tls_insecure_for_tests; hysteria2 results ignored`);
+    }
     if (protocolReport.certDays !== null) update.hysteria2_cert_days = protocolReport.certDays;
     try {
       await applyProtocolReport({ supabase: supabaseAdmin, reporterNodeId: nodeId, report: protocolReport, autoHealth });

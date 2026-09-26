@@ -44,6 +44,11 @@ describe("sanitizeProtocolReport", () => {
     expect(sanitizeProtocolReport(undefined)).toBeNull();
     expect(sanitizeProtocolReport({ results: "x" })).toBeNull();
   });
+  it("drops hysteria2 verdicts from an agent running tls_insecure_for_tests", () => {
+    const out = sanitizeProtocolReport({ tls_insecure_for_tests: true, results: [res(), res({ protocol: "hysteria2" })] });
+    expect(out.tlsInsecure).toBe(true);
+    expect(out.results.map((r) => r.protocol)).toEqual(["reality"]);
+  });
   it("caps the number of results", () => {
     const r = sanitizeProtocolReport({ results: Array.from({ length: 100 }, () => res()) });
     expect(r.results.length).toBe(32);
