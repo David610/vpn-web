@@ -1,31 +1,39 @@
-const COLORS: Record<string, string> = {
-  active: "bg-green-100 text-green-800",
-  online: "bg-green-100 text-green-800",
-  done: "bg-green-100 text-green-800",
-  past_due: "bg-yellow-100 text-yellow-800",
-  degraded: "bg-yellow-100 text-yellow-800",
-  pending: "bg-yellow-100 text-yellow-800",
-  claimed: "bg-neutral-100 text-neutral-800 ring-1 ring-inset ring-neutral-300",
-  canceled: "bg-gray-100 text-gray-600",
-  offline: "bg-red-100 text-red-800",
-  failed: "bg-red-100 text-red-800",
-  revoked: "bg-red-100 text-red-800",
+// Monochrome by design (black/white/gray visual language): state is carried
+// by weight, outline and fill, never hue. Only the "needs attention now"
+// states get the single dark treatment.
+const SOLID_DARK = "bg-gray-900 text-white font-semibold";
+const FILLED = "bg-gray-900/5 text-gray-900 ring-1 ring-inset ring-gray-900 font-semibold";
+const OUTLINE = "bg-white text-gray-800 ring-1 ring-inset ring-gray-400";
+const DASHED = "bg-white text-gray-700 outline-dashed outline-1 -outline-offset-1 outline-gray-500";
+const MUTED = "bg-gray-100 text-gray-500";
 
-  // Fleet node lifecycle states (spec §7) — distinct key space from the
-  // heartbeat-derived connectivity statuses above, uppercase to match the
-  // DB's lifecycle_state values verbatim (no case conversion needed).
-  READY: "bg-green-100 text-green-800",
-  WARMING_UP: "bg-neutral-100 text-neutral-800 ring-1 ring-inset ring-neutral-300",
-  PROVISIONING: "bg-neutral-100 text-neutral-800 ring-1 ring-inset ring-neutral-300",
-  DEGRADED: "bg-yellow-100 text-yellow-800",
-  DRAINING: "bg-yellow-100 text-yellow-800",
-  MAINTENANCE: "bg-gray-100 text-gray-600",
-  FAILED: "bg-red-100 text-red-800",
-  QUARANTINED: "bg-red-100 text-red-800",
-  RETIRED: "bg-gray-100 text-gray-600",
+const STYLES: Record<string, string> = {
+  active: FILLED,
+  online: FILLED,
+  done: FILLED,
+  past_due: DASHED,
+  degraded: DASHED,
+  pending: DASHED,
+  claimed: OUTLINE,
+  canceled: MUTED,
+  offline: SOLID_DARK,
+  failed: SOLID_DARK,
+  revoked: SOLID_DARK,
+
+  // Fleet node lifecycle states (spec §7), uppercase as in lifecycle_state.
+  READY: FILLED,
+  CANARY: OUTLINE,
+  WARMING_UP: OUTLINE,
+  PROVISIONING: OUTLINE,
+  DEGRADED: DASHED,
+  DRAINING: DASHED,
+  MAINTENANCE: MUTED,
+  FAILED: SOLID_DARK,
+  QUARANTINED: SOLID_DARK,
+  RETIRED: MUTED,
 };
 
 export function StatusBadge({ status }: { status: string }) {
-  const color = COLORS[status] ?? "bg-gray-100 text-gray-600";
-  return <span className={`rounded px-2 py-0.5 text-xs font-medium ${color}`}>{status}</span>;
+  const style = STYLES[status] ?? MUTED;
+  return <span className={`inline-block whitespace-nowrap rounded px-2 py-0.5 text-xs font-medium ${style}`}>{status}</span>;
 }
