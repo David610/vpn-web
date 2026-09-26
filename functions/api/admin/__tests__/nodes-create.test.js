@@ -149,6 +149,7 @@ describe("POST /api/admin/nodes", () => {
       ...env,
       FLEET_NODE_DOMAIN: "nodes.example.test",
       FLEET_SINGBOX_VPN_VERSION: "v1.1.0-rc.2",
+      FLEET_REALITY_HANDSHAKE_SERVER: "www.cloudflare.com",
     };
 
     it("registers the node + operation, advances it inline, and returns 202 WITHOUT any enrollment token", async () => {
@@ -214,6 +215,17 @@ describe("POST /api/admin/nodes", () => {
       vi.spyOn(console, "error").mockImplementation(() => {});
       const res = await onRequestPost({
         env, // no FLEET_NODE_DOMAIN / FLEET_SINGBOX_VPN_VERSION
+        request: makeRequest({ nodeId: "de-fsn-001", provider: "hetzner", region: "fsn1" }),
+      });
+      expect(res.status).toBe(400);
+      expect(startCreateNodeOperation).not.toHaveBeenCalled();
+    });
+
+    it("refuses (400) when FLEET_REALITY_HANDSHAKE_SERVER is not configured, before registering anything", async () => {
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      const { FLEET_REALITY_HANDSHAKE_SERVER, ...envWithoutIt } = fleetEnv;
+      const res = await onRequestPost({
+        env: envWithoutIt,
         request: makeRequest({ nodeId: "de-fsn-001", provider: "hetzner", region: "fsn1" }),
       });
       expect(res.status).toBe(400);

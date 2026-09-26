@@ -152,6 +152,7 @@ export async function autoScaleFullLocations(supabase, env) {
     try {
       getProviderAdapter(templateNode.provider, env);
       if (!env.FLEET_SINGBOX_VPN_VERSION) throw new Error("FLEET_SINGBOX_VPN_VERSION is not configured");
+      if (!env.FLEET_REALITY_HANDSHAKE_SERVER) throw new Error("FLEET_REALITY_HANDSHAKE_SERVER is not configured");
       getDnsAdapter(env);
       hostname = nodeHostname(newNodeId, env);
     } catch (err) {

@@ -46,6 +46,7 @@ const env = {
   SUPABASE_SERVICE_ROLE_KEY: "key",
   FLEET_SINGBOX_VPN_VERSION: "v1.1.0",
   FLEET_NODE_DOMAIN: "nodes.example.test",
+  FLEET_REALITY_HANDSHAKE_SERVER: "www.cloudflare.com",
   SITE_URL: "https://arcana.example.test",
 };
 
@@ -86,6 +87,18 @@ describe("POST /api/admin/nodes/:id/replace", () => {
       params: { id: "de-fsn-001" },
     });
     expect(res.status).toBe(400);
+  });
+
+  it("returns 400 when FLEET_REALITY_HANDSHAKE_SERVER is not configured", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const { FLEET_REALITY_HANDSHAKE_SERVER, ...envWithoutIt } = env;
+    const res = await onRequestPost({
+      env: envWithoutIt,
+      request: makeRequest({ newNodeId: "de-fsn-002", region: "fsn1" }),
+      params: { id: "de-fsn-001" },
+    });
+    expect(res.status).toBe(400);
+    expect(startReplaceNodeOperation).not.toHaveBeenCalled();
   });
 
   it("returns 404 when the old node does not exist", async () => {

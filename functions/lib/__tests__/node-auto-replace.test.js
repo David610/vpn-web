@@ -26,6 +26,7 @@ const { autoReplaceFailedNodes } = await import("../node-auto-replace.js");
 const baseEnv = {
   FLEET_AUTO_REPLACE_REGION: "fsn1",
   FLEET_SINGBOX_VPN_VERSION: "v1.1.0",
+  FLEET_REALITY_HANDSHAKE_SERVER: "www.cloudflare.com",
   AUTO_REPLACE_AFTER_FAILED_MS: String(60 * 60 * 1000),
 };
 
@@ -83,6 +84,14 @@ describe("autoReplaceFailedNodes", () => {
     const noProvider = { ...OLD, provider: null };
     const db = makeFakeSupabase({ nodes: [noProvider], fleet_operations: [] });
     const started = await autoReplaceFailedNodes(db, baseEnv);
+    expect(started).toEqual([]);
+    expect(startReplaceNodeOperation).not.toHaveBeenCalled();
+  });
+
+  it("skips a node when FLEET_REALITY_HANDSHAKE_SERVER is not configured", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const db = makeFakeSupabase({ nodes: [OLD], fleet_operations: [] });
+    const started = await autoReplaceFailedNodes(db, { ...baseEnv, FLEET_REALITY_HANDSHAKE_SERVER: undefined });
     expect(started).toEqual([]);
     expect(startReplaceNodeOperation).not.toHaveBeenCalled();
   });

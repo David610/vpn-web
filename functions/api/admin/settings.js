@@ -43,6 +43,7 @@ export async function onRequestGet({ env, request }) {
       dnsCloudflare: set(env.CLOUDFLARE_DNS_API_TOKEN) && set(env.CLOUDFLARE_DNS_ZONE_ID),
       nodeDomain: set(env.FLEET_NODE_DOMAIN) ? env.FLEET_NODE_DOMAIN : null,
       singboxVpnVersion: set(env.FLEET_SINGBOX_VPN_VERSION) ? env.FLEET_SINGBOX_VPN_VERSION : null,
+      realityHandshakeServer: set(env.FLEET_REALITY_HANDSHAKE_SERVER) ? env.FLEET_REALITY_HANDSHAKE_SERVER : null,
       tickSecret: set(env.FLEET_TICK_SECRET),
     },
     services: {

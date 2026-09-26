@@ -127,6 +127,7 @@ const CREATE_NODE_HANDLERS = {
       enrollmentToken,
       singboxVpnVersion: env.FLEET_SINGBOX_VPN_VERSION,
       singboxVpnRepo: env.FLEET_SINGBOX_VPN_REPO,
+      realityHandshakeServer: env.FLEET_REALITY_HANDSHAKE_SERVER,
     });
     const instance = await adapter.createInstance({
       nodeId: node.node_id,
