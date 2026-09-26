@@ -1,7 +1,8 @@
 /**
- * Account lookups. Billing hangs off customer_accounts, but VPN credentials
- * stay per-user: every member gets their own VLESS UUID / Hysteria2
- * password. So almost every request has to walk
+ * Account lookups. One person per account; billing hangs off
+ * customer_accounts (which may hold several subscriptions, each covering 3
+ * devices plus +3-device packs). "Seat"/"member" names below are legacy.
+ * VPN credentials are per-user (VLESS UUID / Hysteria2 password). So almost every request has to walk
  * user -> account_members -> customer_accounts before it can answer a
  * question about entitlement, and almost every Stripe event has to walk the
  * other way, from an account out to each member's VPN account.

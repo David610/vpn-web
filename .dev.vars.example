@@ -14,9 +14,9 @@ STRIPE_API_KEY=sk_test_placeholder_not_a_real_key
 # customer.subscription.updated, customer.subscription.deleted
 STRIPE_SIGNING_SECRET=whsec_test_local_secret_for_synthetic_events_only
 STRIPE_PRICE_ID=price_placeholder_not_real
-# Licensed recurring price for seats beyond the 3 included in the base
-# price. Without it, /api/account/seats returns 503 and every account is
-# capped at 3 seats.
+# +3-device pack price (legacy "seat" name). Each subscription includes 3
+# devices; packs add 3 more to that subscription. Without it, pack purchase
+# returns 503 and every subscription is capped at 3 devices.
 STRIPE_SEAT_PRICE_ID=price_seat_xxx
 SITE_URL=http://127.0.0.1:8788
 
@@ -46,3 +46,37 @@ FLEET_SINGBOX_VPN_VERSION=v1.1.0-rc.2
 # Shared secret the Supabase pg_cron reconciler presents to /api/internal/fleet-tick
 # (openssl rand -hex 32). scripts/setup-fleet-cron.mjs stores it in Supabase Vault.
 FLEET_TICK_SECRET=<64 hex chars>
+# Optional overrides for the Hetzner adapter.
+FLEET_HETZNER_SERVER_TYPE=
+FLEET_HETZNER_IMAGE=
+# DNS adapter (default cloudflare). Production zone: sustechnologies.eu.
+FLEET_DNS_PROVIDER=cloudflare
+# Zone name for reference (not read by code; CLOUDFLARE_DNS_ZONE_ID is).
+FLEET_DNS_ZONE=sustechnologies.eu
+# Optional override of the singbox-vpn release repository.
+FLEET_SINGBOX_VPN_REPO=
+# REALITY camouflage handshake target for new nodes (required for provider-backed create/replace).
+FLEET_REALITY_HANDSHAKE_SERVER=www.example.com
+
+# GoTrue calls (optional; falls back to the service role key).
+SUPABASE_ANON_KEY=<anon key from `npx supabase start`>
+
+# Signed route directory (/v1/routes).
+ROUTE_SIGNING_PRIVATE_KEY=<hex private key — real value only in production>
+ROUTE_SIGNING_KEY_ID=local-dev-key
+
+# Fleet automation feature flags (all default off; "true" enables).
+FEATURE_MULTI_NODE_SCHEDULING=false
+FEATURE_AUTO_NODE_HEALTH=false
+FEATURE_AUTO_NODE_REPLACE=false
+FEATURE_AUTO_NODE_REPLACE_CANARY=false
+FEATURE_AUTO_NODE_SCALE=false
+AUTO_REPLACE_AFTER_FAILED_MS=
+FLEET_AUTO_REPLACE_REGION=
+FLEET_AUTO_SCALE_REGION=
+
+# Web build (Next.js). Put these in .env.local for `next dev`/`next build`;
+# they are inlined into the public bundle, so never a secret here.
+# NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321
+# NEXT_PUBLIC_SUPABASE_ANON_KEY=<anon key>
+# NEXT_PUBLIC_SITE_URL=http://127.0.0.1:3000

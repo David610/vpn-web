@@ -55,7 +55,9 @@ const ROW: React.CSSProperties = {
 };
 
 /**
- * Seat management for the signed-in user's plan.
+ * LEGACY: shared-seat management from the old multi-member model. The
+ * current model is one person per account, several subscriptions, 3
+ * devices each plus +3-device packs, devices movable between them.
  *
  * Renders nothing until the account loads and nothing at all for an account
  * with no subscription — there are no seats to manage before there is
