@@ -29,13 +29,16 @@ const ELIGIBLE_LIFECYCLE_STATES = new Set(["READY", "CANARY"]);
 
 // tamara-next's VpnHop requires server_address to be an IP literal for any
 // non-chained hop (no plaintext DNS bootstrap before the tunnel exists).
-const isEligible = (node) =>
+// `heldNodeIds`: nodes the requesting device already occupies a slot on.
+// Its own slot is already counted in configured_users, so a full node must
+// not reject the device that is part of the count.
+const isEligible = (node, heldNodeIds) =>
   ELIGIBLE_LIFECYCLE_STATES.has(node.lifecycleState) &&
   typeof node.transport === "string" &&
   node.transport.length > 0 &&
   typeof node.ipAddress === "string" &&
   node.ipAddress.length > 0 &&
-  isUnderCapacity(node);
+  (isUnderCapacity(node) || heldNodeIds.has(node.nodeId));
 
 export function toPublicHop(node) {
   const hop = {
@@ -102,10 +105,19 @@ const priorityAt = (index) => 100 - index * 10;
 /**
  * Pure: no I/O. Returns internal candidates carrying hopNodeIds; callers
  * that publish must strip them (see publicRoute).
+ *
+ * `exhaustive: true` (authorize only) enumerates every eligible exit and
+ * every distinct relay/exit pair instead of the top-N published slice. Ids
+ * are content-derived and do not depend on rank, so a route that was
+ * published stays authorizable while its exact hops remain eligible, even
+ * if load shifts reorder the published top-N in between.
  */
-export function buildRouteCandidates({ nodes, locations, allowedPaths }) {
+export function buildRouteCandidates(
+  { nodes, locations, allowedPaths },
+  { exhaustive = false, heldNodeIds = new Set() } = {}
+) {
   const locationById = new Map(locations.map((loc) => [loc.id, loc]));
-  const eligible = nodes.filter(isEligible);
+  const eligible = nodes.filter((node) => isEligible(node, heldNodeIds));
   const pool = (locationId, role) =>
     diverseOrder(eligible.filter((node) => node.locationId === locationId && node.role === role));
 
@@ -116,7 +128,8 @@ export function buildRouteCandidates({ nodes, locations, allowedPaths }) {
   const directExits = new Set(allowedPaths.filter((p) => !p.entryLocationId).map((p) => p.exitLocationId));
   for (const location of locations) {
     if (!directExits.has(location.id)) continue;
-    const exits = pool(location.id, "EXIT").slice(0, MAX_FAST_CANDIDATES_PER_LOCATION);
+    const allExits = pool(location.id, "EXIT");
+    const exits = exhaustive ? allExits : allExits.slice(0, MAX_FAST_CANDIDATES_PER_LOCATION);
     exits.forEach((exitNode, index) => {
       const candidate = {
         id: routeIdFor({ mode: "fast", exitLocationId: location.id, nodes: [exitNode] }),
@@ -140,12 +153,16 @@ export function buildRouteCandidates({ nodes, locations, allowedPaths }) {
     const relays = pool(path.entryLocationId, "RELAY");
     const exits = pool(path.exitLocationId, "EXIT");
     if (relays.length === 0 || exits.length === 0) continue;
-    const count = Math.min(MAX_PRIVACY_CANDIDATES_PER_PATH, Math.max(relays.length, exits.length));
+    const pairs = [];
+    if (exhaustive) {
+      for (const r of relays) for (const e of exits) pairs.push([r, e]);
+    } else {
+      const count = Math.min(MAX_PRIVACY_CANDIDATES_PER_PATH, Math.max(relays.length, exits.length));
+      for (let k = 0; k < count; k += 1) pairs.push([relays[k % relays.length], exits[k % exits.length]]);
+    }
     const seenPairs = new Set();
     let index = 0;
-    for (let k = 0; k < count; k += 1) {
-      const relayNode = relays[k % relays.length];
-      const exitNode = exits[k % exits.length];
+    for (const [relayNode, exitNode] of pairs) {
       // A relay and exit must be distinct machines, or "two-hop" is a lie.
       if (relayNode.nodeId === exitNode.nodeId) continue;
       const pairKey = `${relayNode.nodeId}>${exitNode.nodeId}`;

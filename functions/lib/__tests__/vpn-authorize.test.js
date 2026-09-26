@@ -178,6 +178,40 @@ describe("authorizeRoute: exact physical-hop binding", () => {
     expect(result).toMatchObject({ ok: false, status: 409, code: "route_stale" });
   });
 
+  it("a published route stays authorizable after load shifts push it out of the published top-N", async () => {
+    const db = world({
+      nodes: ["a", "b", "c", "d"].map((x, i) => node(`de-${x}`, DE, "EXIT", { configured_users: i })),
+      paths: [directPath(DE)],
+      identities: ["a", "b", "c", "d"].map((x) => ({ node_id: `de-${x}`, vpn_user_id: `u-${x}` })),
+    });
+    const routes = await directory(db);
+    const third = routes.find((r) => r.priority === 80);
+    expect(third).toBeDefined();
+    // Load shift: de-d becomes least loaded; de-c is no longer in the published top 3.
+    db._tables.nodes.find((n) => n.node_id === "de-d").configured_users = 0;
+    db._tables.nodes.find((n) => n.node_id === "de-c").configured_users = 9;
+    const now = await directory(db);
+    expect(now.map((r) => r.id)).not.toContain(third.id);
+    const result = await authorize(db, third.id);
+    expect(result.ok).toBe(true);
+    expect(result.credentialEnvelope.hops).toEqual([{ uuid: "u-c" }]);
+  });
+
+  it("a device already assigned to a now-full node can still authorize that exact node", async () => {
+    const db = world({
+      nodes: [node("de-a", DE, "EXIT", { configured_users: 1, max_sessions: 2 })],
+      paths: [directPath(DE)],
+      assignments: [{ device_id: DEVICE.id, node_id: "de-a", hop: "EXIT" }],
+      identities: [{ node_id: "de-a", vpn_user_id: "ua" }],
+    });
+    const [route] = await directory(db);
+    db._tables.nodes[0].configured_users = 2;
+    expect((await authorize(db, route.id)).ok).toBe(true);
+    // A device that holds no slot there is rejected with route_stale.
+    const other = await authorizeRoute(db, {}, { device: { ...DEVICE, id: "dev-2" }, entitlement: PAID, routeId: route.id });
+    expect(other).toMatchObject({ ok: false, status: 409, code: "route_stale" });
+  });
+
   it("fails closed when the allowed path is disabled after the directory was fetched", async () => {
     const db = world({ nodes: [node("de-a", DE, "EXIT")], paths: [directPath(DE)], identities: [{ node_id: "de-a", vpn_user_id: "u" }] });
     const [route] = await directory(db);

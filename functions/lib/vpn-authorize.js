@@ -112,8 +112,13 @@ export async function authorizeRoute(supabaseAdmin, env, { device, entitlement, 
   if (!id || id.length > 160) return badRequest("route_id is required.");
   if (!ROUTE_ID_RE.test(id)) return stale();
 
-  const inputs = await loadRouteInputs(supabaseAdmin);
-  const candidate = buildRouteCandidates(inputs).find((route) => route.id === id);
+  const [inputs, { data: held, error: heldError }] = await Promise.all([
+    loadRouteInputs(supabaseAdmin),
+    supabaseAdmin.from("device_node_assignments").select("node_id").eq("device_id", device.id),
+  ]);
+  if (heldError) throw new Error(`device_node_assignments lookup failed: ${heldError.message}`);
+  const heldNodeIds = new Set((held ?? []).map((row) => row.node_id));
+  const candidate = buildRouteCandidates(inputs, { exhaustive: true, heldNodeIds }).find((route) => route.id === id);
   if (!candidate) return stale();
 
   await recordAssignment(supabaseAdmin, device.id, candidate);
