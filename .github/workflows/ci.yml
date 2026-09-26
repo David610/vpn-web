@@ -44,6 +44,39 @@ jobs:
           NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
           NEXT_PUBLIC_SUPABASE_ANON_KEY: placeholder-anon-key
 
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Serve static export for the a11y/visual check
+        # trailingSlash: true in next.config makes every route an
+        # index.html under its own directory (e.g. out/account/index.html),
+        # which Python's stdlib server already resolves correctly for a
+        # directory request -- no extra static-server dependency needed.
+        run: |
+          python3 -m http.server 4173 --directory out &
+          echo $! > /tmp/a11y-server.pid
+          for attempt in $(seq 1 20); do
+            curl -sf http://127.0.0.1:4173/account/ >/dev/null && exit 0
+            sleep 0.5
+          done
+          echo "static server never became ready" >&2
+          exit 1
+
+      - name: Accessibility/visual check (Stage C6)
+        run: node scripts/a11y-visual-check.mjs
+
+      - name: Stop static server
+        if: always()
+        run: kill "$(cat /tmp/a11y-server.pid)" 2>/dev/null || true
+
+      - name: Upload a11y screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: a11y-visual-check-screenshots
+          path: scratch/c6-screens
+          retention-days: 14
+
 
   db-migrations:
     name: Supabase migration smoke
