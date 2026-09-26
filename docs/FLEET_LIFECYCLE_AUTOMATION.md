@@ -119,18 +119,16 @@ window before promoting it.
     like the non-canary path.
   - Otherwise waits one poll cycle (`DRAIN_POLL_INTERVAL_S`, 300s).
 
-**Known limitation** (not fixed, documented in the Phase 12b spec): a
-canary that aborts to FAILED is indistinguishable, from Phase 8's
-automated-recovery point of view, from a node that FAILED via silence. If
-`FEATURE_AUTO_NODE_HEALTH` is also enabled, Phase 8's `FAILED -> READY`
-auto-recovery (one passing probe, or any heartbeat for a probe-incapable
-node) could promote a flapping, just-aborted canary straight back to
-READY with no session cap and no operation watching it — defeating the
-abort. **Do not enable `FEATURE_AUTO_NODE_REPLACE_CANARY` /
-`canary: true` together with `FEATURE_AUTO_NODE_HEALTH`** until a
-`failed_reason` column (or equivalent, set only by the path that actually
-caused a FAILED transition and consulted before auto-recovering) exists.
-Deploying only one of the two flags does not carry this risk.
+**Fixed** (previously an open known limitation in the Phase 12b spec): a
+`nodes.failed_reason` column now records why a node entered FAILED
+(`SILENCE`, `CANARY_ABORT`, `BOOT_TIMEOUT`, or `ADMIN`). Phase 8's
+`FAILED -> READY` auto-recovery in `evaluateProbeResult`
+(`node-health-transition.js`) only fires when `failed_reason` is
+`SILENCE` — the one case it was designed to reverse from a single
+passing probe or bare heartbeat. A canary abort, a boot timeout, or an
+admin-forced FAILED all stay FAILED regardless of probe result until an
+admin acts or a real replacement lands. `FEATURE_AUTO_NODE_REPLACE_CANARY`
+/ `canary: true` may now be combined safely with `FEATURE_AUTO_NODE_HEALTH`.
 
 ## Capacity-aware auto-scale (Phase 12c, `node-auto-scale.js`)
 
@@ -167,7 +165,7 @@ prevents piling up more until the first one lands.
 | `FEATURE_MULTI_NODE_SCHEDULING` | off | scheduler.js used at all vs. legacy single-node path |
 | `FEATURE_AUTO_NODE_HEALTH` | off | admin nodes list writing health-driven lifecycle_state changes |
 | `FEATURE_AUTO_NODE_REPLACE` | off | node-auto-replace.js's fleet-tick trigger |
-| `FEATURE_AUTO_NODE_REPLACE_CANARY` | off | auto-triggered replacements pass `canary: true` (see Known limitation above) |
+| `FEATURE_AUTO_NODE_REPLACE_CANARY` | off | auto-triggered replacements pass `canary: true` — safe to combine with `FEATURE_AUTO_NODE_HEALTH` (see failed_reason above) |
 | `FEATURE_AUTO_NODE_SCALE` | off | node-auto-scale.js's fleet-tick trigger |
 
 ## Configuration

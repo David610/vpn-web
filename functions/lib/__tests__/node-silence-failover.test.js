@@ -23,4 +23,18 @@ describe("failSilentNodes", () => {
     const changedAt = new Date(db._tables.nodes[0].lifecycle_state_changed_at).getTime();
     expect(changedAt).toBeGreaterThanOrEqual(before);
   });
+
+  // failed_reason precondition (Phase 12a/12b specs): this is the ONE path
+  // node-health-transition.js's evaluateProbeResult treats as
+  // auto-recoverable from a single passing probe -- every other route into
+  // FAILED must record a different reason so it can't be waved back to
+  // READY the same easy way.
+  it("records failed_reason as SILENCE when transitioning a silent node to FAILED", async () => {
+    const db = makeFakeSupabase({
+      nodes: [{ node_id: "n1", lifecycle_state: "READY", last_seen_at: new Date(Date.now() - 10 * HEARTBEAT_INTERVAL_MS).toISOString() }],
+      operational_alerts: [],
+    });
+    await failSilentNodes(db, db._tables.nodes, Date.now());
+    expect(db._tables.nodes[0].failed_reason).toBe("SILENCE");
+  });
 });

@@ -51,7 +51,15 @@ export async function onRequestPatch({ env, request, params }) {
     // RETIRED is terminal (see node-lifecycle.js) so retired_at, once set,
     // is a reliable "this node stopped serving traffic at" timestamp —
     // never overwritten by a later transition, since none is possible.
-    const update = { lifecycle_state: body.state, lifecycle_state_changed_at: new Date().toISOString() };
+    const update = {
+      lifecycle_state: body.state,
+      lifecycle_state_changed_at: new Date().toISOString(),
+      // failed_reason precondition (Phase 12a/12b specs): an admin-forced
+      // FAILED must be distinguishable from a silence-FAILED, so Phase 8's
+      // probe-based auto-recovery never waves it back to READY on its own.
+      // Any other transition clears a stale value from a prior FAILED spell.
+      failed_reason: body.state === "FAILED" ? "ADMIN" : null,
+    };
     if (body.state === "RETIRED") update.retired_at = new Date().toISOString();
 
     // A node can re-enter PROVISIONING (e.g. FAILED -> PROVISIONING, a

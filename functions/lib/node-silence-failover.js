@@ -26,7 +26,7 @@ export async function failSilentNodes(supabase, nodes, nowMs) {
 
     const { data: moved, error } = await supabase
       .from("nodes")
-      .update({ lifecycle_state: "FAILED", lifecycle_state_changed_at: new Date().toISOString() })
+      .update({ lifecycle_state: "FAILED", lifecycle_state_changed_at: new Date().toISOString(), failed_reason: "SILENCE" })
       .eq("node_id", node.node_id)
       .eq("lifecycle_state", node.lifecycle_state)
       .select("node_id")
