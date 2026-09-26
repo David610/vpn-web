@@ -33,6 +33,18 @@ describe("nextScaleNodeId (pure)", () => {
   it("bumps an existing -capN suffix instead of doubling it", () => {
     expect(nextScaleNodeId("de-fsn-001-cap1")).toBe("de-fsn-001-cap2");
   });
+
+  it("skips a -capN number already taken by a node from an earlier failed attempt", () => {
+    expect(
+      nextScaleNodeId("de-fsn-001", ["de-fsn-001", "de-fsn-001-cap1"])
+    ).toBe("de-fsn-001-cap2");
+  });
+
+  it("finds the lowest unused number when several are taken", () => {
+    expect(
+      nextScaleNodeId("de-fsn-001", ["de-fsn-001-cap1", "de-fsn-001-cap2"])
+    ).toBe("de-fsn-001-cap3");
+  });
 });
 
 describe("findCapacityExhaustedGroups (pure)", () => {
@@ -190,5 +202,23 @@ describe("autoScaleFullLocations", () => {
     const db = makeFakeSupabase({ nodes: [FULL_NODE] });
     const started = await autoScaleFullLocations(db, baseEnv);
     expect(started).toEqual([]);
+  });
+
+  it("does not reuse a node id from an earlier scale-out attempt that failed", async () => {
+    // de-fsn-001-cap1 already exists as FAILED -- not PROVISIONING/WARMING_UP,
+    // so it does not block re-triggering (no scale-out is actually in
+    // flight), but its id must not be proposed again for the new attempt.
+    const db = makeFakeSupabase({
+      nodes: [
+        FULL_NODE,
+        { node_id: "de-fsn-001-cap1", role: "EXIT", location_id: "loc-1", provider: "hetzner", configured_users: null, max_sessions: null, lifecycle_state: "FAILED" },
+      ],
+    });
+    const started = await autoScaleFullLocations(db, baseEnv);
+    expect(started).toEqual([{ locationId: "loc-1", role: "EXIT", newNodeId: "de-fsn-001-cap2", operationId: "op-1" }]);
+    expect(startCreateNodeOperation).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({ nodeId: "de-fsn-001-cap2" })
+    );
   });
 });

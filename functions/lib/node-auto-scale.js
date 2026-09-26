@@ -7,15 +7,30 @@ const SCALE_SUFFIX_PATTERN = /^(.*)-cap(\d+)$/;
 
 /**
  * Names an auto-scaled node de-fsn-001 -> de-fsn-001-cap1 -> de-fsn-001-cap2
- * etc. (an already-scaled-once node id matching the suffix pattern bumps the
- * counter instead of doubling it) -- same lineage-in-the-id convention as
- * node-auto-replace.js's -rN suffix, kept as its own "-capN" scheme so a
- * scale-out node is distinguishable at a glance from a replacement.
+ * etc. -- same lineage-in-the-id convention as node-auto-replace.js's -rN
+ * suffix, kept as its own "-capN" scheme so a scale-out node is
+ * distinguishable at a glance from a replacement.
+ *
+ * `existingIds` (defaulting to just the template's own id) must include
+ * every node id already on record sharing the template's base, regardless
+ * of lifecycle state: a scale-out attempt that reached FAILED still
+ * permanently occupies its node id (the primary key), so proposing that
+ * same id again would only collide (23505) forever rather than actually
+ * retrying under a fresh id. The lowest -capN number not already present
+ * in `existingIds` is picked, so a gap left by an earlier failure is
+ * reused before incrementing past it.
  */
-export function nextScaleNodeId(templateNodeId) {
-  const match = templateNodeId.match(SCALE_SUFFIX_PATTERN);
-  if (match) return `${match[1]}-cap${Number(match[2]) + 1}`;
-  return `${templateNodeId}-cap1`;
+export function nextScaleNodeId(templateNodeId, existingIds = [templateNodeId]) {
+  const base = templateNodeId.match(SCALE_SUFFIX_PATTERN)?.[1] ?? templateNodeId;
+  const suffixPattern = new RegExp(`^${base}-cap(\\d+)$`);
+  const taken = new Set();
+  for (const id of existingIds) {
+    const match = id.match(suffixPattern);
+    if (match) taken.add(Number(match[1]));
+  }
+  let n = 1;
+  while (taken.has(n)) n++;
+  return `${base}-cap${n}`;
 }
 
 const CAPACITY_PROVIDING_STATES = new Set(["READY", "CANARY"]);
@@ -120,7 +135,19 @@ export async function autoScaleFullLocations(supabase, env) {
       continue;
     }
 
-    const newNodeId = nextScaleNodeId(templateNode.nodeId);
+    const base = templateNode.nodeId.match(SCALE_SUFFIX_PATTERN)?.[1] ?? templateNode.nodeId;
+    const { data: sameBaseNodes, error: sameBaseError } = await supabase
+      .from("nodes")
+      .select("node_id")
+      .like("node_id", `${base}-cap%`);
+    if (sameBaseError) {
+      console.error(
+        `node-auto-scale: node id lookup failed for ${group.locationId}/${group.role}:`,
+        sameBaseError.message
+      );
+      continue;
+    }
+    const newNodeId = nextScaleNodeId(templateNode.nodeId, (sameBaseNodes ?? []).map((n) => n.node_id));
     let hostname;
     try {
       getProviderAdapter(templateNode.provider, env);
