@@ -144,7 +144,11 @@ above, decomposed into three sub-projects:
   compile-verify it; none was available here), so the directory correctly
   returns an empty `routes` array until a node actually reports one.
 - **B — `POST /v1/vpn/authorize` (per-connection pseudonymous credential
-  issuance): not started.** Needs its own design pass — today's per-node
-  credential model is per-device, not per-connection/short-lived.
+  issuance): SHIPPED**
+  (`docs/superpowers/specs/2026-09-26-adr0002-vpn-authorize-design.md`).
+  Reuses each device's existing `vpn_accounts` identity per resolved hop;
+  `expires_at` is a short advisory TTL on the response, not a real
+  per-connection credential rotation yet (that needs a `singbox-vpn`
+  change — Sub-project B2, not started, needs a Rust-toolchain session).
 - **C — real interop testing against `tamara-next`'s built client: not
   started.**
