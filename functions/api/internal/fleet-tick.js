@@ -3,6 +3,7 @@ import { advanceOperation } from "../../lib/fleet-operations.js";
 import { fleetContext, isValidFleetTickSecret } from "../../lib/fleet-context.js";
 import { finalizeAccountDeletions } from "../../lib/account-service.js";
 import { autoReplaceFailedNodes } from "../../lib/node-auto-replace.js";
+import { autoScaleFullLocations } from "../../lib/node-auto-scale.js";
 
 function json(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -70,5 +71,13 @@ export async function onRequestPost({ env, request }) {
       console.error("fleet-tick: auto-replace failed:", err.message);
     }
   }
-  return json({ leased: results.length, results, deletedAccounts, autoReplaced });
+  let autoScaled = [];
+  if (env.FEATURE_AUTO_NODE_SCALE === "true") {
+    try {
+      autoScaled = await autoScaleFullLocations(supabaseAdmin, env);
+    } catch (err) {
+      console.error("fleet-tick: auto-scale failed:", err.message);
+    }
+  }
+  return json({ leased: results.length, results, deletedAccounts, autoReplaced, autoScaled });
 }

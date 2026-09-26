@@ -6,6 +6,8 @@ const advanceOperation = vi.fn();
 vi.mock("../../../lib/fleet-operations.js", () => ({ advanceOperation }));
 const autoReplaceFailedNodes = vi.fn();
 vi.mock("../../../lib/node-auto-replace.js", () => ({ autoReplaceFailedNodes }));
+const autoScaleFullLocations = vi.fn();
+vi.mock("../../../lib/node-auto-scale.js", () => ({ autoScaleFullLocations }));
 
 const { onRequestPost } = await import("../fleet-tick.js");
 const env = { SUPABASE_URL: "https://s.test", SUPABASE_SERVICE_ROLE_KEY: "k", FLEET_TICK_SECRET: "s3cret" };
@@ -21,6 +23,7 @@ beforeEach(() => {
   rpc.mockReset().mockResolvedValue({ data: [{ id: "op-1", type: "CREATE_NODE", node_id: "n1" }], error: null });
   advanceOperation.mockReset().mockResolvedValue({ status: "RUNNING", step: "AWAIT_ENROLLMENT" });
   autoReplaceFailedNodes.mockReset().mockResolvedValue([]);
+  autoScaleFullLocations.mockReset().mockResolvedValue([]);
 });
 
 describe("POST /api/internal/fleet-tick", () => {
@@ -71,6 +74,30 @@ describe("POST /api/internal/fleet-tick", () => {
     autoReplaceFailedNodes.mockRejectedValue(new Error("boom"));
     vi.spyOn(console, "error").mockImplementation(() => {});
     const res = await onRequestPost({ env: { ...env, FEATURE_AUTO_NODE_REPLACE: "true" }, request: req("s3cret") });
+    expect(res.status).toBe(200);
+  });
+
+  it("calls autoScaleFullLocations and includes its result when FEATURE_AUTO_NODE_SCALE is true", async () => {
+    autoScaleFullLocations.mockResolvedValue([{ locationId: "loc-1", role: "EXIT", newNodeId: "de-fsn-001-cap1", operationId: "op-9" }]);
+    const res = await onRequestPost({
+      env: { ...env, FEATURE_AUTO_NODE_SCALE: "true" },
+      request: req("s3cret"),
+    });
+    const body = await res.json();
+    expect(autoScaleFullLocations).toHaveBeenCalled();
+    expect(body.autoScaled).toEqual([{ locationId: "loc-1", role: "EXIT", newNodeId: "de-fsn-001-cap1", operationId: "op-9" }]);
+  });
+
+  it("does not call autoScaleFullLocations when the flag is unset", async () => {
+    const res = await onRequestPost({ env, request: req("s3cret") });
+    await res.json();
+    expect(autoScaleFullLocations).not.toHaveBeenCalled();
+  });
+
+  it("does not fail the tick if autoScaleFullLocations throws", async () => {
+    autoScaleFullLocations.mockRejectedValue(new Error("boom"));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const res = await onRequestPost({ env: { ...env, FEATURE_AUTO_NODE_SCALE: "true" }, request: req("s3cret") });
     expect(res.status).toBe(200);
   });
 });

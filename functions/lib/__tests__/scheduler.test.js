@@ -1,6 +1,26 @@
 import { describe, it, expect, vi } from "vitest";
-import { selectNodeForDevice, scheduleNodeForDevice, scheduleDoubleHopForDevice, scheduleAutoForDevice } from "../scheduler.js";
+import { selectNodeForDevice, scheduleNodeForDevice, scheduleDoubleHopForDevice, scheduleAutoForDevice, isUnderCapacity } from "../scheduler.js";
 import { CANARY_SESSION_CAP } from "../fleet-operations.js";
+
+describe("isUnderCapacity (pure)", () => {
+  it("is under capacity when configured_users is below max_sessions", () => {
+    expect(isUnderCapacity({ configuredUsers: 5, maxSessions: 100, lifecycleState: "READY" })).toBe(true);
+  });
+
+  it("is not under capacity when configured_users has reached max_sessions", () => {
+    expect(isUnderCapacity({ configuredUsers: 100, maxSessions: 100, lifecycleState: "READY" })).toBe(false);
+  });
+
+  it("has no cap (always under capacity) when max_sessions is null", () => {
+    expect(isUnderCapacity({ configuredUsers: 99999, maxSessions: null, lifecycleState: "READY" })).toBe(true);
+  });
+
+  it("applies CANARY_SESSION_CAP to a CANARY node regardless of its own max_sessions", () => {
+    expect(
+      isUnderCapacity({ configuredUsers: CANARY_SESSION_CAP, maxSessions: 1000, lifecycleState: "CANARY" })
+    ).toBe(false);
+  });
+});
 
 describe("selectNodeForDevice (pure)", () => {
   it("returns null when there are no candidates", () => {
