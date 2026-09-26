@@ -135,6 +135,23 @@ describe("PATCH /api/admin/nodes/:id/lifecycle", () => {
     );
   });
 
+  // failed_reason precondition (Phase 12a/12b specs): an admin-forced FAILED
+  // must be distinguishable from a silence-FAILED, so Phase 8's automated
+  // recovery doesn't wave it back to READY on the node's next lucky probe.
+  it("records failed_reason as ADMIN when transitioning a node to FAILED", async () => {
+    nodeMaybeSingle.mockResolvedValue({ data: { node_id: "node-1", lifecycle_state: "READY" }, error: null });
+    const res = await onRequestPatch({ env, request: makeRequest({ state: "FAILED" }), params: { id: "node-1" } });
+    expect(res.status).toBe(200);
+    expect(nodeUpdate).toHaveBeenCalledWith(expect.objectContaining({ failed_reason: "ADMIN" }));
+  });
+
+  it("clears failed_reason when transitioning a node away from FAILED", async () => {
+    nodeMaybeSingle.mockResolvedValue({ data: { node_id: "node-1", lifecycle_state: "FAILED" }, error: null });
+    const res = await onRequestPatch({ env, request: makeRequest({ state: "PROVISIONING" }), params: { id: "node-1" } });
+    expect(res.status).toBe(200);
+    expect(nodeUpdate).toHaveBeenCalledWith(expect.objectContaining({ failed_reason: null }));
+  });
+
   it("does not include an enrollment token for a non-PROVISIONING transition", async () => {
     const res = await onRequestPatch({ env, request: makeRequest({ state: "DRAINING" }), params: { id: "node-1" } });
     const body = await res.json();

@@ -263,7 +263,7 @@ const REPLACE_NODE_HANDLERS = {
       const moved = await updateNode(
         supabase,
         node.node_id,
-        { lifecycle_state: "FAILED", lifecycle_state_changed_at: new Date().toISOString() },
+        { lifecycle_state: "FAILED", lifecycle_state_changed_at: new Date().toISOString(), failed_reason: "CANARY_ABORT" },
         { lifecycle_state: "CANARY" }
       );
       if (!moved) throw new Error("node lifecycle changed concurrently");
@@ -483,7 +483,7 @@ async function failNodeIfBooting(supabase, nodeId) {
     await updateNode(
       supabase,
       nodeId,
-      { lifecycle_state: "FAILED", lifecycle_state_changed_at: new Date().toISOString() },
+      { lifecycle_state: "FAILED", lifecycle_state_changed_at: new Date().toISOString(), failed_reason: "BOOT_TIMEOUT" },
       { lifecycle_state: from }
     );
   }

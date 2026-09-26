@@ -146,9 +146,9 @@ describe("POST /api/agent/heartbeat — Phase 8 health transitions", () => {
       .filter(({ patch }) => "lifecycle_state" in patch);
   }
 
-  function casWrite(nodeId, from, to) {
+  function casWrite(nodeId, from, to, failedReason = null) {
     return {
-      patch: { lifecycle_state: to, lifecycle_state_changed_at: expect.any(String) },
+      patch: { lifecycle_state: to, lifecycle_state_changed_at: expect.any(String), failed_reason: failedReason },
       filters: [
         ["eq", "node_id", nodeId],
         ["eq", "lifecycle_state", from],
@@ -231,7 +231,7 @@ describe("POST /api/agent/heartbeat — Phase 8 health transitions", () => {
   });
 
   it("exits FAILED to READY on a single passing probe and resolves node_failed", async () => {
-    mockNode({ lifecycle_state: "FAILED", consecutive_probe_failures: 1 });
+    mockNode({ lifecycle_state: "FAILED", consecutive_probe_failures: 1, failed_reason: "SILENCE" });
     const before = Date.now();
     await onRequestPost({ env: autoEnv, request: makeRequest({ probe_ok: true }) });
     expect(nodesUpdate.mock.calls[0][0]).toMatchObject({
@@ -249,7 +249,7 @@ describe("POST /api/agent/heartbeat — Phase 8 health transitions", () => {
   });
 
   it("recovers a FAILED node with no probe capability on any authenticated heartbeat (null-probe ruling)", async () => {
-    mockNode({ lifecycle_state: "FAILED" });
+    mockNode({ lifecycle_state: "FAILED", failed_reason: "SILENCE" });
     await onRequestPost({ env: autoEnv, request: makeRequest({}) });
     expect(lifecycleWrites()).toEqual([casWrite("node-1", "FAILED", "READY")]);
     expect(resolvedDedupKeys()).toContain("node:node-1:node_failed");
@@ -262,6 +262,20 @@ describe("POST /api/agent/heartbeat — Phase 8 health transitions", () => {
     expect(insertedDedupKeys()).toContain("node:node-1:node_failed");
     expect(resolvedDedupKeys()).not.toContain("node:node-1:node_failed");
   });
+
+  // failed_reason precondition (Phase 12a/12b specs): a canary-abort or
+  // boot-timeout FAILED must never be waved back to READY by a passing
+  // probe the way a silence-FAILED is -- it needs an admin or a real
+  // replacement, not a fluke of one good heartbeat.
+  it.each(["CANARY_ABORT", "BOOT_TIMEOUT", "ADMIN"])(
+    "does not recover a FAILED node on a passing probe when failed_reason is %s",
+    async (failedReason) => {
+      mockNode({ lifecycle_state: "FAILED", failed_reason: failedReason });
+      await onRequestPost({ env: autoEnv, request: makeRequest({ probe_ok: true }) });
+      expect(lifecycleWrites()).toEqual([]);
+      expect(resolvedDedupKeys()).not.toContain("node:node-1:node_failed");
+    }
+  );
 
   it("raises a node_degraded alert on automated transition to DEGRADED", async () => {
     mockNode({ consecutive_probe_failures: 2 });
@@ -308,7 +322,7 @@ describe("POST /api/agent/heartbeat — Phase 8 health transitions", () => {
       error: null,
     });
     await onRequestPost({ env: autoEnv, request: makeRequest({ probe_ok: true }) });
-    expect(lifecycleWrites()).toEqual([casWrite("node-2", "READY", "FAILED")]);
+    expect(lifecycleWrites()).toEqual([casWrite("node-2", "READY", "FAILED", "SILENCE")]);
     expect(alertsInsert).toHaveBeenCalledWith(
       expect.objectContaining({
         alert_type: "node_failed",

@@ -174,31 +174,59 @@ describe("evaluateProbeResult", () => {
     expect(result.nextState).toBeNull();
   });
 
-  it("exits FAILED to READY on a single passing probe, counting it as one success", () => {
-    const result = evaluateProbeResult({ probeOk: true, currentFailures: 2, currentSuccesses: 0, lifecycleState: "FAILED" });
+  it("exits FAILED to READY on a single passing probe, counting it as one success, when failedReason is SILENCE", () => {
+    const result = evaluateProbeResult({ probeOk: true, currentFailures: 2, currentSuccesses: 0, lifecycleState: "FAILED", failedReason: "SILENCE" });
     expect(result).toEqual({ failures: 0, successes: 1, nextState: "READY" });
   });
 
   it("does not let stale pre-FAILED successes carry over when exiting FAILED", () => {
-    const result = evaluateProbeResult({ probeOk: true, currentFailures: 0, currentSuccesses: 3, lifecycleState: "FAILED" });
+    const result = evaluateProbeResult({ probeOk: true, currentFailures: 0, currentSuccesses: 3, lifecycleState: "FAILED", failedReason: "SILENCE" });
     expect(result).toEqual({ failures: 0, successes: 1, nextState: "READY" });
   });
 
   it("keeps a FAILED node FAILED on a failed probe", () => {
-    const result = evaluateProbeResult({ probeOk: false, currentFailures: 0, currentSuccesses: 0, lifecycleState: "FAILED" });
+    const result = evaluateProbeResult({ probeOk: false, currentFailures: 0, currentSuccesses: 0, lifecycleState: "FAILED", failedReason: "SILENCE" });
     expect(result.nextState).toBeNull();
   });
 
   // Null-probe ruling: a node with no Clash API configured can never send a
-  // passing probe, so any authenticated heartbeat is enough to leave FAILED.
-  it("recovers a FAILED node with no probe capability (probeOk null) to READY, streaks untouched", () => {
-    const result = evaluateProbeResult({ probeOk: null, currentFailures: 1, currentSuccesses: 0, lifecycleState: "FAILED" });
+  // passing probe, so any authenticated heartbeat is enough to leave FAILED
+  // -- but only when failedReason says silence is why it's here at all.
+  it("recovers a FAILED node with no probe capability (probeOk null) to READY, streaks untouched, when failedReason is SILENCE", () => {
+    const result = evaluateProbeResult({ probeOk: null, currentFailures: 1, currentSuccesses: 0, lifecycleState: "FAILED", failedReason: "SILENCE" });
     expect(result).toEqual({ failures: 1, successes: 0, nextState: "READY" });
   });
 
   it("treats an omitted probe (undefined) the same as null for FAILED recovery", () => {
-    const result = evaluateProbeResult({ probeOk: undefined, currentFailures: 0, currentSuccesses: 0, lifecycleState: "FAILED" });
+    const result = evaluateProbeResult({ probeOk: undefined, currentFailures: 0, currentSuccesses: 0, lifecycleState: "FAILED", failedReason: "SILENCE" });
     expect(result.nextState).toBe("READY");
+  });
+
+  // failed_reason precondition (flagged by both the Phase 12a and 12b
+  // specs): automation may only self-heal a FAILED node it put there for
+  // the one reason it was designed to reverse from a single probe/heartbeat
+  // (silence). A canary abort, a boot timeout, or an admin action all leave
+  // a node FAILED for a reason that needs a human or a real replacement --
+  // never a passing probe alone.
+  it.each(["CANARY_ABORT", "BOOT_TIMEOUT", "ADMIN"])(
+    "does not recover a FAILED node on a passing probe when failedReason is %s",
+    (failedReason) => {
+      const result = evaluateProbeResult({ probeOk: true, currentFailures: 0, currentSuccesses: 0, lifecycleState: "FAILED", failedReason });
+      expect(result.nextState).toBeNull();
+    }
+  );
+
+  it.each(["CANARY_ABORT", "BOOT_TIMEOUT", "ADMIN"])(
+    "does not recover a FAILED node with no probe capability when failedReason is %s",
+    (failedReason) => {
+      const result = evaluateProbeResult({ probeOk: null, currentFailures: 0, currentSuccesses: 0, lifecycleState: "FAILED", failedReason });
+      expect(result.nextState).toBeNull();
+    }
+  );
+
+  it("does not recover a FAILED node when failedReason is missing entirely (fail closed, not fail open)", () => {
+    const result = evaluateProbeResult({ probeOk: true, currentFailures: 0, currentSuccesses: 0, lifecycleState: "FAILED" });
+    expect(result.nextState).toBeNull();
   });
 
   it.each(["READY", "DEGRADED", "MAINTENANCE", "DRAINING", "PROVISIONING", "WARMING_UP", "QUARANTINED", "RETIRED"])(

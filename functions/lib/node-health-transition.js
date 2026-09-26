@@ -17,7 +17,9 @@
  *   READY    -> DEGRADED  (FAILURE_THRESHOLD consecutive failed probes)
  *   DEGRADED -> READY     (SUCCESS_THRESHOLD consecutive passing probes)
  *   FAILED   -> READY     (one passing probe, or any heartbeat at all from
- *                          a node with no probe capability)
+ *                          a node with no probe capability -- ONLY when
+ *                          nodes.failed_reason is SILENCE; a canary abort,
+ *                          boot timeout, or admin action stays FAILED)
  *   READY/DEGRADED -> FAILED  (silence only, via isNodeSilent)
  *
  * PROVISIONING, WARMING_UP, MAINTENANCE, DRAINING, QUARANTINED and RETIRED
@@ -52,32 +54,49 @@ export function isNodeSilent(node, nowMs, heartbeatIntervalMs) {
 export const FAILURE_THRESHOLD = 3;
 export const SUCCESS_THRESHOLD = 5;
 
+// The only nodes.failed_reason automation may self-heal from. A canary
+// abort, a boot timeout, or an admin action all leave a node FAILED for a
+// reason that needs a human or a real replacement -- never a passing probe
+// or a bare heartbeat alone. Flagged as a hard precondition by both the
+// Phase 12a and Phase 12b specs before FEATURE_AUTO_NODE_HEALTH could
+// safely combine with those other paths into FAILED.
+const AUTO_RECOVERABLE_REASON = "SILENCE";
+
 /**
  * Decides streak counters and any automated lifecycle transition for one
  * heartbeat from the node itself. probeOk is true/false for a node whose
  * agent ran a data-plane probe, or null/undefined for a node with no Clash
  * API configured (the agent omits probe_ok entirely in that case).
+ * failedReason is the node's nodes.failed_reason column -- only meaningful,
+ * and only ever read here, while lifecycleState is FAILED.
  */
-export function evaluateProbeResult({ probeOk, currentFailures, currentSuccesses, lifecycleState }) {
+export function evaluateProbeResult({ probeOk, currentFailures, currentSuccesses, lifecycleState, failedReason }) {
+  const canAutoRecover = lifecycleState === "FAILED" && failedReason === AUTO_RECOVERABLE_REASON;
+
   if (probeOk === null || probeOk === undefined) {
     // A node with no probe capability neither earns nor loses streak
-    // credit. The one exception is FAILED: silence put it there, and for a
-    // node that cannot probe, authenticating and heartbeating at all is
-    // the only evidence of recovery that will ever arrive -- without this
-    // it could never leave FAILED automatically.
+    // credit. The one exception is a silence-triggered FAILED: for a node
+    // that cannot probe, authenticating and heartbeating at all is the
+    // only evidence of recovery that will ever arrive -- without this it
+    // could never leave FAILED automatically.
     return {
       failures: currentFailures,
       successes: currentSuccesses,
-      nextState: lifecycleState === "FAILED" ? "READY" : null,
+      nextState: canAutoRecover ? "READY" : null,
     };
   }
 
   if (probeOk) {
-    if (lifecycleState === "FAILED") {
-      // Spec 4.3: FAILED is entered via silence, so the first passing
-      // probe is enough to exit it. It counts as one success, not as a
-      // full SUCCESS_THRESHOLD streak.
+    if (canAutoRecover) {
+      // Spec 4.3: a silence-triggered FAILED is reversed by the first
+      // passing probe. It counts as one success, not as a full
+      // SUCCESS_THRESHOLD streak.
       return { failures: 0, successes: 1, nextState: "READY" };
+    }
+    if (lifecycleState === "FAILED") {
+      // FAILED for any other reason stays FAILED regardless of probe
+      // result, until an admin or a real replacement acts.
+      return { failures: currentFailures, successes: currentSuccesses, nextState: null };
     }
     const successes = currentSuccesses + 1;
     const shouldRecover = lifecycleState === "DEGRADED" && successes >= SUCCESS_THRESHOLD;

@@ -278,6 +278,17 @@ describe("CREATE_NODE operation", () => {
     const changedAt = new Date((await node()).lifecycle_state_changed_at).getTime();
     expect(changedAt).toBeGreaterThan(Date.now() - 5000);
   });
+
+  // failed_reason precondition (Phase 12a/12b specs): a node that never
+  // reached READY needs its own retry or manual cleanup (node-auto-replace.js
+  // already excludes it from auto-"replacement" on this basis) -- it must
+  // never be waved back to READY by Phase 8's silence-only auto-recovery.
+  it("records failed_reason as BOOT_TIMEOUT when a deadline-exceeded operation fails a booting node", async () => {
+    db = makeFakeSupabase(seed({ deadlineAt: new Date(Date.now() - 1000).toISOString() }));
+    ctx.supabase = db;
+    await advance();
+    expect((await node()).failed_reason).toBe("BOOT_TIMEOUT");
+  });
 });
 
 describe("REPLACE_NODE operation", () => {
@@ -512,8 +523,24 @@ describe("REPLACE_NODE operation", () => {
     const result = await advance();
     expect(result.status).toBe("FAILED");
     expect((await node()).lifecycle_state).toBe("FAILED");
+    // failed_reason precondition (Phase 12a/12b specs): a canary-abort FAILED
+    // must be distinguishable from a silence-FAILED, or Phase 8's automated
+    // recovery could wave a flapping, just-aborted canary straight back to
+    // READY on one lucky probe.
+    expect((await node()).failed_reason).toBe("CANARY_ABORT");
     const old = (await rows("nodes")).find((n) => n.node_id === OLD_NODE_ID);
     expect(old.lifecycle_state).toBe("READY"); // never touched, never drained
+  });
+
+  it("canary mode: records failed_reason as CANARY_ABORT on a probe-failure abort too, not just silence", async () => {
+    db = makeFakeSupabase(replaceSeed({ canary: true }));
+    ctx.supabase = db;
+    await driveNewNodeToReady();
+    await setNode({ consecutive_probe_failures: 3 }); // FAILURE_THRESHOLD
+
+    await advance();
+    expect((await node()).lifecycle_state).toBe("FAILED");
+    expect((await node()).failed_reason).toBe("CANARY_ABORT");
   });
 });
 
