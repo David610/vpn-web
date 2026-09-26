@@ -4,6 +4,7 @@ import {
   reconcileDeviceProvisioning,
   reconcileAccountProvisioning,
   revokeDevice,
+  buildCreateUserPayload,
 } from "../device-provisioning.js";
 import { finalizeCreatedIdentity } from "../identity-lifecycle.js";
 
@@ -39,6 +40,33 @@ function world({ nodes = [], paths = [], profile = null, identities = [], device
 const jobs = (db) => db._tables.provisioning_jobs;
 const devRow = (db) => db._tables.devices[0];
 const directPath = (loc) => ({ id: `p-${loc}`, entry_location_id: null, exit_location_id: loc, enabled: true });
+
+describe("buildCreateUserPayload", () => {
+  const device = { id: "dev-1", user_id: "user-1" };
+
+  it("omits expires_at for a clearExpiry entitlement", () => {
+    const payload = buildCreateUserPayload(device, { clearExpiry: true, serviceExpiresAt: null });
+    expect(payload).toEqual({ user_id: "user-1", device_id: "dev-1" });
+  });
+
+  it("includes expires_at for a finite entitlement", () => {
+    const payload = buildCreateUserPayload(device, {
+      clearExpiry: false,
+      serviceExpiresAt: "2030-01-01T00:00:00.000Z",
+    });
+    expect(payload).toEqual({
+      user_id: "user-1",
+      device_id: "dev-1",
+      expires_at: "2030-01-01T00:00:00.000Z",
+    });
+  });
+
+  it("throws when a finite entitlement has no serviceExpiresAt", () => {
+    expect(() => buildCreateUserPayload(device, { clearExpiry: false, serviceExpiresAt: null })).toThrow(
+      "finite entitlement is missing serviceExpiresAt"
+    );
+  });
+});
 
 describe("legacy single-node account (FEATURE_MULTI_NODE_SCHEDULING off)", () => {
   it("places every device on node-1, ignoring fleet nodes and profiles", async () => {
