@@ -231,8 +231,14 @@ stage_dns_wait() {
 # as "no transport to include".
 transport_report_json() {
   local pubkey short_id
-  pubkey="$(cat /etc/vpn/compat/reality/public.key 2>/dev/null || true)"
-  short_id="$(cat /etc/vpn/compat/reality/short_id.txt 2>/dev/null || true)"
+  # base64 (public.key) and hex (short_id.txt) are both subsets of this
+  # allowlist. A quote/backslash/newline from a corrupted file must never
+  # reach the printf below -- bootstrap-status.js's JSON.parse fails the
+  # WHOLE request (stage/status/message included) on malformed JSON, not
+  # just these optional fields, the same reasoning report()'s own
+  # message argument is already filtered through tr -cd for.
+  pubkey="$(cat /etc/vpn/compat/reality/public.key 2>/dev/null | tr -cd 'A-Za-z0-9+/=' || true)"
+  short_id="$(cat /etc/vpn/compat/reality/short_id.txt 2>/dev/null | tr -cd 'A-Za-z0-9+/=' || true)"
   if [ -z "$pubkey" ] || [ -z "$short_id" ]; then
     echo ""
     return 0

@@ -50,14 +50,30 @@ describe("buildNodeBootstrapUserData", () => {
     );
   });
 
+  it("sanitizes the REALITY key file contents before splicing them into JSON -- a corrupted file must never break the whole bootstrap-status report", () => {
+    // bootstrap-status.js's JSON.parse fails the ENTIRE request (stage,
+    // status, message included) on malformed JSON, not just the optional
+    // transport fields (validateTransport's own docstring says a bad
+    // transport report should be dropped silently, not take the rest of
+    // the report down with it). A stray quote/newline from a corrupted
+    // key file must be stripped before it ever reaches printf's %s slots
+    // -- same treatment report()'s own `message` argument already gets
+    // via `tr -cd`.
+    const fnStart = BOOTSTRAP_SCRIPT.indexOf("transport_report_json()");
+    const fnBody = BOOTSTRAP_SCRIPT.slice(fnStart, BOOTSTRAP_SCRIPT.indexOf("\n}", fnStart) + 2);
+    expect(fnBody).toMatch(/public\.key.*2>\/dev\/null \| tr -cd '[^']+' \|\| true/);
+    expect(fnBody).toMatch(/short_id\.txt.*2>\/dev\/null \| tr -cd '[^']+' \|\| true/);
+  });
+
   it("never fails the INSTALL stage when the REALITY key files are absent", () => {
     // transport_report_json must fall back to an empty string (falsy in
-    // bash's `[ -n "$transport" ]`), not `set -e`-abort the script, when
-    // the files don't exist -- 2>/dev/null || true on both reads.
+    // bash's [ -n "$transport" ] check), not set -e-abort the script,
+    // when the files don't exist -- "|| true" terminates each read
+    // pipeline (cat | tr) regardless of whether the file existed.
     const fnStart = BOOTSTRAP_SCRIPT.indexOf("transport_report_json()");
     expect(fnStart).toBeGreaterThan(-1);
     const fnBody = BOOTSTRAP_SCRIPT.slice(fnStart, BOOTSTRAP_SCRIPT.indexOf("\n}", fnStart) + 2);
-    expect(fnBody).toContain("2>/dev/null || true");
+    expect(fnBody).toMatch(/2>\/dev\/null \| tr -cd '[^']+' \|\| true/g);
     expect(fnBody).toMatch(/echo ""/);
   });
 
