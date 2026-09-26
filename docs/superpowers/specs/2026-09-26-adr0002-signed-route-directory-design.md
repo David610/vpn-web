@@ -67,6 +67,16 @@ rollback-protected directory of concrete routes with real hop data
 
 ## 4. Design
 
+**Dependency:** this design assumes `install.sh` actually reaches the
+point of generating a REALITY keypair during automated bootstrap. It
+didn't — `install.sh` requires `REALITY_HANDSHAKE_SERVER` (or
+`--reality-handshake-server`) and refuses to guess a default, and
+`node-bootstrap.js`'s `--non-interactive` invocation never supplied it, so
+INSTALL would fail on every automated node before ever reaching REALITY
+setup. Fixed as its own, unrelated piece of work (`FLEET_REALITY_HANDSHAKE_SERVER`,
+threaded through `buildNodeBootstrapUserData`) — merged before this spec's
+implementation plan, so §4.1 below can assume INSTALL actually succeeds.
+
 ### 4.1 Node transport-parameter reporting (`singbox-vpn` + `vpn-web`)
 
 `singbox-vpn`'s `vpn-admin` already generates a node's REALITY keypair
