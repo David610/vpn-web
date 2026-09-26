@@ -36,6 +36,43 @@ QUARANTINED is a one-way security control (spec §45 blast-radius
 containment) — a quarantined node never returns to serving traffic; the
 only way out is RETIRED, then provisioning a fresh replacement.
 
+## Protocol-level probes (Phase 4, `protocol-health.js`)
+
+Each agent runs a real local sing-box client against up to 3 peer nodes
+(`GET /api/agent/probe-targets`), and against itself over loopback as a
+fallback. The probes cover REALITY and Hysteria2. The results come back on
+the heartbeat as `protocol_probe`, with one `node_probe_results` row per
+dimension: tcp_connect, handshake, https_ipv4, dns, ipv6, egress_ip,
+latency, loss and useful_egress. Rows are kept for 24 h, capped at 5000 per
+target. The latest summary is stored on `nodes.protocol_health`, and the
+Hysteria2 certificate expiry on `nodes.hysteria2_cert_days`.
+
+Only one of these signals drives lifecycle. That signal is useful egress
+(handshake plus IPv4 HTTPS) for each reported protocol, and it goes through
+the same 3-fail/5-pass hysteresis on separate `protocol_probe_*` counters.
+If either REALITY or Hysteria2 fails 3 reports in a row, a READY node
+becomes DEGRADED.
+
+Precedence and guards:
+
+* Peer results win over self results. Self results count only when no peer
+  has reported on the node within 3 heartbeat intervals.
+* DEGRADED -> READY needs both the Clash probe and the protocol probe to be
+  healthy.
+* Protocol evidence never moves a node into or out of FAILED. FAILED stays
+  silence-only, and `failed_reason` recovery rules are unchanged.
+
+The following are informational only and never drive lifecycle: DNS, IPv6,
+egress-IP match, latency, loss, certificate days and
+`nodes.ip_reputation`.
+
+Probe credentials: each node creates a reserved, non-customer
+`arcana-probe` user locally and publishes its links with
+`POST /api/agent/probe-credential`. The links go into
+`node_probe_credentials`, which is service-role only. They are served only
+to authenticated agents in WARMING_UP, READY or DEGRADED, and never to
+admins. Real-VPS evidence is in singbox-vpn `docs/HEALTH_PROBE_EVIDENCE.md`.
+
 ## Health-driven transitions (Phase 8, `node-health-transition.js`)
 
 Always running (no feature flag) whenever a node reports telemetry or is
@@ -184,3 +221,18 @@ creation (`HETZNER_API_TOKEN`, `CLOUDFLARE_DNS_API_TOKEN`/`_ZONE_ID`,
 Recorded here once a real run of each flow completes against live
 infrastructure (operation id, timings, outcome). Deferred pending staging
 access — see each phase's plan document's Task 6.
+
+### Protocol probe abuse limits (review hardening)
+
+- A report counts only when the reporter is itself WARMING_UP/READY/DEGRADED
+  and not revoked; peer results only about targets the control plane assigned
+  it (`choosePeers`, current or previous hourly bucket). Everything else is
+  dropped before storage.
+- A peer failure does not advance a target's failure streak while any other
+  peer has a fresh passing verdict on it (PEER_FRESH_MS), so one bad or lying
+  vantage cannot DEGRADE a node its other peers reach. With a single probing
+  peer, that peer alone can still DEGRADE (never FAIL) the target.
+- Retiring/quarantining a node deletes its `node_probe_credentials` row, and
+  such a node cannot republish. Heartbeat bodies over 64 KiB get 413.
+- `prune_node_probe_results` ages out rows fleet-wide, so rows about retired
+  targets also expire.

@@ -70,6 +70,9 @@ function insertedDedupKeys() {
   return alertsInsert.mock.calls.map(([row]) => row.dedup_key);
 }
 
+const applyProtocolReport = vi.fn(async () => ({ rows: 0, transitions: [] }));
+vi.mock("../../../lib/protocol-health-store.js", () => ({ applyProtocolReport: (...a) => applyProtocolReport(...a) }));
+
 const { onRequestPost } = await import("../heartbeat.js");
 const env = { SUPABASE_URL: "https://supabase.test", SUPABASE_SERVICE_ROLE_KEY: "key" };
 
@@ -228,6 +231,39 @@ describe("POST /api/agent/heartbeat — Phase 8 health transitions", () => {
     expect(lifecycleWrites()).toEqual([casWrite("node-1", "DEGRADED", "READY")]);
     expect(resolvedDedupKeys()).toContain("node:node-1:node_degraded");
     expect(insertedDedupKeys()).not.toContain("node:node-1:node_degraded");
+  });
+
+  it("blocks Clash-driven DEGRADED -> READY while protocol probes are failing", async () => {
+    mockNode({ lifecycle_state: "DEGRADED", consecutive_probe_successes: 4, protocol_probe_failures: 2 });
+    await onRequestPost({ env: autoEnv, request: makeRequest({ probe_ok: true }) });
+    expect(lifecycleWrites()).toEqual([]);
+  });
+
+  it("applies a protocol_probe report before evaluating, and stores cert days", async () => {
+    applyProtocolReport.mockClear();
+    mockNode({});
+    const protocol_probe = {
+      version: 1,
+      round: 1,
+      hysteria2_cert_days_remaining: 12,
+      results: [{ target_node_id: "peer-1", vantage: "peer", protocol: "reality", ok: true, dims: {}, loss_pct: 0 }],
+    };
+    await onRequestPost({ env: autoEnv, request: makeRequest({ probe_ok: true, protocol_probe }) });
+    expect(applyProtocolReport).toHaveBeenCalledTimes(1);
+    const arg = applyProtocolReport.mock.calls[0][0];
+    expect(arg).toMatchObject({ reporterNodeId: "node-1", autoHealth: true });
+    expect(arg.report.results[0].targetNodeId).toBe("peer-1");
+    expect(nodesUpdate.mock.calls[0][0]).toMatchObject({ hysteria2_cert_days: 12 });
+  });
+
+  it("does not call the protocol store without a report, and survives a store failure", async () => {
+    applyProtocolReport.mockClear();
+    mockNode({});
+    await onRequestPost({ env: autoEnv, request: makeRequest({ probe_ok: true }) });
+    expect(applyProtocolReport).not.toHaveBeenCalled();
+    applyProtocolReport.mockRejectedValueOnce(new Error("boom"));
+    const res = await onRequestPost({ env: autoEnv, request: makeRequest({ protocol_probe: { results: [] } }) });
+    expect(res.status).toBe(200);
   });
 
   it("exits FAILED to READY on a single passing probe and resolves node_failed", async () => {

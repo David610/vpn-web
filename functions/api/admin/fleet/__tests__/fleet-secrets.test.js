@@ -17,13 +17,15 @@ const SECRETS = {
 };
 
 const ROWS = {
-  nodes: [{ node_id: "de-fra-1", role: "EXIT", lifecycle_state: "READY", location_id: "l1", desired_revision: 2, observed_revision: 1, max_sessions: 10, ...SECRETS }],
+  nodes: [{ node_id: "de-fra-1", role: "EXIT", lifecycle_state: "READY", location_id: "l1", desired_revision: 2, observed_revision: 1, max_sessions: 10, protocol_health: { reality: { ok: true, dims: { dns: true }, password: "LEAK_SUMMARY_PW", uri: "vless://LEAK_SUMMARY_URI" } }, ...SECRETS }],
   locations: [{ id: "l1", country_code: "DE", display_name: "Frankfurt", enabled: true, ...SECRETS }],
   allowed_paths: [{ id: "p1", entry_location_id: null, exit_location_id: "l1", enabled: true, ...SECRETS }],
   device_node_assignments: [{ device_id: "d1", node_id: "de-fra-1", hop: "EXIT", devices: { account_id: "a1", ...SECRETS }, ...SECRETS }],
   fleet_operations: [{ id: "o1", type: "REPLACE_NODE", status: "RUNNING", detail: { enrollmentToken: "LEAK_ENROLL_TOKEN", provider: "hetzner", ...SECRETS }, ...SECRETS }],
   operation_steps: [{ operation_id: "o1", step_index: 0, status: "COMPLETED", detail: { privateKey: "LEAK_PK", ...SECRETS } }],
   node_revisions: [{ node_id: "de-fra-1", revision: 2, reason: "r", config: { reality: { private_key: "LEAK_CFG_PK" } }, ...SECRETS }],
+  node_probe_results: [{ id: 1, observed_at: "2026-09-26T00:00:00Z", reporter_node_id: "a", target_node_id: "de-fra-1", vantage: "peer", protocol: "reality", dimension: "dns", ok: true, ...SECRETS }],
+  node_probe_credentials: [{ node_id: "de-fra-1", reality_uri: "vless://LEAK_PROBE_UUID@h:1", hysteria2_uri: "hysteria2://LEAK_PROBE_PW@h:1" }],
   admin_audit_log: [{ id: 1, action: "admin.node_lifecycle", target_id: "de-fra-1", metadata: { token: "LEAK_META_TOKEN" } }],
 };
 

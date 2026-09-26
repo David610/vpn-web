@@ -11,6 +11,8 @@ const nodeUpdateChain = {
 };
 const nodeUpdate = vi.fn(() => nodeUpdateChain);
 const auditInsert = vi.fn();
+const credDeleteEq = vi.fn(async () => ({ error: null }));
+const credDelete = vi.fn(() => ({ eq: credDeleteEq }));
 
 vi.mock("@supabase/supabase-js", () => ({
   createClient: vi.fn(() => ({
@@ -28,6 +30,7 @@ vi.mock("@supabase/supabase-js", () => ({
         };
       }
       if (table === "admin_audit_log") return { insert: auditInsert };
+      if (table === "node_probe_credentials") return { delete: credDelete };
       throw new Error(`unexpected table ${table}`);
     }),
   })),
@@ -50,6 +53,8 @@ beforeEach(() => {
   nodeMaybeSingle.mockReset().mockResolvedValue({ data: { node_id: "node-1", lifecycle_state: "READY" }, error: null });
   nodeUpdateMaybeSingle.mockReset().mockResolvedValue({ data: { node_id: "node-1" }, error: null });
   nodeUpdate.mockClear();
+  credDelete.mockClear();
+  credDeleteEq.mockClear();
   nodeUpdateChain.eq.mockClear();
   auditInsert.mockReset().mockResolvedValue({ error: null });
 });
@@ -112,6 +117,8 @@ describe("PATCH /api/admin/nodes/:id/lifecycle", () => {
     expect(nodeUpdate).toHaveBeenCalledWith(
       expect.objectContaining({ lifecycle_state: "RETIRED", retired_at: expect.any(String) })
     );
+    // Retirement revokes the node's probe credential.
+    expect(credDeleteEq).toHaveBeenCalledWith("node_id", "node-1");
   });
 
   it("reissues a fresh enrollment token and returns it when transitioning back to PROVISIONING", async () => {
