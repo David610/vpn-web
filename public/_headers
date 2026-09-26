@@ -5,3 +5,16 @@
   Permissions-Policy: camera=(), microphone=(), geolocation=(), browsing-topics=()
   X-Permitted-Cross-Domain-Policies: none
   Content-Security-Policy: object-src 'none'; base-uri 'self'; frame-ancestors 'none'
+
+# Telegram Mini App: Telegram Web (web.telegram.org) embeds Mini Apps in an
+# iframe, so the site-wide DENY / frame-ancestors 'none' above would blank the
+# app there. Detach them for /telegram/ only and allow Telegram's origins.
+/telegram
+  ! X-Frame-Options
+  ! Content-Security-Policy
+  Content-Security-Policy: object-src 'none'; base-uri 'self'; frame-ancestors 'self' https://web.telegram.org https://*.telegram.org
+
+/telegram/*
+  ! X-Frame-Options
+  ! Content-Security-Policy
+  Content-Security-Policy: object-src 'none'; base-uri 'self'; frame-ancestors 'self' https://web.telegram.org https://*.telegram.org
