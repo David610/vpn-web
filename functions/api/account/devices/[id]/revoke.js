@@ -48,7 +48,10 @@ export async function onRequestPost({ env, request, params }) {
 
     // Real revocation: every VPN identity of this device is disabled on the
     // node it lives on, which removes the credential from sing-box's config.
-    const { revoked, disabled } = await revokeDevice(supabaseAdmin, env, device, `device-revoked:${device.id}`);
+    const { revoked, disabled } = await revokeDevice(supabaseAdmin, env, device, `device-revoked:${device.id}`, {
+      // An owner revoking another member's device is an admin action: rotate now.
+      urgent: device.user_id !== user.id,
+    });
     if (!revoked) {
       return jsonResponse(
         { error: "Device status changed concurrently — reload and retry" },

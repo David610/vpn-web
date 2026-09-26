@@ -19,7 +19,16 @@ import { decryptSecret, sha256Hex } from "./crypto.js";
  * lease-pool slot per hop, leased atomically by the lease_route_slots RPC
  * (all hops or none). expires_at is the lease's real server-side end: the
  * earliest hop slot's node-enforced valid_until, after which the node's
- * sing-box config no longer accepts that credential for new connections.
+ * sing-box config no longer accepts that credential for new connections
+ * (enforced within one agent poll + apply, control plane or not).
+ *
+ * Renewal: re-authorizing the same route while the device's lease on it is
+ * live (and has at least renewMinLeadSeconds left) EXTENDS that lease --
+ * same slots, same credentials, later expires_at -- instead of taking a new
+ * slot. Nodes adopt the extension without restarting sing-box, so a client
+ * that renews keeps its open connections; only slots that genuinely expire
+ * or are revoked rotate (which restarts sing-box and drops every open
+ * connection on that node, batched to at most once per rotation window).
  */
 export const LEASE_LIMITS = Object.freeze({
   // A slot must have at least this long left to be handed out, so every
@@ -29,6 +38,12 @@ export const LEASE_LIMITS = Object.freeze({
   windowSeconds: 10 * 60,
   perDevice: 20,
   perAccount: 60,
+  // Renewal target length: expires_at becomes now + this, floored to each
+  // hop node's rotation grid and capped at its slot lifetime.
+  renewSeconds: 30 * 60,
+  // Below this much time left a lease is not extended (the node might
+  // rotate the slot before it adopts the extension); a new lease is taken.
+  renewMinLeadSeconds: 60,
 });
 
 const CLIENT_REQUEST_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
@@ -99,6 +114,8 @@ async function leaseCredentials(supabaseAdmin, env, { device, candidate, clientR
     p_device_limit: LEASE_LIMITS.perDevice,
     p_account_limit: LEASE_LIMITS.perAccount,
     p_window_seconds: LEASE_LIMITS.windowSeconds,
+    p_renew_seconds: LEASE_LIMITS.renewSeconds,
+    p_renew_min_lead_seconds: LEASE_LIMITS.renewMinLeadSeconds,
   });
   if (error) throw new Error(`lease_route_slots failed: ${error.message}`);
 
@@ -141,6 +158,7 @@ async function leaseCredentials(supabaseAdmin, env, { device, candidate, clientR
     ok: true,
     routeId: candidate.id,
     expiresAt: new Date(data.expires_at).toISOString(),
+    renewed: data.renewed === true,
     credentialEnvelope: { version: 1, hops },
   };
 }

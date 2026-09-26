@@ -5,7 +5,7 @@ import { decryptSecret } from "../../../../lib/crypto.js";
 let db;
 vi.mock("@supabase/supabase-js", () => ({ createClient: vi.fn(() => db) }));
 
-const { onRequestPost, validateSlots, MAX_SLOT_LIFETIME_MS } = await import("../sync.js");
+const { onRequestPost, validateSlots, validatePolicy, MAX_SLOT_LIFETIME_MS } = await import("../sync.js");
 
 const KEY = "b".repeat(64);
 const env = { SUPABASE_URL: "https://supabase.test", SUPABASE_SERVICE_ROLE_KEY: "key", VPN_SECRETS_ENCRYPTION_KEY: KEY };
@@ -38,7 +38,7 @@ describe("POST /api/agent/leases/sync", () => {
     const res = await onRequestPost({ env, request: req({ slots: [{ slot: 0, generation: 1, valid_until: soon(), vless_uuid: UUID, hysteria2_password: PW }] }) });
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.slots).toEqual([{ slot: 0, generation: 1, state: "active" }]);
+    expect(body.slots).toEqual([{ slot: 0, generation: 1, state: "active", urgent: false, extend_to: null }]);
     const [row] = db._tables.node_lease_slots;
     expect(JSON.stringify(row)).not.toContain(PW);
     expect(JSON.stringify(row)).not.toContain(UUID);
@@ -57,7 +57,33 @@ describe("POST /api/agent/leases/sync", () => {
     await onRequestPost({ env, request: req({ slots: [{ slot: 0, generation: 1, valid_until: soon(), vless_uuid: UUID, hysteria2_password: PW }] }) });
     db._tables.node_lease_slots[0].state = "revoked";
     const res = await onRequestPost({ env, request: req({ slots: [{ slot: 0, generation: 1, valid_until: soon() }] }) });
-    expect((await res.json()).slots).toEqual([{ slot: 0, generation: 1, state: "revoked" }]);
+    expect((await res.json()).slots).toEqual([{ slot: 0, generation: 1, state: "revoked", urgent: false, extend_to: null }]);
+  });
+
+  it("records the node's rotation policy, returns renewals (extend_to) and urgent revocations, and records adopted valid_until", async () => {
+    const policy = { rotation_batch_interval_secs: 600, slot_lifetime_secs: 1800 };
+    await onRequestPost({ env, request: req({ policy, slots: [{ slot: 0, generation: 1, valid_until: soon(), vless_uuid: UUID, hysteria2_password: PW }] }) });
+    expect(db._tables.node_lease_policy).toEqual([{ node_id: "node-1", ...policy }]);
+    const extendTo = soon(30 * 60 * 1000);
+    Object.assign(db._tables.node_lease_slots[0], { state: "leased", extend_to: extendTo });
+    let res = await onRequestPost({ env, request: req({ policy, slots: [{ slot: 0, generation: 1, valid_until: soon() }] }) });
+    expect((await res.json()).slots[0]).toMatchObject({ state: "leased", extend_to: extendTo });
+    // The node adopted it and now reports the later valid_until.
+    res = await onRequestPost({ env, request: req({ slots: [{ slot: 0, generation: 1, valid_until: extendTo }] }) });
+    expect(res.status).toBe(200);
+    expect(db._tables.node_lease_slots[0].valid_until).toBe(extendTo);
+    Object.assign(db._tables.node_lease_slots[0], { state: "revoked", urgent: true });
+    res = await onRequestPost({ env, request: req({ slots: [{ slot: 0, generation: 1, valid_until: extendTo }] }) });
+    expect((await res.json()).slots[0]).toMatchObject({ state: "revoked", urgent: true });
+  });
+
+  it("validates the policy", async () => {
+    expect(validatePolicy(undefined)).toEqual({ policy: null });
+    expect(validatePolicy({ rotation_batch_interval_secs: 600, slot_lifetime_secs: 1800 }).policy).toBeTruthy();
+    expect(validatePolicy({ rotation_batch_interval_secs: 10, slot_lifetime_secs: 1800 }).error).toBeTruthy();
+    expect(validatePolicy({ rotation_batch_interval_secs: 600, slot_lifetime_secs: 99999 }).error).toBeTruthy();
+    const res = await onRequestPost({ env, request: req({ policy: { rotation_batch_interval_secs: "x" }, slots: [] }) });
+    expect(res.status).toBe(400);
   });
 
   it("never lets a stale generation overwrite a newer one", async () => {

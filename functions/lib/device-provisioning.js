@@ -373,7 +373,15 @@ export async function reconcileAccountProvisioning(
  * @returns {Promise<{ revoked: boolean, disabled: number }>} revoked=false
  *   when the device's status changed concurrently.
  */
-export async function revokeDevice(supabaseAdmin, env, device, idempotencyPrefix) {
+/**
+ * `urgent` (abuse/admin: e.g. an owner removing another member or their
+ * device) makes nodes rotate the device's lease slots immediately. Otherwise
+ * they rotate at the node's next rotation batch boundary (at most
+ * rotation_batch_interval later, never after the lease's expires_at),
+ * because every rotation restarts sing-box and drops every open connection
+ * on the node.
+ */
+export async function revokeDevice(supabaseAdmin, env, device, idempotencyPrefix, { urgent = false } = {}) {
   if (device.status !== "REVOKED") {
     const { data: updated, error } = await supabaseAdmin
       .from("devices")
@@ -386,8 +394,8 @@ export async function revokeDevice(supabaseAdmin, env, device, idempotencyPrefix
     if (!updated) return { revoked: false, disabled: 0 };
   }
   // ADR-0003: end every live ephemeral lease now; each node's agent rotates
-  // the revoked slots on its next sync instead of waiting for expiry.
-  const { error: leaseError } = await supabaseAdmin.rpc("revoke_device_leases", { p_device_id: device.id });
+  // the revoked slots (now if urgent, else at its next batch boundary).
+  const { error: leaseError } = await supabaseAdmin.rpc("revoke_device_leases", { p_device_id: device.id, p_urgent: urgent });
   if (leaseError) throw new Error(`revoke_device_leases failed: ${leaseError.message}`);
   const identities = (await listDeviceIdentities(supabaseAdmin, device.id)).filter((i) => i.enabled);
   await reconcileDeviceProvisioning(supabaseAdmin, env, {

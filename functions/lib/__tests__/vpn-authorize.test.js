@@ -206,7 +206,7 @@ describe("authorizeRoute: exact physical-hop binding", () => {
   });
 
   it("a published route stays authorizable after load shifts push it out of the published top-N", async () => {
-    const db = world({
+    const db = await world({
       nodes: ["a", "b", "c", "d"].map((x, i) => node(`de-${x}`, DE, "EXIT", { configured_users: i })),
       paths: [directPath(DE)],
       identities: ["a", "b", "c", "d"].map((x) => ({ node_id: `de-${x}`, vpn_user_id: `u-${x}` })),
@@ -225,7 +225,7 @@ describe("authorizeRoute: exact physical-hop binding", () => {
   });
 
   it("a device already assigned to a now-full node can still authorize that exact node", async () => {
-    const db = world({
+    const db = await world({
       nodes: [node("de-a", DE, "EXIT", { configured_users: 1, max_sessions: 2 })],
       paths: [directPath(DE)],
       assignments: [{ device_id: DEVICE.id, node_id: "de-a", hop: "EXIT" }],
@@ -235,7 +235,7 @@ describe("authorizeRoute: exact physical-hop binding", () => {
     db._tables.nodes[0].configured_users = 2;
     expect((await authorize(db, route.id)).ok).toBe(true);
     // A device that holds no slot there is rejected with route_stale.
-    const other = await authorizeRoute(db, {}, { device: { ...DEVICE, id: "dev-2" }, entitlement: PAID, routeId: route.id });
+    const other = await authorizeRoute(db, {}, { device: { ...DEVICE, id: "dev-2" }, routeId: route.id });
     expect(other).toMatchObject({ ok: false, status: 409, code: "route_stale" });
   });
 
@@ -333,9 +333,10 @@ describe("authorizeRoute: ephemeral lease pool (ADR-0003)", () => {
       ],
     });
     const [route] = await directory(db);
-    const a = await authorize(db, route.id);
-    const b = await authorize(db, route.id);
-    const c = await authorize(db, route.id);
+    // Distinct devices: the same device re-authorizing the route renews instead.
+    const a = await authorize(db, route.id, null, { ...DEVICE, id: "dev-a" });
+    const b = await authorize(db, route.id, null, { ...DEVICE, id: "dev-b" });
+    const c = await authorize(db, route.id, null, { ...DEVICE, id: "dev-c" });
     expect(new Set([a.credentialEnvelope.hops[0].uuid, b.credentialEnvelope.hops[0].uuid])).toEqual(new Set(["s0", "s1"]));
     expect(c).toMatchObject({ ok: false, status: 503, code: "capacity_exhausted" });
   });
@@ -370,8 +371,13 @@ describe("authorizeRoute: ephemeral lease pool (ADR-0003)", () => {
     expect(slots(db).filter((s) => s.state === "active")).toHaveLength(1);
     // The raw client id is never stored.
     expect(JSON.stringify(leases(db))).not.toContain("req-00000001");
-    const other = await authorize(db, route.id, "req-00000002");
-    expect(other.credentialEnvelope.hops[0].uuid).not.toBe(first.credentialEnvelope.hops[0].uuid);
+    // A NEW request id on the same route while the lease is live renews it:
+    // same slot and credential, no second slot.
+    const renewal = await authorize(db, route.id, "req-00000002");
+    expect(renewal.renewed).toBe(true);
+    expect(renewal.credentialEnvelope).toEqual(first.credentialEnvelope);
+    expect(leases(db)).toHaveLength(1);
+    expect(slots(db).filter((s) => s.state === "active")).toHaveLength(1);
   });
 
   it("an expired lease is not replayed: the same client_request_id gets a fresh slot", async () => {
@@ -410,8 +416,12 @@ describe("authorizeRoute: ephemeral lease pool (ADR-0003)", () => {
     const [route] = await directory(db);
     for (let i = 0; i < LEASE_LIMITS.perDevice; i += 1) {
       expect((await authorize(db, route.id, `req-${String(i).padStart(8, "0")}`)).ok).toBe(true);
+      if (i === 0) expect((await authorize(db, route.id, "req-00000000")).ok).toBe(true); // replay
+      // End the lease (as if it expired), so the next call needs a NEW lease
+      // rather than renewing this one.
+      for (const l of leases(db)) l.expires_at = new Date(Date.now() - 1000).toISOString();
     }
-    expect((await authorize(db, route.id, "req-00000000")).ok).toBe(true); // replay
+    expect(leases(db)).toHaveLength(LEASE_LIMITS.perDevice);
     const limited = await authorize(db, route.id, "req-99999999");
     expect(limited).toMatchObject({ ok: false, status: 429, code: "rate_limited", retryAfterSeconds: LEASE_LIMITS.windowSeconds });
   });
@@ -421,7 +431,7 @@ describe("authorizeRoute: ephemeral lease pool (ADR-0003)", () => {
     const db = await world({ nodes: [node("de-1", DE, "EXIT")], paths: [directPath(DE)], identities });
     const [route] = await directory(db);
     for (let i = 0; i < LEASE_LIMITS.perAccount; i += 1) {
-      const device = { ...DEVICE, id: `dev-${Math.floor(i / LEASE_LIMITS.perDevice)}` };
+      const device = { ...DEVICE, id: `dev-${i}` };
       expect((await authorize(db, route.id, null, device)).ok).toBe(true);
     }
     expect(await authorize(db, route.id, null, { ...DEVICE, id: "dev-new" })).toMatchObject({ status: 429 });
@@ -448,6 +458,89 @@ describe("authorizeRoute: ephemeral lease pool (ADR-0003)", () => {
     // Different route => different hashed key, so it is simply a new lease.
     const second = await authorize(db, r2.id, "req-00000001");
     expect(second.ok).toBe(true);
+  });
+});
+
+describe("authorizeRoute: renewal extends the live lease in place (ADR-0003)", () => {
+  const slots = (db) => db._tables.node_lease_slots;
+  const leases = (db) => db._tables.vpn_leases;
+  const twoSlots = () =>
+    world({
+      nodes: [node("de-1", DE, "EXIT")],
+      paths: [directPath(DE)],
+      identities: [
+        { node_id: "de-1", vpn_user_id: "s0", slot: 0 },
+        { node_id: "de-1", vpn_user_id: "s1", slot: 1 },
+      ],
+    });
+
+  it("same slot, same credential, later expires_at on the node's grid; no new lease, no rate-limit cost", async () => {
+    const db = await twoSlots();
+    db._tables.node_lease_policy.push({ node_id: "de-1", rotation_batch_interval_secs: 300, slot_lifetime_secs: 1800 });
+    const [route] = await directory(db);
+    const first = await authorize(db, route.id);
+    const before = Date.now();
+    const renewed = await authorize(db, route.id);
+    expect(renewed).toMatchObject({ ok: true, renewed: true, routeId: first.routeId });
+    expect(renewed.credentialEnvelope).toEqual(first.credentialEnvelope);
+    const exp = new Date(renewed.expiresAt).getTime();
+    expect(exp).toBeGreaterThan(new Date(first.expiresAt).getTime());
+    expect(exp % (300 * 1000)).toBe(0);
+    expect(exp).toBeLessThanOrEqual(before + LEASE_LIMITS.renewSeconds * 1000 + 1000);
+    expect(exp).toBeGreaterThan(before + LEASE_LIMITS.renewSeconds * 1000 - 300 * 1000 - 1000);
+    expect(leases(db)).toHaveLength(1);
+    expect(leases(db)[0].expires_at).toBe(renewed.expiresAt);
+    const leased = slots(db).find((s) => s.state === "leased");
+    expect(leased.extend_to).toBe(renewed.expiresAt); // what the node adopts
+    expect(slots(db).filter((s) => s.state === "active")).toHaveLength(1);
+  });
+
+  it("renewal is capped by the node's slot lifetime and never shortens a lease", async () => {
+    const db = await twoSlots();
+    db._tables.node_lease_policy.push({ node_id: "de-1", rotation_batch_interval_secs: 60, slot_lifetime_secs: 900 });
+    const [route] = await directory(db);
+    await authorize(db, route.id);
+    const renewed = await authorize(db, route.id);
+    expect(new Date(renewed.expiresAt).getTime()).toBeLessThanOrEqual(Date.now() + 900 * 1000);
+    leases(db)[0].expires_at = new Date(Date.now() + 3600 * 1000).toISOString();
+    const again = await authorize(db, route.id);
+    expect(again.expiresAt).toBe(leases(db)[0].expires_at);
+  });
+
+  it("a lease too close to its end, revoked, or on another route is not renewed", async () => {
+    const db = await twoSlots();
+    const [route] = await directory(db);
+    const first = await authorize(db, route.id, null, DEVICE);
+    leases(db)[0].expires_at = new Date(Date.now() + (LEASE_LIMITS.renewMinLeadSeconds - 5) * 1000).toISOString();
+    const fresh = await authorize(db, route.id, null, DEVICE);
+    expect(fresh.renewed).toBe(false);
+    expect(fresh.credentialEnvelope).not.toEqual(first.credentialEnvelope);
+    await db.rpc("revoke_device_leases", { p_device_id: DEVICE.id });
+    expect(await authorize(db, route.id, null, DEVICE)).toMatchObject({ status: 503, code: "capacity_exhausted" });
+  });
+
+  it("a slot rotated underneath the lease (node expired it) is not renewed", async () => {
+    const db = await twoSlots();
+    const [route] = await directory(db);
+    const first = await authorize(db, route.id);
+    const leased = slots(db).find((s) => s.state === "leased");
+    Object.assign(leased, { generation: 2, state: "active", lease_id: null });
+    const next = await authorize(db, route.id);
+    expect(next.renewed).toBe(false);
+    expect(next.ok).toBe(true);
+    expect(leases(db)).toHaveLength(2);
+    expect(first.ok).toBe(true);
+  });
+
+  it("revocation is urgent only when asked (abuse/admin); plain revocations wait for the node's batch", async () => {
+    const db = await twoSlots();
+    const [route] = await directory(db);
+    await authorize(db, route.id, null, DEVICE);
+    await authorize(db, route.id, null, { ...DEVICE, id: "dev-x" });
+    await db.rpc("revoke_device_leases", { p_device_id: DEVICE.id });
+    await db.rpc("revoke_device_leases", { p_device_id: "dev-x", p_urgent: true });
+    const revoked = slots(db).filter((s) => s.state === "revoked");
+    expect(revoked.map((s) => s.urgent).sort()).toEqual([false, true]);
   });
 });
 

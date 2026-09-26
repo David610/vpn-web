@@ -40,6 +40,7 @@ export function makeFakeSupabase(seed = {}, options = {}) {
     device_node_assignments: [],
     locations: [],
     node_lease_slots: [],
+    node_lease_policy: [],
     node_transport_secrets: [],
     vpn_leases: [],
     ...structuredClone(seed),

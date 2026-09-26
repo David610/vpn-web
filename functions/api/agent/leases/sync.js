@@ -8,7 +8,10 @@ import { LEASE_LIMITS } from "../../../lib/vpn-authorize.js";
  *
  * The provisioning agent reports its full local lease pool every poll:
  *   { slots: [{ slot, generation, valid_until, vless_uuid?, hysteria2_password? }],
- *     hysteria2_obfs_password?: string | null }
+ *     hysteria2_obfs_password?: string | null,
+ *     policy?: { rotation_batch_interval_secs, slot_lifetime_secs } }
+ * `policy` is the node's rotation grid and slot lifetime; renewals are
+ * computed on it so the returned expires_at is what the node enforces.
  * A slot generation is reported only AFTER vpn-admin applied it to the live
  * sing-box config, so a new generation becomes leasable immediately. Secrets
  * are sent only for generations the control plane has not stored yet (the
@@ -16,10 +19,12 @@ import { LEASE_LIMITS } from "../../../lib/vpn-authorize.js";
  * encrypted here before they reach Postgres. Nothing here is ever logged.
  *
  * Response: { as_of, min_remaining_seconds, obfs_stored, need_secret: [slot],
- *             slots: [{ slot, generation, state }] }
+ *             slots: [{ slot, generation, state, urgent, extend_to }] }
  * where state is active | leased | revoked. The agent rotates `revoked`
- * slots immediately and never relies on this response for expiry: every
- * slot's valid_until is enforced on the node regardless.
+ * slots at its next batch boundary (immediately when `urgent`), adopts
+ * `extend_to` for leased slots (renewal; no sing-box restart), and never
+ * relies on this response for expiry: every slot's valid_until is enforced
+ * on the node regardless.
  */
 export const MAX_SLOTS = 1024;
 // A node must not mint credentials that outlive this, whatever its clock
@@ -28,6 +33,16 @@ export const MAX_SLOT_LIFETIME_MS = 2 * 60 * 60 * 1000;
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const PASSWORD_RE = /^[\x21-\x7e]{16,128}$/;
+
+export function validatePolicy(policy) {
+  if (policy === undefined || policy === null) return { policy: null };
+  const grid = policy.rotation_batch_interval_secs;
+  const life = policy.slot_lifetime_secs;
+  if (!Number.isInteger(grid) || grid < 60 || grid > 3600 || !Number.isInteger(life) || life < 900 || life > 7200) {
+    return { error: "policy must be {rotation_batch_interval_secs: 60..3600, slot_lifetime_secs: 900..7200}" };
+  }
+  return { policy: { rotation_batch_interval_secs: grid, slot_lifetime_secs: life } };
+}
 
 export function validateSlots(body, now = Date.now()) {
   const slots = body?.slots;
@@ -71,6 +86,8 @@ export async function onRequestPost({ env, request }) {
   }
   const { slots, error: validationError } = validateSlots(body);
   if (validationError) return json({ error: validationError }, 400);
+  const { policy, error: policyError } = validatePolicy(body.policy);
+  if (policyError) return json({ error: policyError }, 400);
   const obfs = body.hysteria2_obfs_password;
   if (obfs !== undefined && obfs !== null && !PASSWORD_RE.test(obfs)) {
     return json({ error: "hysteria2_obfs_password is malformed" }, 400);
@@ -105,7 +122,11 @@ export async function onRequestPost({ env, request }) {
       }
       obfsStored = true;
     }
-    const { data, error } = await supabaseAdmin.rpc("agent_sync_lease_slots", { p_node_id: nodeId, p_slots: payload });
+    const { data, error } = await supabaseAdmin.rpc("agent_sync_lease_slots", {
+      p_node_id: nodeId,
+      p_slots: payload,
+      p_policy: policy,
+    });
     if (error) {
       console.error("agent/leases/sync: rpc failed:", error.message);
       return json({ error: "Internal error" }, 500);
