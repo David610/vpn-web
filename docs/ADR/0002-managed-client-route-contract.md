@@ -134,5 +134,17 @@ decision — see Consequence.
 
 ## Status
 
-Accepted. Implementation is future work, tracked as its own project per
-Consequence above.
+Accepted. Implementation is tracked as its own project per Consequence
+above, decomposed into three sub-projects:
+
+- **A — Ed25519 signing infrastructure + `GET /v1/routes`: SHIPPED**
+  (`docs/superpowers/specs/2026-09-26-adr0002-signed-route-directory-design.md`).
+  vpn-web-only this pass — no `singbox-vpn`-side change generates real
+  transport data yet (that piece needs a session with a Rust toolchain to
+  compile-verify it; none was available here), so the directory correctly
+  returns an empty `routes` array until a node actually reports one.
+- **B — `POST /v1/vpn/authorize` (per-connection pseudonymous credential
+  issuance): not started.** Needs its own design pass — today's per-node
+  credential model is per-device, not per-connection/short-lived.
+- **C — real interop testing against `tamara-next`'s built client: not
+  started.**
