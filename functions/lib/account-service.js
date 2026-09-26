@@ -267,7 +267,9 @@ export async function removeDevice(supabaseAdmin, env, user, deviceId) {
   const account = await accountOf(supabaseAdmin, user);
   const device = await deviceOrFail(supabaseAdmin, account, deviceId);
   if (!device) return fail(404, "Device not found.");
-  const { revoked } = await revokeDevice(supabaseAdmin, env, device, `device-revoked:${device.id}`);
+  const { revoked } = await revokeDevice(supabaseAdmin, env, device, `device-revoked:${device.id}`, {
+    urgent: device.user_id !== user.id,
+  });
   if (!revoked) return fail(409, "The device changed at the same time. Try again.");
   // A freed place may bring an over-capacity device into service.
   await reconcile(supabaseAdmin, env, account.accountId, `device-freed:${device.id}`);
@@ -380,7 +382,12 @@ export async function requestAccountDeletion(supabaseAdmin, env, user, password)
 
   const devices = await listDevices(supabaseAdmin, account.accountId);
   for (const device of devices.filter((d) => d.status !== "REVOKED")) {
-    await revokeDevice(supabaseAdmin, env, device, `account-deleted:${device.id}`);
+    // The owner's own devices: non-urgent (self-service). Other members'
+    // devices: the owner is acting against another person, same as removing
+    // a member, so their credentials rotate now.
+    await revokeDevice(supabaseAdmin, env, device, `account-deleted:${device.id}`, {
+      urgent: device.user_id !== user.id,
+    });
   }
   return ok({ ok: true, deletion: "scheduled" }, 202);
 }

@@ -67,7 +67,9 @@ export async function onRequestDelete({ env, request, params }) {
           supabaseAdmin,
           env,
           device,
-          `member-removed:${account.accountId}:${targetUserId}`
+          `member-removed:${account.accountId}:${targetUserId}`,
+          // Admin action against another person: rotate now, not at the batch.
+          { urgent: true }
         );
       } catch (err) {
         // The membership is already gone, so this cannot be rolled back.
