@@ -924,7 +924,7 @@ Flutter evidence:
 - audit-only screenshot harness on feat/arcana-design-audit in tamara-next;
 - no product UI changes are part of that harness.
 
-Earlier black rectangles reported from widget-test fonts are not considered defects unless reproduced outside test rendering.
+The Flutter golden renders reproduce the earlier black/gray text rectangles caused by the test font. Layout, rules, controls and navigation still render correctly, so those rectangles are confirmed test-render artifacts and are not filed as production UI defects.
 
 ## Files / Components Most Affected
 
