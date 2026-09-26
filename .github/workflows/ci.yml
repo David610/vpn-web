@@ -131,3 +131,6 @@ jobs:
 
       - name: Validate node enrollment migration semantics in PostgreSQL
         run: bash scripts/test-node-enrollment-migration.sh
+
+      - name: Validate route directory migration semantics in PostgreSQL
+        run: bash scripts/test-route-directory-migration.sh

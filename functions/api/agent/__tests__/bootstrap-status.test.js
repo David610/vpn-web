@@ -55,4 +55,58 @@ describe("POST /api/agent/bootstrap-status", () => {
     });
     expect(updateEq).toHaveBeenCalledWith("node_id", "n1");
   });
+
+  it("persists a well-formed vless-reality transport report alongside COMPLETE", async () => {
+    const res = await onRequestPost({
+      env,
+      request: req({
+        stage: "COMPLETE",
+        status: "OK",
+        message: "bootstrap complete",
+        transport: {
+          transport: "vless-reality",
+          server_port: 443,
+          tls_server_name: "decoy.example.test",
+          reality_public_key: "abc123",
+          reality_short_id: "def456",
+          reality_fingerprint: "chrome",
+          vless_flow: "xtls-rprx-vision",
+        },
+      }),
+    });
+    expect(res.status).toBe(200);
+    expect(nodesUpdate.mock.calls[0][0]).toMatchObject({
+      transport: "vless-reality",
+      transport_port: 443,
+      tls_server_name: "decoy.example.test",
+      reality_public_key: "abc123",
+      reality_short_id: "def456",
+      reality_fingerprint: "chrome",
+      vless_flow: "xtls-rprx-vision",
+    });
+  });
+
+  it("drops a malformed transport report without failing the rest of the bootstrap-status update", async () => {
+    const res = await onRequestPost({
+      env,
+      request: req({
+        stage: "COMPLETE",
+        status: "OK",
+        message: "bootstrap complete",
+        transport: { transport: "carrier-pigeon", server_port: 443 },
+      }),
+    });
+    expect(res.status).toBe(200);
+    expect(nodesUpdate.mock.calls[0][0]).not.toHaveProperty("transport");
+    expect(nodesUpdate.mock.calls[0][0]).toMatchObject({ bootstrap_stage: "COMPLETE", bootstrap_status: "OK" });
+  });
+
+  it("does nothing extra when transport is omitted entirely (today's real agents)", async () => {
+    const res = await onRequestPost({
+      env,
+      request: req({ stage: "COMPLETE", status: "OK", message: "bootstrap complete" }),
+    });
+    expect(res.status).toBe(200);
+    expect(nodesUpdate.mock.calls[0][0]).not.toHaveProperty("transport");
+  });
 });
