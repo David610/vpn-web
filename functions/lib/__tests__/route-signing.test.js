@@ -13,6 +13,7 @@ const NODES = [
   {
     nodeId: "de-fsn-001", role: "EXIT", locationId: "loc-de", lifecycleState: "READY",
     configuredUsers: 5, maxSessions: 100, hostname: "de-fsn-001.nodes.example.test",
+    ipAddress: "203.0.113.10",
     transport: "vless-reality", transportPort: 443, tlsServerName: "decoy.example.test",
     realityPublicKey: "pub", realityShortId: "sid", realityFingerprint: "chrome", vlessFlow: "xtls-rprx-vision",
   },

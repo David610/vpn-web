@@ -58,4 +58,28 @@ describe("GET /v1/routes", () => {
       expect.objectContaining({ nodes: [], locations: [], allowedPaths: [] })
     );
   });
+
+  it("maps a node's ip_address to ipAddress -- route-directory.js requires it, never hostname, for server_address", async () => {
+    db = makeFakeSupabase({
+      nodes: [
+        {
+          node_id: "de-fsn-001",
+          role: "EXIT",
+          location_id: "loc-de",
+          lifecycle_state: "READY",
+          hostname: "de-fsn-001.nodes.example.test",
+          ip_address: "203.0.113.10",
+        },
+      ],
+      locations: [],
+      allowed_paths: [],
+    });
+    await onRequestGet({ env, request: makeRequest() });
+    expect(signRouteDirectory).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({
+        nodes: [expect.objectContaining({ nodeId: "de-fsn-001", ipAddress: "203.0.113.10" })],
+      })
+    );
+  });
 });

@@ -14,7 +14,7 @@ export const onRequestGet = (context) =>
         db
           .from("nodes")
           .select(
-            "node_id, role, location_id, lifecycle_state, configured_users, max_sessions, hostname, failure_domain, transport, transport_port, tls_server_name, reality_public_key, reality_short_id, reality_fingerprint, vless_flow, hysteria2_obfs_type"
+            "node_id, role, location_id, lifecycle_state, configured_users, max_sessions, hostname, ip_address, failure_domain, transport, transport_port, tls_server_name, reality_public_key, reality_short_id, reality_fingerprint, vless_flow, hysteria2_obfs_type"
           )
           .in("lifecycle_state", ["READY", "CANARY"]),
         db.from("locations").select("id, country_code, display_name").eq("enabled", true),
@@ -32,6 +32,7 @@ export const onRequestGet = (context) =>
       configuredUsers: n.configured_users,
       maxSessions: n.max_sessions,
       hostname: n.hostname,
+      ipAddress: n.ip_address,
       failureDomain: n.failure_domain,
       transport: n.transport,
       transportPort: n.transport_port,
