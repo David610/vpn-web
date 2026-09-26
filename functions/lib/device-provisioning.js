@@ -179,6 +179,21 @@ async function disableIdentity(supabaseAdmin, device, identity, key) {
 }
 
 /**
+ * The CREATE_USER job payload for a device's identity on a node — pulled
+ * out so vpn-authorize.js can enqueue an identical job when authorize-time
+ * credential resolution finds no existing identity, without re-deriving
+ * the clearExpiry/serviceExpiresAt branching here.
+ */
+export function buildCreateUserPayload(device, entitlement) {
+  const payload = { user_id: device.user_id, device_id: device.id };
+  if (!entitlement.clearExpiry) {
+    if (!entitlement.serviceExpiresAt) throw new Error("finite entitlement is missing serviceExpiresAt");
+    payload.expires_at = entitlement.serviceExpiresAt;
+  }
+  return payload;
+}
+
+/**
  * Reconciles ONE device's identities with its entitlement and placement.
  *
  * @param {object} args
@@ -223,11 +238,7 @@ export async function reconcileDeviceProvisioning(
   const current = identities.find((i) => i.node_id === nodeId);
 
   if (!current) {
-    const payload = { user_id: device.user_id, device_id: device.id };
-    if (!entitlement.clearExpiry) {
-      if (!entitlement.serviceExpiresAt) throw new Error("finite entitlement is missing serviceExpiresAt");
-      payload.expires_at = entitlement.serviceExpiresAt;
-    }
+    const payload = buildCreateUserPayload(device, entitlement);
     await insertJob(supabaseAdmin, {
       idempotency_key: `${idempotencyPrefix}:create:${device.id}:${nodeId}`,
       node_id: nodeId,
