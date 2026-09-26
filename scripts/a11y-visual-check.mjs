@@ -1,3 +1,4 @@
+// Arcana design audit capture: includes public pages and exact phone widths.
 // Stage C6 validation: real rendered /account/* and /admin/* pages across
 // breakpoints, with a mocked Supabase session + mocked API responses
 // (Playwright request interception) since no real Supabase/Stripe backend
