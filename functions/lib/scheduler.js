@@ -46,7 +46,7 @@ export function selectNodeForDevice({ candidates, stickyNodeId }) {
   return sorted[0].nodeId;
 }
 
-function isUnderCapacity(node) {
+export function isUnderCapacity(node) {
   const effectiveMax =
     node.lifecycleState === "CANARY"
       ? Math.min(node.maxSessions ?? Infinity, CANARY_SESSION_CAP)
