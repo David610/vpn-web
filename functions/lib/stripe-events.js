@@ -217,10 +217,10 @@ export async function handleInvoicePaid(supabaseAdmin, invoice, env = {}) {
   const isFirstInvoice = invoice.billing_reason === "subscription_create";
 
   if (isFirstInvoice) {
-    // At the first invoice the account usually has exactly one member — the
-    // owner who just completed Checkout — because seats can only be invited
-    // from a billed account. Members who join later are provisioned by the
-    // invite-acceptance path, not from here.
+    // At the first invoice the account has its one person — the owner who
+    // just completed Checkout (one person per account; legacy multi-member
+    // rows, if any, are provisioned by the old invite-acceptance path, not
+    // from here).
     //
     // For a subscription that began as a trial this is a no-op: the trial
     // handler already enqueued these under the same idempotency keys.
@@ -358,7 +358,8 @@ export async function handleSubscriptionTrialing(supabaseAdmin, subscription, en
 }
 
 /**
- * Enqueues a DISABLE_USER job for every provisioned seat on an account.
+ * Enqueues a DISABLE_USER job for every provisioned VPN user on an account
+ * (normally just the one person; "member" rows are the legacy model).
  *
  * Shared by customer.subscription.updated (dunning reaching canceled/unpaid)
  * and customer.subscription.deleted, which have identical revocation
@@ -437,10 +438,11 @@ export async function handleSubscriptionUpdated(supabaseAdmin, subscription, sea
       status: subscription.status,
       current_period_end: currentPeriodEnd,
       cancel_at_period_end: Boolean(subscription.cancel_at_period_end),
-      // Stripe is the source of truth for how many seats are paid for; this
-      // column is only ever a mirror of the per-seat item's quantity. Every
-      // seat change — bought here, or refunded/adjusted in the Stripe
-      // dashboard — arrives as this event, so syncing here covers both.
+      // Stripe is the source of truth for how many extra devices this
+      // subscription pays for (+3 per pack); extra_seats (legacy name) is
+      // only a mirror of the pack item's quantity in devices. Every pack
+      // change — bought here, or refunded/adjusted in the Stripe dashboard —
+      // arrives as this event, so syncing here covers both.
       extra_seats: getExtraSeatCount(subscription, seatPriceId),
       updated_at: new Date().toISOString(),
     })

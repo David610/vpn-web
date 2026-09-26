@@ -1,5 +1,15 @@
 /**
- * Seat-pack billing constants shared between server code (functions/lib,
+ * Product model (current): one person per account; an account can hold
+ * several subscriptions; each subscription covers 3 devices and can add
+ * +3-device packs; devices can be moved between the account's
+ * subscriptions. There are no shared seats, seat pools or member invites.
+ *
+ * The "seat" identifiers below are LEGACY NAMES kept for compatibility
+ * with the Stripe pack price (STRIPE_SEAT_PRICE_ID) and the
+ * subscriptions.extra_seats column, which now count extra DEVICES on one
+ * subscription. New code should use INCLUDED_DEVICES / DEVICE_PACK_SIZE.
+ *
+ * Device-pack billing constants shared between server code (functions/lib,
  * functions/api) and client UI (src/components) so there is exactly one
  * place that defines them — no independently-maintained duplicate on
  * either side to drift out of sync.
@@ -8,13 +18,13 @@
  * it is safe to import from a client bundle.
  */
 
-/** Seats included in the base price before any per-seat-pack item is billed. */
+/** Devices included in a subscription's base price (legacy name). */
 export const INCLUDED_SEATS = 3;
 
 /**
- * Extra seats are sold in packs, not one at a time. `subscriptions.
- * extra_seats` remains the source-of-truth mirror of Stripe's seat-item
- * quantity, in seats (not packs); this constant only converts between the
+ * Extra devices are sold in packs, not one at a time. `subscriptions.
+ * extra_seats` remains the source-of-truth mirror of Stripe's pack-item
+ * quantity, in extra devices (not packs); this constant only converts between the
  * two at the edges — the purchase API's request/response shape and
  * pack-quantity-shaped error messages.
  *
@@ -22,8 +32,8 @@ export const INCLUDED_SEATS = 3;
  * share the value 3 today (per the fleet platform plan's target model,
  * `seat_capacity = INCLUDED_SEATS * (1 + pack_quantity)`), but they are
  * billed as separate Stripe prices and are conceptually independent knobs
- * — changing the base plan's included-seat count must not silently change
- * what a seat pack contains, and vice versa.
+ * — changing a subscription's included-device count must not silently
+ * change what a device pack contains, and vice versa.
  */
 export const SEAT_PACK_SIZE = 3;
 
@@ -32,7 +42,7 @@ export const SEAT_PACK_SIZE = 3;
  * non-pack-aligned `extra_seats` value (only reachable via a manual Stripe
  * dashboard edit — our own purchase API only ever writes multiples of
  * SEAT_PACK_SIZE) is never under-reported: the caller always sees at least
- * as many packs as the seats actually in place.
+ * as many packs as the extra devices actually in place.
  */
 export function packQuantityFromExtraSeats(extraSeats) {
   return Math.ceil(Math.max(0, extraSeats) / SEAT_PACK_SIZE);

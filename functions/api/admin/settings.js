@@ -1,5 +1,6 @@
 import { requireAdmin } from "../../lib/admin-auth.js";
 import { createClient } from "@supabase/supabase-js";
+import { configPresence } from "../../lib/admin-fleet.js";
 import { BASE_PRICE_CENTS, DEVICE_PACK_SIZE, INCLUDED_DEVICES, PACK_PRICE_CENTS } from "../../lib/seat-constants.js";
 
 function jsonResponse(body, status = 200) {
@@ -52,5 +53,7 @@ export async function onRequestGet({ env, request }) {
       telegram: set(env.TELEGRAM_BOT_TOKEN),
       siteUrl: set(env.SITE_URL) ? env.SITE_URL : null,
     },
+    // Presence-only readiness list, grouped (never includes values).
+    readiness: configPresence(env),
   });
 }
