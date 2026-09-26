@@ -2,6 +2,14 @@ import { selectNodeForDevice, isUnderCapacity } from "./scheduler.js";
 
 const HAS_TRANSPORT = (node) => typeof node.transport === "string" && node.transport.length > 0;
 
+// tamara-next's real client (VpnHop's constructor) requires server_address
+// to be an IP literal for any non-chained hop -- a deliberate property so
+// encrypted DNS never needs plaintext bootstrap before the tunnel exists.
+// node.hostname is a DNS name (used only for tls_server_name/SNI); the
+// node's real public IP lives in node.ipAddress. Confirmed against a real
+// interop failure: see tamara-next's vpn_web_interop_test.dart.
+const HAS_IP_ADDRESS = (node) => typeof node.ipAddress === "string" && node.ipAddress.length > 0;
+
 // scheduler.js's own DB-facing callers already filter to READY/CANARY at
 // the query level (`.in("lifecycle_state", ["READY", "CANARY"])`) before
 // isUnderCapacity ever runs -- isUnderCapacity itself does not reject a
@@ -17,7 +25,7 @@ const ELIGIBLE_LIFECYCLE_STATES = new Set(["READY", "CANARY"]);
 function toHop(node) {
   const hop = {
     transport: node.transport,
-    server_address: node.hostname,
+    server_address: node.ipAddress,
     server_port: node.transportPort,
     tls_server_name: node.tlsServerName,
   };
@@ -34,7 +42,11 @@ function toHop(node) {
 
 function pickNode(candidates) {
   const eligible = candidates.filter(
-    (node) => ELIGIBLE_LIFECYCLE_STATES.has(node.lifecycleState) && HAS_TRANSPORT(node) && isUnderCapacity(node)
+    (node) =>
+      ELIGIBLE_LIFECYCLE_STATES.has(node.lifecycleState) &&
+      HAS_TRANSPORT(node) &&
+      HAS_IP_ADDRESS(node) &&
+      isUnderCapacity(node)
   );
   const nodeId = selectNodeForDevice({ candidates: eligible, stickyNodeId: null });
   return eligible.find((node) => node.nodeId === nodeId) ?? null;

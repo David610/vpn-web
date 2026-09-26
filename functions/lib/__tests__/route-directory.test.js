@@ -9,6 +9,7 @@ const EXIT_DE = {
   configuredUsers: 5,
   maxSessions: 100,
   hostname: "de-fsn-001.nodes.example.test",
+  ipAddress: "203.0.113.10",
   failureDomain: "hetzner/de",
   transport: "vless-reality",
   transportPort: 443,
@@ -25,6 +26,7 @@ const RELAY_SE = {
   role: "RELAY",
   locationId: "loc-se",
   hostname: "se-fsn-001.nodes.example.test",
+  ipAddress: "203.0.113.20",
   failureDomain: "hetzner/se",
   tlsServerName: "decoy2.example.test",
   realityPublicKey: "pub-se",
@@ -50,7 +52,7 @@ describe("renderRoutes", () => {
         hops: [
           {
             transport: "vless-reality",
-            server_address: "de-fsn-001.nodes.example.test",
+            server_address: "203.0.113.10",
             server_port: 443,
             tls_server_name: "decoy1.example.test",
             reality_public_key: "pub-de",
@@ -75,6 +77,12 @@ describe("renderRoutes", () => {
     expect(routes).toEqual([]);
   });
 
+  it("excludes a node that has no ip_address yet -- server_address must be a real address, never a hostname", () => {
+    const { ipAddress, ...withoutIp } = EXIT_DE;
+    const { routes } = renderRoutes({ nodes: [withoutIp], locations: LOCATIONS, allowedPaths: [] });
+    expect(routes).toEqual([]);
+  });
+
   it("produces one privacy_plus route per enabled allowed_paths pair with both hops eligible", () => {
     const { routes } = renderRoutes({
       nodes: [EXIT_DE, RELAY_SE],
@@ -84,8 +92,8 @@ describe("renderRoutes", () => {
     const privacyRoute = routes.find((r) => r.mode === "privacy_plus");
     expect(privacyRoute).toMatchObject({ id: "se-de-privacy", mode: "privacy_plus" });
     expect(privacyRoute.hops).toHaveLength(2);
-    expect(privacyRoute.hops[0].server_address).toBe("se-fsn-001.nodes.example.test");
-    expect(privacyRoute.hops[1].server_address).toBe("de-fsn-001.nodes.example.test");
+    expect(privacyRoute.hops[0].server_address).toBe("203.0.113.20");
+    expect(privacyRoute.hops[1].server_address).toBe("203.0.113.10");
   });
 
   it("omits a privacy_plus pair entirely when only one hop has an eligible node -- never half-populated", () => {
