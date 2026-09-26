@@ -3,6 +3,8 @@ import { authenticateNode } from "../../lib/node-auth.js";
 import { canTransitionLifecycle } from "../../lib/node-lifecycle.js";
 import { evaluateProbeResult, SILENCE_ELIGIBLE_STATES } from "../../lib/node-health-transition.js";
 import { failSilentNodes } from "../../lib/node-silence-failover.js";
+import { protocolAllowsRecovery, sanitizeProtocolReport } from "../../lib/protocol-health.js";
+import { applyProtocolReport } from "../../lib/protocol-health-store.js";
 
 function json(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -72,9 +74,23 @@ export async function onRequestPost({ env, request }) {
 
   const autoHealth = env.FEATURE_AUTO_NODE_HEALTH === "true";
 
+  // Phase 4 protocol probes (REALITY/Hysteria2 handshakes measured by
+  // this node against peers and itself). Applied first so the node's own
+  // evaluation below sees current protocol counters. Never fatal: a bad
+  // report must not cost the heartbeat.
+  const protocolReport = sanitizeProtocolReport(body.protocol_probe);
+  if (protocolReport) {
+    if (protocolReport.certDays !== null) update.hysteria2_cert_days = protocolReport.certDays;
+    try {
+      await applyProtocolReport({ supabase: supabaseAdmin, reporterNodeId: nodeId, report: protocolReport, autoHealth });
+    } catch (err) {
+      console.error("agent/heartbeat: protocol report failed:", err?.message ?? err);
+    }
+  }
+
   const { data: currentNode } = await supabaseAdmin
     .from("nodes")
-    .select("lifecycle_state, consecutive_probe_failures, consecutive_probe_successes, failed_reason")
+    .select("lifecycle_state, consecutive_probe_failures, consecutive_probe_successes, failed_reason, protocol_probe_failures")
     .eq("node_id", nodeId)
     .maybeSingle();
 
@@ -89,9 +105,17 @@ export async function onRequestPost({ env, request }) {
     });
     update.consecutive_probe_failures = evalResult.failures;
     update.consecutive_probe_successes = evalResult.successes;
+    // DEGRADED -> READY also needs protocol evidence to be passing (or
+    // absent): a healthy Clash probe must not undo a peer-observed
+    // REALITY/Hysteria2 failure.
+    const blockedByProtocol =
+      evalResult.nextState === "READY" &&
+      currentNode.lifecycle_state === "DEGRADED" &&
+      !protocolAllowsRecovery(currentNode);
     if (
       autoHealth &&
       evalResult.nextState &&
+      !blockedByProtocol &&
       canTransitionLifecycle(currentNode.lifecycle_state, evalResult.nextState)
     ) {
       nextState = evalResult.nextState;

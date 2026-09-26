@@ -67,8 +67,11 @@ project with `scripts/setup-fleet-cron.mjs`.
 ## What readiness does NOT yet prove
 
 The Worker cannot speak UDP or run a sing-box client, so READY today means
-DNS + certificate + TCP listener + agent alive. Hysteria2 and full REALITY
-handshake probes run from peer nodes in the synthetic-health phase.
+DNS + certificate + TCP listener + agent alive. Real Hysteria2 and REALITY
+handshake + egress probes run on the nodes themselves: peers probe each
+other, and each node also probes itself over loopback. After READY they
+feed DEGRADED/READY (see FLEET_LIFECYCLE_AUTOMATION.md, "Protocol-level
+probes").
 
 ## Evidence
 
