@@ -34,6 +34,59 @@ describe("buildNodeBootstrapUserData", () => {
     expect(BOOTSTRAP_SCRIPT).toContain('--reality-handshake-server "$REALITY_HANDSHAKE_SERVER"');
   });
 
+  it("reads the REALITY key files and reports them as the transport on INSTALL OK", () => {
+    expect(BOOTSTRAP_SCRIPT).toContain("/etc/vpn/compat/reality/public.key");
+    expect(BOOTSTRAP_SCRIPT).toContain("/etc/vpn/compat/reality/short_id.txt");
+    expect(BOOTSTRAP_SCRIPT).toContain('"transport":"vless-reality"');
+    expect(BOOTSTRAP_SCRIPT).toContain('"reality_fingerprint":"chrome"');
+    expect(BOOTSTRAP_SCRIPT).toContain('"vless_flow":"xtls-rprx-vision"');
+    // tls_server_name is the REALITY decoy SNI -- the handshake server the
+    // node was given, not its own public hostname.
+    expect(BOOTSTRAP_SCRIPT).toContain('"tls_server_name":"%s"');
+    const installReport = BOOTSTRAP_SCRIPT.indexOf('report INSTALL OK "singbox-vpn');
+    expect(installReport).toBeGreaterThan(-1);
+    expect(BOOTSTRAP_SCRIPT.slice(installReport, installReport + 200)).toContain(
+      "$(transport_report_json)"
+    );
+  });
+
+  it("sanitizes the REALITY key file contents before splicing them into JSON -- a corrupted file must never break the whole bootstrap-status report", () => {
+    // bootstrap-status.js's JSON.parse fails the ENTIRE request (stage,
+    // status, message included) on malformed JSON, not just the optional
+    // transport fields (validateTransport's own docstring says a bad
+    // transport report should be dropped silently, not take the rest of
+    // the report down with it). A stray quote/newline from a corrupted
+    // key file must be stripped before it ever reaches printf's %s slots
+    // -- same treatment report()'s own `message` argument already gets
+    // via `tr -cd`.
+    const fnStart = BOOTSTRAP_SCRIPT.indexOf("transport_report_json()");
+    const fnBody = BOOTSTRAP_SCRIPT.slice(fnStart, BOOTSTRAP_SCRIPT.indexOf("\n}", fnStart) + 2);
+    expect(fnBody).toMatch(/public\.key.*2>\/dev\/null \| tr -cd '[^']+' \|\| true/);
+    expect(fnBody).toMatch(/short_id\.txt.*2>\/dev\/null \| tr -cd '[^']+' \|\| true/);
+  });
+
+  it("never fails the INSTALL stage when the REALITY key files are absent", () => {
+    // transport_report_json must fall back to an empty string (falsy in
+    // bash's [ -n "$transport" ] check), not set -e-abort the script,
+    // when the files don't exist -- "|| true" terminates each read
+    // pipeline (cat | tr) regardless of whether the file existed.
+    const fnStart = BOOTSTRAP_SCRIPT.indexOf("transport_report_json()");
+    expect(fnStart).toBeGreaterThan(-1);
+    const fnBody = BOOTSTRAP_SCRIPT.slice(fnStart, BOOTSTRAP_SCRIPT.indexOf("\n}", fnStart) + 2);
+    expect(fnBody).toMatch(/2>\/dev\/null \| tr -cd '[^']+' \|\| true/g);
+    expect(fnBody).toMatch(/echo ""/);
+  });
+
+  it("splices a transport object into report()'s body only when given one", () => {
+    const reportStart = BOOTSTRAP_SCRIPT.indexOf("report() {");
+    const reportBody = BOOTSTRAP_SCRIPT.slice(reportStart, BOOTSTRAP_SCRIPT.indexOf("\n}", reportStart) + 2);
+    expect(reportBody).toContain('"transport":%s');
+    // Not "${4:-}" -- inside this file's JS template literal, "${4:-}"
+    // parses as a JS interpolation slot (4:- is not a valid expression)
+    // and breaks the whole file. "$#"-gated assignment avoids the clash.
+    expect(reportBody).toContain('[ "$#" -ge 4 ] && transport="$4"');
+  });
+
   it("puts the token only in the 0600 env file -- never in a URL or a command line", () => {
     const ud = buildNodeBootstrapUserData(valid);
     expect(ud.split(valid.enrollmentToken).length - 1).toBe(1);

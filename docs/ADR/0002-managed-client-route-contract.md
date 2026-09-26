@@ -139,10 +139,12 @@ above, decomposed into three sub-projects:
 
 - **A — Ed25519 signing infrastructure + `GET /v1/routes`: SHIPPED**
   (`docs/superpowers/specs/2026-09-26-adr0002-signed-route-directory-design.md`).
-  vpn-web-only this pass — no `singbox-vpn`-side change generates real
-  transport data yet (that piece needs a session with a Rust toolchain to
-  compile-verify it; none was available here), so the directory correctly
-  returns an empty `routes` array until a node actually reports one.
+  Nodes now report their `vless-reality` transport parameters during the
+  bootstrap script's INSTALL stage (no `singbox-vpn`/Rust change needed —
+  the REALITY key files `install.sh` already writes were simply never
+  read and sent). Every fleet node also runs Hysteria2 simultaneously,
+  but `nodes.transport` is a single value; exposing Hysteria2 as a second
+  route hop per node is a documented follow-up, not done here.
 - **B — `POST /v1/vpn/authorize` (per-connection pseudonymous credential
   issuance): SHIPPED**
   (`docs/superpowers/specs/2026-09-26-adr0002-vpn-authorize-design.md`).

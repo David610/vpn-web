@@ -104,12 +104,17 @@ auth_header_file() {
 }
 
 report() {
-  local stage="$1" status="$2" message="$3" key hdr body
+  local stage="$1" status="$2" message="$3" transport="" key hdr body
+  [ "$#" -ge 4 ] && transport="$4"
   key="$(agent_key)"
   [ -n "$key" ] || return 0
   [ -f "$STATE_DIR/enrolled" ] || return 0
   message="$(printf '%s' "$message" | tr -cd 'A-Za-z0-9 _.,:/()=+-' | cut -c1-400)"
-  body="$(printf '{"stage":"%s","status":"%s","message":"%s"}' "$stage" "$status" "$message")"
+  if [ -n "$transport" ]; then
+    body="$(printf '{"stage":"%s","status":"%s","message":"%s","transport":%s}' "$stage" "$status" "$message" "$transport")"
+  else
+    body="$(printf '{"stage":"%s","status":"%s","message":"%s"}' "$stage" "$status" "$message")"
+  fi
   hdr="$(auth_header_file report "$key")"
   curl -fsS --connect-timeout 10 --max-time 20 -o /dev/null -X POST \
     -H @"$hdr" -H 'Content-Type: application/json' --data "$body" \
@@ -212,6 +217,36 @@ stage_dns_wait() {
   return 1
 }
 
+# REALITY key files are written by install.sh's init_reality_keys (via the
+# prebuilt vpn-admin binary) during stage_install, on this same node --
+# nothing here regenerates or derives them. tls_server_name is the REALITY
+# decoy/masquerade SNI (REALITY_HANDSHAKE_SERVER), never this node's own
+# public hostname. reality_fingerprint and vless_flow are fixed deployment
+# choices, not per-node data. Every fleet node also runs Hysteria2
+# simultaneously (deployment.toml's [hysteria2] section) but nodes.transport
+# is a single value -- this reports vless-reality only; Hysteria2 exposure
+# via the route directory is a documented follow-up, not this pass.
+# Absent/unreadable key files (e.g. an older install.sh) must never fail
+# the INSTALL stage: falls back to an empty string, which report() treats
+# as "no transport to include".
+transport_report_json() {
+  local pubkey short_id
+  # base64 (public.key) and hex (short_id.txt) are both subsets of this
+  # allowlist. A quote/backslash/newline from a corrupted file must never
+  # reach the printf below -- bootstrap-status.js's JSON.parse fails the
+  # WHOLE request (stage/status/message included) on malformed JSON, not
+  # just these optional fields, the same reasoning report()'s own
+  # message argument is already filtered through tr -cd for.
+  pubkey="$(cat /etc/vpn/compat/reality/public.key 2>/dev/null | tr -cd 'A-Za-z0-9+/=' || true)"
+  short_id="$(cat /etc/vpn/compat/reality/short_id.txt 2>/dev/null | tr -cd 'A-Za-z0-9+/=' || true)"
+  if [ -z "$pubkey" ] || [ -z "$short_id" ]; then
+    echo ""
+    return 0
+  fi
+  printf '{"transport":"vless-reality","server_port":443,"tls_server_name":"%s","reality_public_key":"%s","reality_short_id":"%s","reality_fingerprint":"chrome","vless_flow":"xtls-rprx-vision"}' \
+    "$REALITY_HANDSHAKE_SERVER" "$pubkey" "$short_id"
+}
+
 stage_install() {
   CURRENT_STAGE=INSTALL
   [ -f "$STATE_DIR/install.ok" ] && return 0
@@ -224,7 +259,7 @@ stage_install() {
     --reality-handshake-server "$REALITY_HANDSHAKE_SERVER"
   [ -x /usr/local/bin/vpn-provisioning-agent ] || { log "release $SINGBOX_VPN_VERSION does not ship vpn-provisioning-agent"; return 1; }
   touch "$STATE_DIR/install.ok"
-  report INSTALL OK "singbox-vpn $SINGBOX_VPN_VERSION installed"
+  report INSTALL OK "singbox-vpn $SINGBOX_VPN_VERSION installed" "$(transport_report_json)"
 }
 
 stage_agent() {
