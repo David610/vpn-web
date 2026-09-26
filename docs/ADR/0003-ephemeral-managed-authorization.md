@@ -104,7 +104,12 @@ boundary, never later than `now + lifetime`, never more than 2 h ahead.
    removing a member (`DELETE /api/account/members/{id}`) or revoking
    another member's device; operators use `select
    revoke_device_leases(id, true)` for abuse. A user removing their own
-   device, signing out, or deleting their account is non-urgent. If the
+   device, signing out, or deleting their account is non-urgent for their
+   own devices; account deletion revokes other members' devices urgently
+   (the owner is acting against another person, as when removing a member).
+   `lease_route_slots` re-checks `devices.status` under the same per-device
+   lock `revoke_device_leases` takes, so no lease can be minted, renewed or
+   replayed for a device whose revocation raced the authorize call. If the
    control plane is down, revocation waits for the slot's `valid_until`.
    Entitlement loss without device revocation does not revoke live leases:
    `authorize` refuses new ones and renewals, and existing ones end at
