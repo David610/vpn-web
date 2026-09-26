@@ -137,6 +137,8 @@ async function leaseCredentials(supabaseAdmin, env, { device, candidate, clientR
         message: "This route is at capacity right now. Try again shortly or pick another route.",
         code: "capacity_exhausted",
       };
+    case "device_inactive":
+      return { ok: false, status: 409, message: "This device is not entitled to connect.", code: "not_entitled" };
     case "conflict":
       return { ok: false, status: 409, message: "client_request_id was already used for another route.", code: "idempotency_conflict" };
     default:

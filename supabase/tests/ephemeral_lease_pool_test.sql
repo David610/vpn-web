@@ -170,6 +170,12 @@ begin
   r2 := public.lease_route_slots(null, dev, acct, 'route-y', array['exit-2'], 600, 5, 60, 600, 1800, 60);
   assert public.revoke_device_leases(dev) >= 1, 'plain revoke';
   assert (select bool_or(urgent) from public.node_lease_slots where node_id = 'exit-2' and state = 'revoked') = false, 'not urgent by default';
+  -- A device revoked after the caller's status check gets nothing (the RPC
+  -- re-checks under the per-device lock revoke_device_leases shares).
+  update public.devices set status = 'REVOKED' where id = dev;
+  r2 := public.lease_route_slots('k-inactive', dev, acct, 'route-z', array['exit-2'], 600, 5, 60, 600, 1800, 60);
+  assert r2 ->> 'status' = 'device_inactive', 'revoked device refused: ' || r2::text;
+  assert not exists (select 1 from public.vpn_leases where idempotency_key = 'k-inactive'), 'nothing written';
 end $$;
 
 -- Service-role only.

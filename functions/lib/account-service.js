@@ -382,7 +382,12 @@ export async function requestAccountDeletion(supabaseAdmin, env, user, password)
 
   const devices = await listDevices(supabaseAdmin, account.accountId);
   for (const device of devices.filter((d) => d.status !== "REVOKED")) {
-    await revokeDevice(supabaseAdmin, env, device, `account-deleted:${device.id}`);
+    // The owner's own devices: non-urgent (self-service). Other members'
+    // devices: the owner is acting against another person, same as removing
+    // a member, so their credentials rotate now.
+    await revokeDevice(supabaseAdmin, env, device, `account-deleted:${device.id}`, {
+      urgent: device.user_id !== user.id,
+    });
   }
   return ok({ ok: true, deletion: "scheduled" }, 202);
 }

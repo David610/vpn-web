@@ -14,6 +14,11 @@ export function leaseRouteSlots(args, tables) {
   const slots = tables.node_lease_slots;
   const now = nowMs();
 
+  // Mirrors the SQL's in-lock device re-check (a device revoked between the
+  // caller's check and the RPC gets no lease, renewal or replay).
+  const device = (tables.devices ?? []).find((d) => d.id === args.p_device_id);
+  if (device && device.status !== "ACTIVE") return { data: { status: "device_inactive" }, error: null };
+
   if (args.p_idempotency_key) {
     const existing = leases.find((l) => l.idempotency_key === args.p_idempotency_key);
     if (existing) {

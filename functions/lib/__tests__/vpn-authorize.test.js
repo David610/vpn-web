@@ -410,6 +410,24 @@ describe("authorizeRoute: ephemeral lease pool (ADR-0003)", () => {
     expect(await authorize(db, route.id, "req-00000001")).toMatchObject({ status: 503, code: "capacity_exhausted" });
   });
 
+  it("REGRESSION: a device revoked after the caller's status check gets no lease, renewal or replay", async () => {
+    const db = await world({
+      nodes: [node("de-1", DE, "EXIT")],
+      paths: [directPath(DE)],
+      identities: [{ node_id: "de-1", vpn_user_id: "s0", slot: 0 }],
+      slotsPerIdentity: 2,
+    });
+    const [route] = await directory(db);
+    expect((await authorize(db, route.id, "req-00000001")).ok).toBe(true);
+    // Revocation lands between authorize.js's device check and the RPC.
+    db._tables.devices = [{ ...DEVICE, status: "REVOKED" }];
+    for (const requestId of ["req-00000001", "req-00000002", undefined]) {
+      expect(await authorize(db, route.id, requestId)).toMatchObject({ ok: false, status: 409, code: "not_entitled" });
+    }
+    expect(leases(db)).toHaveLength(1);
+    expect(slots(db).filter((s) => s.state === "active")).toHaveLength(1);
+  });
+
   it("rate-limits new leases per device (429 with retry hint); replays do not count", async () => {
     const identities = Array.from({ length: LEASE_LIMITS.perDevice + 2 }, (_, i) => ({ node_id: "de-1", vpn_user_id: `s${i}`, slot: i }));
     const db = await world({ nodes: [node("de-1", DE, "EXIT")], paths: [directPath(DE)], identities });

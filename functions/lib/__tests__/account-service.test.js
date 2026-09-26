@@ -175,6 +175,18 @@ describe("requestAccountDeletion", () => {
     expect(fake._tables.customer_accounts[0].deletion_requested_at).toBeTruthy();
   });
 
+  it("rotates other members' lease slots urgently; the owner's own devices wait for the batch", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ access_token: "t" }), { status: 200 })));
+    const fake = db({ devices: [dev(1, 1), dev(2, 1, { user_id: "member-2" })] });
+    const res = await requestAccountDeletion(fake, env, user, "secret-password");
+    expect(res.status).toBe(202);
+    const calls = fake.rpc.mock.calls.filter(([name]) => name === "revoke_device_leases").map(([, a]) => a);
+    expect(calls).toEqual([
+      { p_device_id: uuid(1), p_urgent: false },
+      { p_device_id: uuid(2), p_urgent: true },
+    ]);
+  });
+
   it("refuses a wrong password without changing anything", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error_code: "invalid_credentials" }), { status: 400 })));
     const fake = db({ devices: [dev(1, 1)] });

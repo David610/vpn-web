@@ -117,6 +117,7 @@ revoke all on public.vpn_leases from anon, authenticated;
 --   rate_limited  {retry_after_seconds}
 --   exhausted     {node_id}   -- nothing was written
 --   conflict      -- idempotency key reused for a different route/device
+--   device_inactive -- the device is not ACTIVE (revoked concurrently)
 create or replace function public.lease_route_slots(
   p_idempotency_key text,
   p_device_id uuid,
@@ -158,6 +159,14 @@ begin
   -- Serialize concurrent authorizes of the same device so the rate limit
   -- and idempotency checks below cannot be raced.
   perform pg_advisory_xact_lock(hashtextextended('vpn_lease:' || p_device_id::text, 0));
+
+  -- Re-check the device under the lock revoke_device_leases also takes. The
+  -- caller checked it too, but a revocation landing between that check and
+  -- this call would otherwise let a just-revoked device mint (or renew, or
+  -- replay) a lease that revoke_device_leases never saw.
+  if not exists (select 1 from public.devices d where d.id = p_device_id and d.status = 'ACTIVE') then
+    return jsonb_build_object('status', 'device_inactive');
+  end if;
 
   if p_idempotency_key is not null then
     select * into v_existing from public.vpn_leases where idempotency_key = p_idempotency_key;
@@ -394,6 +403,10 @@ as $$
 declare
   v_count integer;
 begin
+  -- Same per-device lock as lease_route_slots: a lease being minted right
+  -- now either commits first (and is revoked below) or sees the device
+  -- REVOKED (the caller flips devices.status before calling this).
+  perform pg_advisory_xact_lock(hashtextextended('vpn_lease:' || p_device_id::text, 0));
   with revoked as (
     update public.vpn_leases set revoked_at = now()
      where device_id = p_device_id and revoked_at is null and expires_at > now()
