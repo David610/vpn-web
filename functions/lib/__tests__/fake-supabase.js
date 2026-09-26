@@ -1,4 +1,5 @@
 import { vi } from "vitest";
+import { agentSyncLeaseSlots, leaseRouteSlots, revokeDeviceLeases } from "./lease-pool-model.js";
 
 /**
  * A small in-memory stand-in for the PostgREST query builder, covering the
@@ -38,6 +39,9 @@ export function makeFakeSupabase(seed = {}, options = {}) {
     allowed_paths: [],
     device_node_assignments: [],
     locations: [],
+    node_lease_slots: [],
+    node_transport_secrets: [],
+    vpn_leases: [],
     ...structuredClone(seed),
   };
 
@@ -215,6 +219,9 @@ export function makeFakeSupabase(seed = {}, options = {}) {
     rpc: vi.fn(async (name, args) => {
       const handler = rpcHandlers[name];
       if (handler) return handler(args, tables);
+      if (name === "lease_route_slots") return leaseRouteSlots(args, tables);
+      if (name === "agent_sync_lease_slots") return agentSyncLeaseSlots(args, tables);
+      if (name === "revoke_device_leases") return revokeDeviceLeases(args, tables);
 
       if (name === "customer_dashboard_state") {
         const membership = tables.account_members.find(

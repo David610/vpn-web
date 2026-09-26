@@ -91,4 +91,19 @@ describe("POST /v1/vpn/authorize", () => {
     const body = await res.json();
     expect(body.message).toBe("No server is currently available for this route.");
   });
+
+  it("passes client_request_id through and sets Retry-After on 429", async () => {
+    authorizeRoute.mockResolvedValue({ ok: false, status: 429, message: "slow down", code: "rate_limited", retryAfterSeconds: 600 });
+    const res = await onRequestPost({ env, request: req({ route_id: "de-fast", client_request_id: "req-00000001" }) });
+    expect(res.status).toBe(429);
+    expect(res.headers.get("Retry-After")).toBe("600");
+    expect((await res.json()).code).toBe("rate_limited");
+    expect(authorizeRoute).toHaveBeenCalledWith(db, env, expect.objectContaining({ clientRequestId: "req-00000001" }));
+  });
+
+  it("rejects a non-string client_request_id", async () => {
+    const res = await onRequestPost({ env, request: req({ route_id: "de-fast", client_request_id: 7 }) });
+    expect(res.status).toBe(400);
+    expect(authorizeRoute).not.toHaveBeenCalled();
+  });
 });

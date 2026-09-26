@@ -385,6 +385,10 @@ export async function revokeDevice(supabaseAdmin, env, device, idempotencyPrefix
     if (error) throw new Error(`devices update failed: ${error.message}`);
     if (!updated) return { revoked: false, disabled: 0 };
   }
+  // ADR-0003: end every live ephemeral lease now; each node's agent rotates
+  // the revoked slots on its next sync instead of waiting for expiry.
+  const { error: leaseError } = await supabaseAdmin.rpc("revoke_device_leases", { p_device_id: device.id });
+  if (leaseError) throw new Error(`revoke_device_leases failed: ${leaseError.message}`);
   const identities = (await listDeviceIdentities(supabaseAdmin, device.id)).filter((i) => i.enabled);
   await reconcileDeviceProvisioning(supabaseAdmin, env, {
     device: { ...device, status: "REVOKED" },
