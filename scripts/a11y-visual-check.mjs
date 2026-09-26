@@ -16,7 +16,9 @@ const VIEWPORTS = [
   { name: "1440-desktop", width: 1440, height: 900 },
   { name: "1024-tablet", width: 1024, height: 768 },
   { name: "768-tablet", width: 768, height: 1024 },
+  { name: "430-phone", width: 430, height: 932 },
   { name: "390-iphone", width: 390, height: 844 },
+  { name: "375-phone", width: 375, height: 812 },
   { name: "360-android", width: 360, height: 800 },
 ];
 
@@ -198,6 +200,9 @@ ADMIN_SETTINGS_BODY.readiness = [
 ];
 
 const PAGES = [
+  { path: "/", label: "public-home" },
+  { path: "/login/", label: "public-login" },
+  { path: "/signup/", label: "public-signup" },
   { path: "/account/", label: "account-overview" },
   { path: "/account/subscriptions/", label: "account-subscriptions" },
   { path: "/account/devices/", label: "account-devices" },
