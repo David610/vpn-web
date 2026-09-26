@@ -6,6 +6,8 @@ import { failSilentNodes } from "../../lib/node-silence-failover.js";
 import { protocolAllowsRecovery, sanitizeProtocolReport } from "../../lib/protocol-health.js";
 import { applyProtocolReport } from "../../lib/protocol-health-store.js";
 
+const MAX_HEARTBEAT_BYTES = 64 * 1024;
+
 function json(body, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -34,9 +36,13 @@ export async function onRequestPost({ env, request }) {
   const nodeId = await authenticateNode(request, supabaseAdmin);
   if (!nodeId) return json({ error: "Unauthorized" }, 401);
 
+  // Bound the payload before parsing (protocol_probe makes it larger than
+  // it used to be; 32 results are well under 64 KiB).
   let body;
   try {
-    body = await request.json();
+    const text = await request.text();
+    if (text.length > MAX_HEARTBEAT_BYTES) return json({ error: "Payload too large" }, 413);
+    body = JSON.parse(text);
   } catch {
     return json({ error: "Invalid JSON body" }, 400);
   }

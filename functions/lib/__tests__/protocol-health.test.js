@@ -134,15 +134,24 @@ describe("choosePeers / validProbeUri", () => {
   });
 });
 
-function fakeSupabase(nodes) {
+function fakeSupabase(nodes, { fleet, history = [] } = {}) {
   const calls = { inserts: [], updates: [], rpcs: [], cas: [] };
+  const fleetRows = fleet ?? [{ node_id: "de-ber-1", lifecycle_state: "READY" }, ...Object.values(nodes).map((n) => ({ node_id: n.node_id, lifecycle_state: n.lifecycle_state }))];
   const supabase = {
     from(table) {
-      if (table === "node_probe_results") return { insert: async (rows) => (calls.inserts.push(rows), { error: null }) };
+      if (table === "node_probe_results") {
+        const hq = { select: () => hq, eq: () => hq, neq: () => hq, gte: () => hq, order: () => hq, limit: async () => ({ data: history, error: null }) };
+        return { ...hq, insert: async (rows) => (calls.inserts.push(rows), { error: null }) };
+      }
       if (table !== "nodes") throw new Error(table);
       return {
         select: () => {
-          const q = { eq: (_c, id) => ((q.id = id), q), maybeSingle: async () => ({ data: nodes[q.id] ?? null, error: null }) };
+          const q = {
+            eq: (_c, id) => ((q.id = id), q),
+            in: () => q,
+            is: async () => ({ data: fleetRows, error: null }),
+            maybeSingle: async () => ({ data: nodes[q.id] ?? null, error: null }),
+          };
           return q;
         },
         update: (patch) => {
@@ -203,5 +212,48 @@ describe("applyProtocolReport", () => {
     const out = await applyProtocolReport({ supabase, reporterNodeId: "de-ber-1", report, autoHealth: true });
     expect(out.transitions).toEqual([]);
     expect(calls.cas).toHaveLength(0);
+  });
+
+  it("ignores reports from a reporter that is not an active probing node", async () => {
+    const { supabase, calls } = fakeSupabase({ "fi-hel-1": node({ protocol_probe_failures: 2 }) }, { fleet: [{ node_id: "fi-hel-1", lifecycle_state: "READY" }] });
+    const report = sanitizeProtocolReport({ results: [res({ ok: false })] });
+    const out = await applyProtocolReport({ supabase, reporterNodeId: "de-ber-1", report, autoHealth: true });
+    expect(out).toEqual({ rows: 0, transitions: [] });
+    expect(calls.inserts).toHaveLength(0);
+    expect(calls.updates).toHaveLength(0);
+  });
+
+  it("drops peer results about targets the reporter was not assigned", async () => {
+    const nodes = {};
+    const fleet = [{ node_id: "de-ber-1", lifecycle_state: "READY" }];
+    for (let i = 0; i < 12; i++) fleet.push({ node_id: `n-${i}`, lifecycle_state: "READY" });
+    const now = Date.UTC(2026, 8, 26, 12, 30);
+    const chosen = new Set([...choosePeers("de-ber-1", fleet.slice(1), now), ...choosePeers("de-ber-1", fleet.slice(1), now - 3_600_000)].map((p) => p.node_id));
+    const victim = fleet.slice(1).find((n) => !chosen.has(n.node_id)).node_id;
+    nodes[victim] = node({ node_id: victim, protocol_probe_failures: 2 });
+    const { supabase, calls } = fakeSupabase(nodes, { fleet });
+    const report = sanitizeProtocolReport({ results: [res({ target_node_id: victim, ok: false })] });
+    const out = await applyProtocolReport({ supabase, reporterNodeId: "de-ber-1", report, autoHealth: true, nowMs: now });
+    expect(out.transitions).toEqual([]);
+    expect(calls.inserts).toHaveLength(0);
+    expect(calls.updates).toHaveLength(0);
+  });
+
+  it("a single peer's failure does not count while another peer sees the target passing", async () => {
+    const history = [{ reporter_node_id: "us-nyc-1", ok: true, observed_at: new Date().toISOString() }];
+    const { supabase, calls } = fakeSupabase({ "fi-hel-1": node({ protocol_probe_failures: 2 }) }, { history });
+    const report = sanitizeProtocolReport({ results: [res({ ok: false })] });
+    const out = await applyProtocolReport({ supabase, reporterNodeId: "de-ber-1", report, autoHealth: true });
+    expect(out.transitions).toEqual([]);
+    expect(calls.updates[0].patch.protocol_probe_failures).toBeUndefined();
+    expect(calls.inserts).toHaveLength(1);
+  });
+
+  it("peer failures count when every other fresh peer also fails", async () => {
+    const history = [{ reporter_node_id: "us-nyc-1", ok: false, observed_at: new Date().toISOString() }];
+    const { supabase } = fakeSupabase({ "fi-hel-1": node({ protocol_probe_failures: 2 }) }, { history });
+    const report = sanitizeProtocolReport({ results: [res({ ok: false })] });
+    const out = await applyProtocolReport({ supabase, reporterNodeId: "de-ber-1", report, autoHealth: true });
+    expect(out.transitions).toEqual([{ targetId: "fi-hel-1", from: "READY", to: "DEGRADED" }]);
   });
 });

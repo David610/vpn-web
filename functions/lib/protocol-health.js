@@ -30,6 +30,9 @@
  */
 import { evaluateProbeResult, HEARTBEAT_INTERVAL_MS } from "./node-health-transition.js";
 
+// Only nodes in these states probe or get probed (and receive peer probe
+// credentials). QUARANTINED/RETIRED nodes may be compromised.
+export const PROBING_STATES = ["WARMING_UP", "READY", "DEGRADED"];
 export const PROTOCOLS = ["reality", "hysteria2"];
 export const VANTAGES = ["peer", "self"];
 export const PEER_FRESH_MS = HEARTBEAT_INTERVAL_MS * 3;

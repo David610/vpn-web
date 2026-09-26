@@ -22,6 +22,13 @@ export async function onRequestPost({ env, request }) {
   const nodeId = await authenticateNode(request, supabase);
   if (!nodeId) return json({ error: "Unauthorized" }, 401);
 
+  // A contained/retired node must not (re)publish a credential peers
+  // would then be handed.
+  const { data: self } = await supabase.from("nodes").select("lifecycle_state, revoked_at").eq("node_id", nodeId).maybeSingle();
+  if (!self || self.revoked_at || ["QUARANTINED", "RETIRED"].includes(self.lifecycle_state)) {
+    return json({ error: "Node not eligible" }, 403);
+  }
+
   let body;
   try {
     body = await request.json();

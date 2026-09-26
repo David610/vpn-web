@@ -21,11 +21,13 @@ create table if not exists public.node_probe_results (
 );
 create index if not exists node_probe_results_target_time
   on public.node_probe_results (target_node_id, observed_at desc);
+create index if not exists node_probe_results_time
+  on public.node_probe_results (observed_at);
 alter table public.node_probe_results enable row level security;
 -- No policies: service role only (Worker endpoints).
 
 -- Bounded retention, called by the Worker after each insert for a target:
--- drops rows older than p_keep_hours and anything beyond the newest
+-- drops rows (any target) older than p_keep_hours and anything beyond the newest
 -- p_max_rows for that target.
 create or replace function public.prune_node_probe_results(
   p_target_node_id text, p_keep_hours integer, p_max_rows integer)
@@ -34,9 +36,10 @@ language sql
 security definer
 set search_path = public
 as $$
+  -- Age prune is fleet-wide so rows about targets nobody reports on any
+  -- more (retired nodes) still expire.
   delete from node_probe_results
-   where target_node_id = p_target_node_id
-     and observed_at < now() - make_interval(hours => greatest(p_keep_hours, 1));
+   where observed_at < now() - make_interval(hours => greatest(p_keep_hours, 1));
   delete from node_probe_results
    where target_node_id = p_target_node_id
      and id < coalesce((

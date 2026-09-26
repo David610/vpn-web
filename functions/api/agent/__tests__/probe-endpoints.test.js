@@ -37,6 +37,12 @@ describe("POST /api/agent/probe-credential", () => {
     const { onRequestPost } = await import("../probe-credential.js");
     expect((await onRequestPost({ env, request: post({}) })).status).toBe(401);
   });
+  it("refuses a quarantined node", async () => {
+    state.self = { lifecycle_state: "QUARANTINED" };
+    const { onRequestPost } = await import("../probe-credential.js");
+    expect((await onRequestPost({ env, request: post({ reality_uri: "vless://u@h:1?x" }) })).status).toBe(403);
+    expect(state.upserts).toHaveLength(0);
+  });
   it("stores valid probe links for the calling node only", async () => {
     const { onRequestPost } = await import("../probe-credential.js");
     const res = await onRequestPost({ env, request: post({ node_id: "someone-else", reality_uri: "vless://u@h:1?security=reality", hysteria2_uri: "hysteria2://p@h:1" }) });

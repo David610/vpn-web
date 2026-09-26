@@ -221,3 +221,18 @@ creation (`HETZNER_API_TOKEN`, `CLOUDFLARE_DNS_API_TOKEN`/`_ZONE_ID`,
 Recorded here once a real run of each flow completes against live
 infrastructure (operation id, timings, outcome). Deferred pending staging
 access — see each phase's plan document's Task 6.
+
+### Protocol probe abuse limits (review hardening)
+
+- A report counts only when the reporter is itself WARMING_UP/READY/DEGRADED
+  and not revoked; peer results only about targets the control plane assigned
+  it (`choosePeers`, current or previous hourly bucket). Everything else is
+  dropped before storage.
+- A peer failure does not advance a target's failure streak while any other
+  peer has a fresh passing verdict on it (PEER_FRESH_MS), so one bad or lying
+  vantage cannot DEGRADE a node its other peers reach. With a single probing
+  peer, that peer alone can still DEGRADE (never FAIL) the target.
+- Retiring/quarantining a node deletes its `node_probe_credentials` row, and
+  such a node cannot republish. Heartbeat bodies over 64 KiB get 413.
+- `prune_node_probe_results` ages out rows fleet-wide, so rows about retired
+  targets also expire.

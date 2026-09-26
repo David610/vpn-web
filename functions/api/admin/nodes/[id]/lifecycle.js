@@ -104,6 +104,13 @@ export async function onRequestPatch({ env, request, params }) {
       );
     }
 
+    // Retiring or quarantining a node revokes its probe credential so
+    // peers are never handed it again.
+    if (body.state === "RETIRED" || body.state === "QUARANTINED") {
+      const { error: credError } = await supabaseAdmin.from("node_probe_credentials").delete().eq("node_id", nodeId);
+      if (credError) console.error("admin/nodes/:id/lifecycle: probe credential revoke failed:", credError.message);
+    }
+
     await writeAdminAudit(supabaseAdmin, {
       adminUserId: admin.userId,
       action: "admin.node_lifecycle_transition",

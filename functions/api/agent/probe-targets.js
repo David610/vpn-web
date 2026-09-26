@@ -1,6 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import { authenticateNode } from "../../lib/node-auth.js";
-import { choosePeers } from "../../lib/protocol-health.js";
+import { choosePeers, PROBING_STATES } from "../../lib/protocol-health.js";
 
 function json(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -9,10 +9,6 @@ function json(body, status = 200) {
   });
 }
 
-// Only nodes in these states probe or get probed. A QUARANTINED/RETIRED
-// node gets no peer credentials (it may be compromised), and nobody wastes
-// probes on nodes an admin has taken out of service.
-const PROBING_STATES = ["WARMING_UP", "READY", "DEGRADED"];
 
 /**
  * Peer probe targets for the calling agent: up to PROBE_PEER_FANOUT other
