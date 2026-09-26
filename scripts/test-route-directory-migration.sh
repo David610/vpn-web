@@ -11,6 +11,10 @@ sudo -u postgres createdb "$DB"
 psql_db() { sudo -u postgres psql -v ON_ERROR_STOP=1 -d "$DB" "$@"; }
 
 psql_db <<'SQL'
+do $$ begin
+  if not exists (select 1 from pg_roles where rolname = 'anon') then create role anon; end if;
+  if not exists (select 1 from pg_roles where rolname = 'authenticated') then create role authenticated; end if;
+end $$;
 create schema if not exists extensions;
 create extension if not exists pgcrypto with schema extensions;
 create table public.nodes (
@@ -44,6 +48,21 @@ begin
   exception
     when check_violation then null;
   end;
+end $$;
+SQL
+
+psql_db -f supabase/migrations/20260930010000_route_directory_state_rls.sql
+psql_db <<'SQL'
+do $$
+begin
+  if not (select relrowsecurity from pg_class where oid = 'public.route_directory_state'::regclass) then
+    raise exception 'route_directory_state must have RLS enabled';
+  end if;
+  if has_table_privilege('anon', 'public.route_directory_state', 'SELECT')
+     or has_table_privilege('anon', 'public.route_directory_state', 'UPDATE')
+     or has_table_privilege('authenticated', 'public.route_directory_state', 'UPDATE') then
+    raise exception 'anon/authenticated must have no access to route_directory_state';
+  end if;
 end $$;
 SQL
 
