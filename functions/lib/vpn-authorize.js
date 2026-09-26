@@ -1,15 +1,19 @@
-import { scheduleNodeForDevice, scheduleDoubleHopForDevice } from "./scheduler.js";
+import { buildRouteCandidates, ROUTE_ID_PREFIX } from "./route-candidates.js";
+import { loadRouteInputs } from "./route-directory.js";
 import { buildCreateUserPayload } from "./device-provisioning.js";
 
 /**
  * POST /v1/vpn/authorize's credential-resolution core (see
  * docs/superpowers/specs/2026-09-26-adr0002-vpn-authorize-design.md).
  *
- * Route ids are Sub-project A's deterministic, unstored ids
- * (`${cc}-fast` / `${entryCc}-${exitCc}-privacy`, 2-letter lowercase
- * country codes) -- there is no `routes` table row to join against, so
- * this parses the id back into location(s) and re-runs the same
- * scheduler placement GET /v1/routes' rendering already trusts.
+ * Route ids are opaque, content-derived candidate ids from GET /v1/routes
+ * (functions/lib/route-candidates.js). Authorization rebuilds the
+ * candidate set from current fleet state and resolves the id to the exact
+ * physical hop node ids it was signed for. It never reschedules: if the
+ * candidate is gone or any of its published metadata changed, the id no
+ * longer exists and the client gets 409 route_stale and must refresh its
+ * directory. A client can therefore never hold node A's signed metadata
+ * while receiving node B's credentials.
  *
  * expires_at is a short, advisory TTL on the *response*, matching the
  * tamara-next contract's example -- it does not mean the underlying
@@ -18,23 +22,14 @@ import { buildCreateUserPayload } from "./device-provisioning.js";
  */
 export const AUTHORIZE_TTL_MS = 15 * 60 * 1000;
 
-const FAST_RE = /^([a-z]{2})-fast$/;
-const PRIVACY_RE = /^([a-z]{2})-([a-z]{2})-privacy$/;
-
 const badRequest = (message) => ({ ok: false, status: 400, message });
-const notFound = (message) => ({ ok: false, status: 409, message, code: "route_not_found" });
+const stale = () => ({
+  ok: false,
+  status: 409,
+  message: "This route is no longer offered. Refresh routes and try again.",
+  code: "route_stale",
+});
 const unavailable = (message) => ({ ok: false, status: 503, message });
-
-async function findEnabledLocationId(supabaseAdmin, countryCode) {
-  const { data, error } = await supabaseAdmin
-    .from("locations")
-    .select("id")
-    .eq("country_code", countryCode.toUpperCase())
-    .eq("enabled", true)
-    .maybeSingle();
-  if (error) throw new Error(`locations lookup failed: ${error.message}`);
-  return data?.id ?? null;
-}
 
 /**
  * Resolves each hop's credential from its existing vpn_accounts identity,
@@ -89,28 +84,38 @@ async function resolveCredentials(supabaseAdmin, device, entitlement, routeId, n
   };
 }
 
+const ROUTE_ID_RE = new RegExp(`^${ROUTE_ID_PREFIX}[0-9a-f]{32}$`);
+
+/**
+ * Records the resolved hops as the device's sticky assignment so
+ * provisioning/reconciliation and capacity accounting follow the route
+ * the client actually chose. Written only after the exact candidate was
+ * resolved; never used to *choose* the hops.
+ */
+async function recordAssignment(supabaseAdmin, deviceId, candidate) {
+  const hopRoles = candidate.mode === "privacy_plus" ? ["RELAY", "EXIT"] : ["EXIT"];
+  const rows = candidate.hopNodeIds.map((nodeId, index) => ({ device_id: deviceId, node_id: nodeId, hop: hopRoles[index] }));
+  const { error } = await supabaseAdmin.from("device_node_assignments").upsert(rows, { onConflict: "device_id,hop" });
+  if (error) throw new Error(`device_node_assignments upsert failed: ${error.message}`);
+  if (candidate.mode === "fast") {
+    const { error: deleteError } = await supabaseAdmin
+      .from("device_node_assignments")
+      .delete()
+      .eq("device_id", deviceId)
+      .eq("hop", "RELAY");
+    if (deleteError) throw new Error(`device_node_assignments delete failed: ${deleteError.message}`);
+  }
+}
+
 export async function authorizeRoute(supabaseAdmin, env, { device, entitlement, routeId }) {
   const id = typeof routeId === "string" ? routeId.trim() : "";
   if (!id || id.length > 160) return badRequest("route_id is required.");
+  if (!ROUTE_ID_RE.test(id)) return stale();
 
-  const fastMatch = FAST_RE.exec(id);
-  const privacyMatch = fastMatch ? null : PRIVACY_RE.exec(id);
-  if (!fastMatch && !privacyMatch) return badRequest("route_id has an unrecognized format.");
+  const inputs = await loadRouteInputs(supabaseAdmin);
+  const candidate = buildRouteCandidates(inputs).find((route) => route.id === id);
+  if (!candidate) return stale();
 
-  if (fastMatch) {
-    const exitLocationId = await findEnabledLocationId(supabaseAdmin, fastMatch[1]);
-    if (!exitLocationId) return notFound("This route is not currently offered.");
-    const nodeId = await scheduleNodeForDevice(supabaseAdmin, { deviceId: device.id, exitLocationId });
-    if (!nodeId) return unavailable("No server is currently available for this route.");
-    return resolveCredentials(supabaseAdmin, device, entitlement, id, [nodeId]);
-  }
-
-  const [entryLocationId, exitLocationId] = await Promise.all([
-    findEnabledLocationId(supabaseAdmin, privacyMatch[1]),
-    findEnabledLocationId(supabaseAdmin, privacyMatch[2]),
-  ]);
-  if (!entryLocationId || !exitLocationId) return notFound("This route is not currently offered.");
-  const placed = await scheduleDoubleHopForDevice(supabaseAdmin, { deviceId: device.id, entryLocationId, exitLocationId });
-  if (!placed) return unavailable("No server is currently available for this route.");
-  return resolveCredentials(supabaseAdmin, device, entitlement, id, [placed.relayNodeId, placed.exitNodeId]);
+  await recordAssignment(supabaseAdmin, device.id, candidate);
+  return resolveCredentials(supabaseAdmin, device, entitlement, id, candidate.hopNodeIds);
 }

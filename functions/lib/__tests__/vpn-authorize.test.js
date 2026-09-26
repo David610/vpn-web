@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { makeFakeSupabase } from "./fake-supabase.js";
 import { authorizeRoute, AUTHORIZE_TTL_MS } from "../vpn-authorize.js";
+import { loadRouteInputs, renderRoutes } from "../route-directory.js";
 
 const DEVICE = { id: "dev-1", user_id: "user-1", account_id: "acct-1" };
 const PAID = { source: "stripe", serviceExpiresAt: "2030-01-01T00:00:00.000Z", clearExpiry: false };
@@ -8,190 +9,227 @@ const PAID = { source: "stripe", serviceExpiresAt: "2030-01-01T00:00:00.000Z", c
 const DE = "loc-de";
 const FI = "loc-fi";
 
+let ipCounter = 10;
 function node(node_id, location_id, role, extra = {}) {
-  return { node_id, location_id, role, lifecycle_state: "READY", configured_users: 0, max_sessions: null, ...extra };
+  ipCounter += 1;
+  return {
+    node_id,
+    location_id,
+    role,
+    lifecycle_state: "READY",
+    configured_users: 0,
+    max_sessions: null,
+    ip_address: `203.0.113.${ipCounter}`,
+    failure_domain: `fd/${node_id}`,
+    transport: "vless-reality",
+    transport_port: 443,
+    tls_server_name: "decoy.example.test",
+    reality_public_key: `pub-${node_id}`,
+    reality_short_id: "abcd",
+    reality_fingerprint: "chrome",
+    vless_flow: "xtls-rprx-vision",
+    ...extra,
+  };
 }
 
-function world({ locations = [], nodes = [], paths = [], identities = [] } = {}) {
+const LOCATIONS = [
+  { id: DE, country_code: "DE", display_name: "Germany", enabled: true },
+  { id: FI, country_code: "FI", display_name: "Finland", enabled: true },
+];
+
+function world({ locations = LOCATIONS, nodes = [], paths = [], identities = [], assignments = [] } = {}) {
   return makeFakeSupabase({
     locations,
     nodes,
     allowed_paths: paths,
+    device_node_assignments: assignments,
     vpn_accounts: identities.map((i, n) => ({ id: n + 1, device_id: DEVICE.id, enabled: true, ...i })),
   });
 }
 
-const jobs = (db) => db._tables.provisioning_jobs;
+const jobs = (db) => db._tables.provisioning_jobs ?? [];
 const directPath = (loc) => ({ id: `p-${loc}`, entry_location_id: null, exit_location_id: loc, enabled: true });
 const doublePath = (entry, exit) => ({ id: `p-${entry}-${exit}`, entry_location_id: entry, exit_location_id: exit, enabled: true });
 
+// What a client actually holds: the directory rendered from the same fleet state.
+async function directory(db) {
+  return renderRoutes(await loadRouteInputs(db)).routes;
+}
+
+const authorize = (db, routeId, entitlement = PAID) =>
+  authorizeRoute(db, {}, { device: DEVICE, entitlement, routeId });
+
 describe("authorizeRoute: route_id validation", () => {
   it("rejects an empty route_id", async () => {
-    const db = world();
-    const result = await authorizeRoute(db, {}, { device: DEVICE, entitlement: PAID, routeId: "" });
+    const result = await authorize(world(), "");
     expect(result).toEqual({ ok: false, status: 400, message: expect.any(String) });
   });
 
   it("rejects a route_id over 160 characters", async () => {
-    const db = world();
-    const result = await authorizeRoute(db, {}, { device: DEVICE, entitlement: PAID, routeId: "a".repeat(161) });
-    expect(result.ok).toBe(false);
+    const result = await authorize(world(), "a".repeat(161));
     expect(result.status).toBe(400);
   });
 
-  it("rejects an unrecognized route_id format", async () => {
-    const db = world();
-    const result = await authorizeRoute(db, {}, { device: DEVICE, entitlement: PAID, routeId: "not-a-real-route" });
-    expect(result).toEqual({ ok: false, status: 400, message: expect.any(String) });
-  });
-});
-
-describe("authorizeRoute: fast routes", () => {
-  it("returns 409 route_not_found when the location does not exist or is disabled", async () => {
-    const db = world({ locations: [{ id: DE, country_code: "DE", enabled: false }] });
-    const result = await authorizeRoute(db, {}, { device: DEVICE, entitlement: PAID, routeId: "de-fast" });
-    expect(result).toEqual({ ok: false, status: 409, message: expect.any(String), code: "route_not_found" });
-  });
-
-  it("returns 503 when no direct allowed_paths row exists for the location", async () => {
-    const db = world({
-      locations: [{ id: DE, country_code: "DE", enabled: true }],
-      nodes: [node("node-de-1", DE, "EXIT")],
-    });
-    const result = await authorizeRoute(db, {}, { device: DEVICE, entitlement: PAID, routeId: "de-fast" });
-    expect(result).toEqual({ ok: false, status: 503, message: expect.any(String) });
-  });
-
-  it("returns a single-hop credential envelope when the identity already exists", async () => {
-    const db = world({
-      locations: [{ id: DE, country_code: "DE", enabled: true }],
-      nodes: [node("node-de-1", DE, "EXIT")],
-      paths: [directPath(DE)],
-      identities: [{ node_id: "node-de-1", vpn_user_id: "uuid-de-1" }],
-    });
-    const before = Date.now();
-    const result = await authorizeRoute(db, {}, { device: DEVICE, entitlement: PAID, routeId: "de-fast" });
-    expect(result.ok).toBe(true);
-    expect(result.routeId).toBe("de-fast");
-    expect(result.credentialEnvelope).toEqual({ version: 1, hops: [{ uuid: "uuid-de-1" }] });
-    expect(new Date(result.expiresAt).getTime()).toBeGreaterThanOrEqual(before + AUTHORIZE_TTL_MS);
+  it("treats legacy location-level ids as stale (client must refresh), never reschedules", async () => {
+    const db = world({ nodes: [node("de-1", DE, "EXIT")], paths: [directPath(DE)] });
+    const result = await authorize(db, "de-fast");
+    expect(result).toMatchObject({ ok: false, status: 409, code: "route_stale" });
     expect(jobs(db)).toHaveLength(0);
   });
+});
 
-  it("enqueues CREATE_USER and returns 503 when no identity exists yet", async () => {
+describe("authorizeRoute: exact physical-hop binding", () => {
+  it("REGRESSION: a sticky assignment to node B never overrides the signed candidate for node A", async () => {
+    // B is less loaded than A would be for this device, and the device is
+    // sticky on B. The old implementation published one location-level
+    // route (whichever node the scheduler preferred with no stickiness)
+    // and then re-ran the sticky scheduler at authorize time.
+    const a = node("de-a", DE, "EXIT", { configured_users: 0 });
+    const b = node("de-b", DE, "EXIT", { configured_users: 5 });
     const db = world({
-      locations: [{ id: DE, country_code: "DE", enabled: true }],
-      nodes: [node("node-de-1", DE, "EXIT")],
+      nodes: [a, b],
       paths: [directPath(DE)],
+      assignments: [{ device_id: DEVICE.id, node_id: "de-b", hop: "EXIT" }],
+      identities: [
+        { node_id: "de-a", vpn_user_id: "uuid-on-a" },
+        { node_id: "de-b", vpn_user_id: "uuid-on-b" },
+      ],
     });
-    const result = await authorizeRoute(db, {}, { device: DEVICE, entitlement: PAID, routeId: "de-fast" });
-    expect(result).toEqual({ ok: false, status: 503, message: expect.any(String) });
-    expect(jobs(db)).toHaveLength(1);
-    expect(jobs(db)[0]).toMatchObject({
-      job_type: "CREATE_USER",
-      node_id: "node-de-1",
-      device_id: "dev-1",
-      idempotency_key: "authorize:create:dev-1:node-de-1",
-      payload: { user_id: "user-1", device_id: "dev-1", expires_at: "2030-01-01T00:00:00.000Z" },
-    });
+    const routes = await directory(db);
+    const routeForA = routes.find((r) => r.hops[0].server_address === a.ip_address);
+    const routeForB = routes.find((r) => r.hops[0].server_address === b.ip_address);
+    expect(routeForA).toBeDefined();
+    expect(routeForB).toBeDefined();
+
+    const resultA = await authorize(db, routeForA.id);
+    expect(resultA.ok).toBe(true);
+    expect(resultA.credentialEnvelope.hops).toEqual([{ uuid: "uuid-on-a" }]);
+
+    const resultB = await authorize(db, routeForB.id);
+    expect(resultB.credentialEnvelope.hops).toEqual([{ uuid: "uuid-on-b" }]);
   });
 
-  it("does not error when a CREATE_USER job is already in flight, and still returns 503", async () => {
+  it("every published candidate authorizes exactly its own hop set (fast + privacy_plus)", async () => {
+    const nodes = [
+      node("de-e1", DE, "EXIT"),
+      node("de-e2", DE, "EXIT", { configured_users: 3 }),
+      node("fi-r1", FI, "RELAY"),
+      node("fi-r2", FI, "RELAY", { configured_users: 7 }),
+    ];
+    const byIp = new Map(nodes.map((n) => [n.ip_address, n.node_id]));
     const db = world({
-      locations: [{ id: DE, country_code: "DE", enabled: true }],
-      nodes: [node("node-de-1", DE, "EXIT")],
+      nodes,
+      paths: [directPath(DE), doublePath(FI, DE)],
+      identities: nodes.map((n) => ({ node_id: n.node_id, vpn_user_id: `uuid-${n.node_id}` })),
+      assignments: [
+        { device_id: DEVICE.id, node_id: "de-e2", hop: "EXIT" },
+        { device_id: DEVICE.id, node_id: "fi-r2", hop: "RELAY" },
+      ],
+    });
+    const routes = await directory(db);
+    expect(routes.filter((r) => r.mode === "fast")).toHaveLength(2);
+    expect(routes.filter((r) => r.mode === "privacy_plus").length).toBeGreaterThanOrEqual(2);
+    for (const route of routes) {
+      const result = await authorize(db, route.id);
+      expect(result.ok).toBe(true);
+      const expected = route.hops.map((hop) => ({ uuid: `uuid-${byIp.get(hop.server_address)}` }));
+      expect(result.credentialEnvelope.hops).toEqual(expected);
+    }
+  });
+
+  it("records the resolved hops as the device's assignment (after resolving, never to choose)", async () => {
+    const db = world({
+      nodes: [node("de-e1", DE, "EXIT"), node("fi-r1", FI, "RELAY")],
+      paths: [directPath(DE), doublePath(FI, DE)],
+      identities: [
+        { node_id: "de-e1", vpn_user_id: "u1" },
+        { node_id: "fi-r1", vpn_user_id: "u2" },
+      ],
+    });
+    const routes = await directory(db);
+    await authorize(db, routes.find((r) => r.mode === "privacy_plus").id);
+    const rows = () => db._tables.device_node_assignments.map((r) => `${r.hop}:${r.node_id}`).sort();
+    expect(rows()).toEqual(["EXIT:de-e1", "RELAY:fi-r1"]);
+    await authorize(db, routes.find((r) => r.mode === "fast").id);
+    expect(rows()).toEqual(["EXIT:de-e1"]);
+  });
+
+  it("fails closed with route_stale when the node's published metadata changed after the directory was fetched", async () => {
+    const db = world({ nodes: [node("de-a", DE, "EXIT")], paths: [directPath(DE)], identities: [{ node_id: "de-a", vpn_user_id: "u" }] });
+    const [route] = await directory(db);
+    db._tables.nodes[0].reality_public_key = "rotated-key";
+    const result = await authorize(db, route.id);
+    expect(result).toMatchObject({ ok: false, status: 409, code: "route_stale" });
+  });
+
+  it("fails closed with route_stale (does not move to a sibling) when the chosen node is drained", async () => {
+    const db = world({
+      nodes: [node("de-a", DE, "EXIT"), node("de-b", DE, "EXIT", { configured_users: 4 })],
       paths: [directPath(DE)],
+      identities: [
+        { node_id: "de-a", vpn_user_id: "ua" },
+        { node_id: "de-b", vpn_user_id: "ub" },
+      ],
     });
-    await db.from("provisioning_jobs").insert({
-      idempotency_key: "reconcile:create:dev-1:node-de-1",
-      node_id: "node-de-1",
-      job_type: "CREATE_USER",
-      device_id: "dev-1",
-      status: "pending",
-      payload: {},
+    const routes = await directory(db);
+    const routeForA = routes.find((r) => r.priority === 100);
+    db._tables.nodes.find((n) => n.node_id === "de-a").lifecycle_state = "DRAINING";
+    const result = await authorize(db, routeForA.id);
+    expect(result).toMatchObject({ ok: false, status: 409, code: "route_stale" });
+  });
+
+  it("fails closed when the allowed path is disabled after the directory was fetched", async () => {
+    const db = world({ nodes: [node("de-a", DE, "EXIT")], paths: [directPath(DE)], identities: [{ node_id: "de-a", vpn_user_id: "u" }] });
+    const [route] = await directory(db);
+    db._tables.allowed_paths[0].enabled = false;
+    expect((await authorize(db, route.id)).code).toBe("route_stale");
+  });
+
+  it("privacy_plus: if the relay disappears, the route is stale -- never a one-hop (Fast) envelope", async () => {
+    const db = world({
+      nodes: [node("de-e1", DE, "EXIT"), node("fi-r1", FI, "RELAY")],
+      paths: [directPath(DE), doublePath(FI, DE)],
+      identities: [
+        { node_id: "de-e1", vpn_user_id: "u1" },
+        { node_id: "fi-r1", vpn_user_id: "u2" },
+      ],
     });
-    const result = await authorizeRoute(db, {}, { device: DEVICE, entitlement: PAID, routeId: "de-fast" });
-    expect(result).toEqual({ ok: false, status: 503, message: expect.any(String) });
-    expect(jobs(db)).toHaveLength(1);
+    const privacy = (await directory(db)).find((r) => r.mode === "privacy_plus");
+    db._tables.nodes.find((n) => n.node_id === "fi-r1").lifecycle_state = "FAILED";
+    const result = await authorize(db, privacy.id);
+    expect(result.ok).toBe(false);
+    expect(result.code).toBe("route_stale");
   });
 });
 
-describe("authorizeRoute: privacy_plus routes", () => {
-  it("returns a two-hop envelope, relay first, when both identities exist", async () => {
-    const db = world({
-      locations: [
-        { id: FI, country_code: "FI", enabled: true },
-        { id: DE, country_code: "DE", enabled: true },
-      ],
-      nodes: [node("node-fi-1", FI, "RELAY"), node("node-de-1", DE, "EXIT")],
-      paths: [doublePath(FI, DE)],
-      identities: [
-        { node_id: "node-fi-1", vpn_user_id: "uuid-fi-1" },
-        { node_id: "node-de-1", vpn_user_id: "uuid-de-1" },
-      ],
-    });
-    const result = await authorizeRoute(db, {}, { device: DEVICE, entitlement: PAID, routeId: "fi-de-privacy" });
-    expect(result.ok).toBe(true);
-    expect(result.credentialEnvelope).toEqual({
-      version: 1,
-      hops: [{ uuid: "uuid-fi-1" }, { uuid: "uuid-de-1" }],
-    });
+describe("authorizeRoute: credential resolution", () => {
+  it("returns a single-hop envelope with a short expires_at", async () => {
+    const db = world({ nodes: [node("de-1", DE, "EXIT")], paths: [directPath(DE)], identities: [{ node_id: "de-1", vpn_user_id: "uuid-de-1" }] });
+    const [route] = await directory(db);
+    const before = Date.now();
+    const result = await authorize(db, route.id);
+    expect(result.routeId).toBe(route.id);
+    expect(result.credentialEnvelope).toEqual({ version: 1, hops: [{ uuid: "uuid-de-1" }] });
+    expect(new Date(result.expiresAt).getTime()).toBeGreaterThanOrEqual(before + AUTHORIZE_TTL_MS);
   });
 
-  it("enqueues CREATE_USER only for the missing hop when one identity exists", async () => {
+  it("enqueues CREATE_USER for every missing hop and returns 503, never a partial envelope", async () => {
     const db = world({
-      locations: [
-        { id: FI, country_code: "FI", enabled: true },
-        { id: DE, country_code: "DE", enabled: true },
-      ],
-      nodes: [node("node-fi-1", FI, "RELAY"), node("node-de-1", DE, "EXIT")],
+      nodes: [node("de-e1", DE, "EXIT"), node("fi-r1", FI, "RELAY")],
       paths: [doublePath(FI, DE)],
-      identities: [{ node_id: "node-fi-1", vpn_user_id: "uuid-fi-1" }],
+      identities: [{ node_id: "de-e1", vpn_user_id: "u1" }],
     });
-    const result = await authorizeRoute(db, {}, { device: DEVICE, entitlement: PAID, routeId: "fi-de-privacy" });
+    const [route] = await directory(db);
+    const result = await authorize(db, route.id);
     expect(result).toEqual({ ok: false, status: 503, message: expect.any(String) });
-    expect(jobs(db)).toHaveLength(1);
-    expect(jobs(db)[0].node_id).toBe("node-de-1");
-  });
-
-  it("enqueues CREATE_USER for both hops when neither identity exists", async () => {
-    const db = world({
-      locations: [
-        { id: FI, country_code: "FI", enabled: true },
-        { id: DE, country_code: "DE", enabled: true },
-      ],
-      nodes: [node("node-fi-1", FI, "RELAY"), node("node-de-1", DE, "EXIT")],
-      paths: [doublePath(FI, DE)],
-    });
-    const result = await authorizeRoute(db, {}, { device: DEVICE, entitlement: PAID, routeId: "fi-de-privacy" });
-    expect(result).toEqual({ ok: false, status: 503, message: expect.any(String) });
-    expect(jobs(db).map((j) => j.node_id).sort()).toEqual(["node-de-1", "node-fi-1"]);
-  });
-
-  it("resolves normally when entry and exit locations are the same", async () => {
-    const db = world({
-      locations: [{ id: DE, country_code: "DE", enabled: true }],
-      nodes: [node("node-de-relay", DE, "RELAY"), node("node-de-exit", DE, "EXIT")],
-      paths: [doublePath(DE, DE)],
-      identities: [
-        { node_id: "node-de-relay", vpn_user_id: "uuid-relay" },
-        { node_id: "node-de-exit", vpn_user_id: "uuid-exit" },
-      ],
-    });
-    const result = await authorizeRoute(db, {}, { device: DEVICE, entitlement: PAID, routeId: "de-de-privacy" });
-    expect(result.ok).toBe(true);
-    expect(result.credentialEnvelope.hops).toEqual([{ uuid: "uuid-relay" }, { uuid: "uuid-exit" }]);
+    expect(jobs(db).map((j) => j.node_id)).toEqual(["fi-r1"]);
   });
 
   it("propagates the finite-entitlement-missing-expiry error rather than returning 503", async () => {
-    const db = world({
-      locations: [{ id: DE, country_code: "DE", enabled: true }],
-      nodes: [node("node-de-1", DE, "EXIT")],
-      paths: [directPath(DE)],
-    });
-    const brokenEntitlement = { clearExpiry: false, serviceExpiresAt: null };
-    await expect(
-      authorizeRoute(db, {}, { device: DEVICE, entitlement: brokenEntitlement, routeId: "de-fast" })
-    ).rejects.toThrow("finite entitlement is missing serviceExpiresAt");
+    const db = world({ nodes: [node("de-1", DE, "EXIT")], paths: [directPath(DE)] });
+    const [route] = await directory(db);
+    await expect(authorize(db, route.id, { clearExpiry: false, serviceExpiresAt: null })).rejects.toThrow(
+      "finite entitlement is missing serviceExpiresAt"
+    );
   });
 });

@@ -19,12 +19,13 @@ const NODES = [
   },
 ];
 const LOCATIONS = [{ id: "loc-de", countryCode: "DE", displayName: "Germany" }];
+const DIRECT = [{ entryLocationId: null, exitLocationId: "loc-de" }];
 
 describe("signRouteDirectory", () => {
   it("produces an envelope whose signature verifies against the public key", async () => {
     const db = makeFakeSupabase({ route_directory_state: [{ id: true, version: 0, last_payload_hash: null }] });
     const envelope = await signRouteDirectory(db, {
-      nodes: NODES, locations: LOCATIONS, allowedPaths: [],
+      nodes: NODES, locations: LOCATIONS, allowedPaths: DIRECT,
       privateKeyHex: PRIVATE_KEY_HEX, keyId: "routes-2026-a",
     });
     expect(envelope.schema_version).toBe(1);
@@ -48,7 +49,7 @@ describe("signRouteDirectory", () => {
   it("sets expires_at exactly 1 hour after issued_at", async () => {
     const db = makeFakeSupabase({ route_directory_state: [{ id: true, version: 0, last_payload_hash: null }] });
     const envelope = await signRouteDirectory(db, {
-      nodes: NODES, locations: LOCATIONS, allowedPaths: [],
+      nodes: NODES, locations: LOCATIONS, allowedPaths: DIRECT,
       privateKeyHex: PRIVATE_KEY_HEX, keyId: "routes-2026-a",
     });
     const diffMs = new Date(envelope.expires_at).getTime() - new Date(envelope.issued_at).getTime();
@@ -58,7 +59,7 @@ describe("signRouteDirectory", () => {
   it("starts directory_version at 1 on the very first call (route_directory_state seeded at 0)", async () => {
     const db = makeFakeSupabase({ route_directory_state: [{ id: true, version: 0, last_payload_hash: null }] });
     const envelope = await signRouteDirectory(db, {
-      nodes: NODES, locations: LOCATIONS, allowedPaths: [],
+      nodes: NODES, locations: LOCATIONS, allowedPaths: DIRECT,
       privateKeyHex: PRIVATE_KEY_HEX, keyId: "routes-2026-a",
     });
     expect(envelope.directory_version).toBe(1);
@@ -67,11 +68,11 @@ describe("signRouteDirectory", () => {
   it("reuses the same directory_version across two calls with unchanged route content", async () => {
     const db = makeFakeSupabase({ route_directory_state: [{ id: true, version: 0, last_payload_hash: null }] });
     const first = await signRouteDirectory(db, {
-      nodes: NODES, locations: LOCATIONS, allowedPaths: [],
+      nodes: NODES, locations: LOCATIONS, allowedPaths: DIRECT,
       privateKeyHex: PRIVATE_KEY_HEX, keyId: "routes-2026-a",
     });
     const second = await signRouteDirectory(db, {
-      nodes: NODES, locations: LOCATIONS, allowedPaths: [],
+      nodes: NODES, locations: LOCATIONS, allowedPaths: DIRECT,
       privateKeyHex: PRIVATE_KEY_HEX, keyId: "routes-2026-a",
     });
     expect(second.directory_version).toBe(first.directory_version);
@@ -83,12 +84,12 @@ describe("signRouteDirectory", () => {
   it("bumps directory_version when the underlying route content changes", async () => {
     const db = makeFakeSupabase({ route_directory_state: [{ id: true, version: 0, last_payload_hash: null }] });
     const first = await signRouteDirectory(db, {
-      nodes: NODES, locations: LOCATIONS, allowedPaths: [],
+      nodes: NODES, locations: LOCATIONS, allowedPaths: DIRECT,
       privateKeyHex: PRIVATE_KEY_HEX, keyId: "routes-2026-a",
     });
     const changedNodes = [{ ...NODES[0], transportPort: 8443 }];
     const second = await signRouteDirectory(db, {
-      nodes: changedNodes, locations: LOCATIONS, allowedPaths: [],
+      nodes: changedNodes, locations: LOCATIONS, allowedPaths: DIRECT,
       privateKeyHex: PRIVATE_KEY_HEX, keyId: "routes-2026-a",
     });
     expect(second.directory_version).toBe(first.directory_version + 1);

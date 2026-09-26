@@ -1,106 +1,62 @@
-import { selectNodeForDevice, isUnderCapacity } from "./scheduler.js";
+import { buildRouteCandidates, publicRoute } from "./route-candidates.js";
 
-const HAS_TRANSPORT = (node) => typeof node.transport === "string" && node.transport.length > 0;
+const NODE_COLUMNS =
+  "node_id, role, location_id, lifecycle_state, configured_users, max_sessions, hostname, ip_address, failure_domain, transport, transport_port, tls_server_name, reality_public_key, reality_short_id, reality_fingerprint, vless_flow, hysteria2_obfs_type";
 
-// tamara-next's real client (VpnHop's constructor) requires server_address
-// to be an IP literal for any non-chained hop -- a deliberate property so
-// encrypted DNS never needs plaintext bootstrap before the tunnel exists.
-// node.hostname is a DNS name (used only for tls_server_name/SNI); the
-// node's real public IP lives in node.ipAddress. Confirmed against a real
-// interop failure: see tamara-next's vpn_web_interop_test.dart.
-const HAS_IP_ADDRESS = (node) => typeof node.ipAddress === "string" && node.ipAddress.length > 0;
+/**
+ * Loads the fleet state route candidates are computed from. GET /v1/routes
+ * and POST /v1/vpn/authorize both call this, so the two can only disagree
+ * if fleet state itself changed between the calls -- which authorize
+ * detects (route id no longer present) and rejects instead of rescheduling.
+ */
+export async function loadRouteInputs(db) {
+  const [
+    { data: nodes, error: nodesError },
+    { data: locations, error: locationsError },
+    { data: allowedPaths, error: pathsError },
+  ] = await Promise.all([
+    db.from("nodes").select(NODE_COLUMNS).in("lifecycle_state", ["READY", "CANARY"]),
+    db.from("locations").select("id, country_code, display_name").eq("enabled", true),
+    db.from("allowed_paths").select("entry_location_id, exit_location_id").eq("enabled", true),
+  ]);
+  if (nodesError) throw new Error(`nodes lookup failed: ${nodesError.message}`);
+  if (locationsError) throw new Error(`locations lookup failed: ${locationsError.message}`);
+  if (pathsError) throw new Error(`allowed_paths lookup failed: ${pathsError.message}`);
 
-// scheduler.js's own DB-facing callers already filter to READY/CANARY at
-// the query level (`.in("lifecycle_state", ["READY", "CANARY"])`) before
-// isUnderCapacity ever runs -- isUnderCapacity itself does not reject a
-// FAILED/QUARANTINED node. This function is reused here with data this
-// caller does not fully control the query shape of, and the cost of a
-// stale/compromised node's real REALITY key ending up in a signed public
-// route is high enough to filter explicitly here too, not just trust the
-// caller (defense in depth, same reasoning as canTransitionLifecycle
-// being re-checked at every write site even though callers already
-// checked once).
-const ELIGIBLE_LIFECYCLE_STATES = new Set(["READY", "CANARY"]);
-
-function toHop(node) {
-  const hop = {
-    transport: node.transport,
-    server_address: node.ipAddress,
-    server_port: node.transportPort,
-    tls_server_name: node.tlsServerName,
+  return {
+    nodes: (nodes ?? []).map((n) => ({
+      nodeId: n.node_id,
+      role: n.role,
+      locationId: n.location_id,
+      lifecycleState: n.lifecycle_state,
+      configuredUsers: n.configured_users,
+      maxSessions: n.max_sessions,
+      hostname: n.hostname,
+      ipAddress: n.ip_address,
+      failureDomain: n.failure_domain,
+      transport: n.transport,
+      transportPort: n.transport_port,
+      tlsServerName: n.tls_server_name,
+      realityPublicKey: n.reality_public_key,
+      realityShortId: n.reality_short_id,
+      realityFingerprint: n.reality_fingerprint,
+      vlessFlow: n.vless_flow,
+      hysteria2ObfsType: n.hysteria2_obfs_type,
+    })),
+    locations: (locations ?? []).map((l) => ({ id: l.id, countryCode: l.country_code, displayName: l.display_name })),
+    allowedPaths: (allowedPaths ?? []).map((p) => ({
+      entryLocationId: p.entry_location_id,
+      exitLocationId: p.exit_location_id,
+    })),
   };
-  if (node.transport === "vless-reality") {
-    hop.reality_public_key = node.realityPublicKey;
-    hop.reality_short_id = node.realityShortId;
-    hop.reality_fingerprint = node.realityFingerprint;
-    hop.vless_flow = node.vlessFlow;
-  } else if (node.hysteria2ObfsType) {
-    hop.hysteria2_obfs_type = node.hysteria2ObfsType;
-  }
-  return hop;
-}
-
-function pickNode(candidates) {
-  const eligible = candidates.filter(
-    (node) =>
-      ELIGIBLE_LIFECYCLE_STATES.has(node.lifecycleState) &&
-      HAS_TRANSPORT(node) &&
-      HAS_IP_ADDRESS(node) &&
-      isUnderCapacity(node)
-  );
-  const nodeId = selectNodeForDevice({ candidates: eligible, stickyNodeId: null });
-  return eligible.find((node) => node.nodeId === nodeId) ?? null;
 }
 
 /**
- * Pure route-directory rendering: no I/O, no Supabase client. Reuses
- * scheduler.js's own candidate-selection logic (isUnderCapacity,
- * selectNodeForDevice) to pick, per (location, mode), whichever node the
- * scheduler currently prefers -- without committing anything. A node
- * that has never reported transport params (Task 3) is never a
- * candidate, and a location/pair with no eligible candidate produces no
- * route at all, never a partial one.
+ * Pure route-directory rendering: every published route is a concrete
+ * candidate from buildRouteCandidates (exact physical hops, content-derived
+ * id), with internal node ids stripped. A location/pair with no eligible
+ * candidate produces no route, never a partial one.
  */
 export function renderRoutes({ nodes, locations, allowedPaths }) {
-  const locationById = new Map(locations.map((loc) => [loc.id, loc]));
-  const byLocationAndRole = (locationId, role) =>
-    nodes.filter((node) => node.locationId === locationId && node.role === role);
-
-  const routes = [];
-
-  for (const location of locations) {
-    const exitNode = pickNode(byLocationAndRole(location.id, "EXIT"));
-    if (!exitNode) continue;
-    const route = {
-      id: `${location.countryCode.toLowerCase()}-fast`,
-      label: location.displayName,
-      region: location.countryCode,
-      mode: "fast",
-      priority: 100,
-      hops: [toHop(exitNode)],
-    };
-    if (exitNode.failureDomain) route.failure_domain = exitNode.failureDomain;
-    routes.push(route);
-  }
-
-  for (const path of allowedPaths) {
-    const entryLocation = locationById.get(path.entryLocationId);
-    const exitLocation = locationById.get(path.exitLocationId);
-    if (!entryLocation || !exitLocation) continue;
-    const relayNode = pickNode(byLocationAndRole(path.entryLocationId, "RELAY"));
-    const exitNode = pickNode(byLocationAndRole(path.exitLocationId, "EXIT"));
-    if (!relayNode || !exitNode) continue;
-    const route = {
-      id: `${entryLocation.countryCode.toLowerCase()}-${exitLocation.countryCode.toLowerCase()}-privacy`,
-      label: `${entryLocation.displayName} → ${exitLocation.displayName} Privacy+`,
-      region: exitLocation.countryCode,
-      mode: "privacy_plus",
-      priority: 100,
-      hops: [toHop(relayNode), toHop(exitNode)],
-    };
-    if (exitNode.failureDomain) route.failure_domain = exitNode.failureDomain;
-    routes.push(route);
-  }
-
-  return { routes };
+  return { routes: buildRouteCandidates({ nodes, locations, allowedPaths }).map(publicRoute) };
 }
