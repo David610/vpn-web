@@ -271,8 +271,27 @@ for (const viewport of VIEWPORTS) {
 await browser.close();
 
 console.log(`\n=== C6 findings (${findings.length}) ===`);
+let hardFailure = false;
 for (const f of findings) {
-  console.log(`[${f.page} @ ${f.viewport}] ${f.issue}`);
+  const isNavigationFailure = f.issue.startsWith("navigation failed");
+  if (isNavigationFailure) hardFailure = true;
+  // GitHub Actions renders a "::warning::" line as an annotation on the
+  // job summary and the diff, so a finding is visible on every PR without
+  // needing to open the raw log -- the whole point of wiring this into CI
+  // instead of leaving it a script nobody remembers to run by hand.
+  console.log(`::${isNavigationFailure ? "error" : "warning"}::[${f.page} @ ${f.viewport}] ${f.issue}`);
   if (f.detail) console.log(`  ${JSON.stringify(f.detail).slice(0, 300)}`);
 }
 if (findings.length === 0) console.log("No issues found across all pages/viewports.");
+
+// Only a page that failed to render at all fails the build -- every other
+// finding here (missing aria-labels, small tap targets, horizontal
+// overflow, stray console errors) is real accessibility/UX debt worth
+// fixing, but none of it was previously gated by anything, and turning
+// every one into a hard CI failure on day one would just make this step
+// impossible to keep green and get disabled. A page that never rendered
+// is unambiguously a regression, not existing debt.
+if (hardFailure) {
+  console.error("\nFAIL: at least one page failed to render entirely.");
+  process.exit(1);
+}
