@@ -192,10 +192,20 @@ Measured on a real sing-box 1.14.1 server (singbox-vpn
   connection on the node**, including other users' whose credentials did
   not change. `kill -HUP` (sing-box's in-process reload) keeps the PID but
   also cuts every open connection, so it is not a cheaper apply path.
-- **Renewal costs no restart**: {{RENEW}}
-- **Batching bounds restarts**: {{BATCH}}
-- **Urgent revocation** is applied within seconds: {{URGENT}}
-- **Expiry needs no control plane**: {{EXPIRY}}
+- **Renewal costs no restart**: a 10-minute server-paced stream stayed
+  open across the credential's original `valid_until` after a renewal;
+  the same credential still opened new connections 30 s past it; 0
+  sing-box restarts, PID unchanged.
+- **Batching bounds restarts**: 16 non-urgent revocations in 8 minutes on a
+  120 s test grid caused 5 restarts, exactly one per grid window.
+- **Urgent revocation** is applied within seconds: refused ~5–7 s after the revoke, with a pending
+  non-urgent revocation carried along in the same single restart; the
+  non-urgent one alone was still accepted 17 s after revocation
+  (deferred to the next boundary, as designed).
+- **Expiry needs no control plane**: with the control plane stopped and the agent
+  restarted mid-lease (no restart caused by that), the credential passed
+  40 s before `expires_at` and was REFUSED (VLESS and Hysteria2) from
+  2.8 s after it.
 
 What `expires_at` means, exactly: the last moment the credential can open
 a NEW connection is `expires_at` + the enforcement latency (the next agent
