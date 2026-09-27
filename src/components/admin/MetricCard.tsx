@@ -1,8 +1,6 @@
+import { AdminMetric } from "./AdminPrimitives";
+
+/** @deprecated Use AdminMetric from "./AdminPrimitives" directly; kept as a thin alias for existing call sites. */
 export function MetricCard({ label, value }: { label: string; value: number | string }) {
-  return (
-    <div className="rounded border bg-white p-4">
-      <div className="text-2xl font-semibold">{value}</div>
-      <div className="text-sm text-gray-500">{label}</div>
-    </div>
-  );
+  return <AdminMetric label={label} value={value} />;
 }

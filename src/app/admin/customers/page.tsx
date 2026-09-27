@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { AdminShell } from "@/components/admin/AdminShell";
 import { StatusBadge } from "@/components/admin/StatusBadge";
+import { AdminPage, AdminButton, AdminNotice, AdminTable, AdminTableWrap, adminInputClass } from "@/components/admin/AdminPrimitives";
 import { useAdminSession } from "@/hooks/useAdminSession";
 import { adminFetch } from "@/lib/adminFetch";
 
@@ -78,101 +79,92 @@ export default function AdminCustomersPage() {
 
   return (
     <AdminShell>
-      <div className="mb-4 flex items-baseline justify-between gap-4">
-        <h1 className="text-xl font-semibold">Customers</h1>
-        <span className="text-xs text-gray-500">{meta.total} total</span>
-      </div>
+      <AdminPage title="Customers" description={`${meta.total} total`}>
+        <input
+          className={`mb-4 w-full max-w-sm ${adminInputClass}`}
+          placeholder="Search by email, user id, or VPN user id"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+        />
 
-      <input
-        className="mb-4 w-full max-w-sm rounded border px-3 py-2"
-        placeholder="Search by email, user id, or VPN user id"
-        value={input}
-        onChange={(e) => setInput(e.target.value)}
-      />
-
-      {error ? (
-        <p className="text-red-600">{error}</p>
-      ) : !customers ? (
-        <p>Loading…</p>
-      ) : (
-        <>
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead>
-                <tr className="border-b text-gray-500">
-                  <th className="py-2">Customer</th>
-                  <th>Role</th>
-                  <th>Subscription</th>
-                  <th>VPN</th>
-                  <th>Node</th>
-                  <th>Period ends</th>
-                </tr>
-              </thead>
-              <tbody>
-                {customers.map((c) => (
-                  <tr key={c.userId} className="border-b">
-                    <td className="py-2">
-                      <Link
-                        href={`/admin/customers/detail?id=${c.userId}`}
-                        className="text-neutral-900 underline underline-offset-2 hover:text-neutral-600"
-                      >
-                        {c.email ?? c.userId}
-                      </Link>
-                    </td>
-                    <td className="text-gray-500">
-                      {c.accountRole === "owner" && c.memberCount > 1
-                        ? `owner of ${c.memberCount}`
-                        : c.accountRole}
-                    </td>
-                    <td>
-                      {c.subscriptionStatus ? (
-                        <StatusBadge status={c.subscriptionStatus} />
-                      ) : (
-                        "—"
-                      )}
-                    </td>
-                    <td>
-                      {c.vpnAccountId ? (
-                        <StatusBadge status={c.enabled ? "active" : "canceled"} />
-                      ) : (
-                        "—"
-                      )}
-                    </td>
-                    <td>{c.nodeId ?? "—"}</td>
-                    <td>
-                      {c.currentPeriodEnd
-                        ? new Date(c.currentPeriodEnd).toLocaleDateString()
-                        : "—"}
-                    </td>
+        {error ? (
+          <AdminNotice tone="error">{error}</AdminNotice>
+        ) : !customers ? (
+          <p className="text-fg-2">Loading…</p>
+        ) : (
+          <>
+            <AdminTableWrap label="Customers">
+              <AdminTable>
+                <thead>
+                  <tr>
+                    <th>Customer</th>
+                    <th>Role</th>
+                    <th>Subscription</th>
+                    <th>VPN</th>
+                    <th>Node</th>
+                    <th>Period ends</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {customers.map((c) => (
+                    <tr key={c.userId}>
+                      <td>
+                        <Link
+                          href={`/admin/customers/detail?id=${c.userId}`}
+                          className="text-fg underline underline-offset-2 hover:text-fg-2"
+                        >
+                          {c.email ?? c.userId}
+                        </Link>
+                      </td>
+                      <td className="text-fg-2">
+                        {c.accountRole === "owner" && c.memberCount > 1
+                          ? `owner of ${c.memberCount}`
+                          : c.accountRole}
+                      </td>
+                      <td>
+                        {c.subscriptionStatus ? (
+                          <StatusBadge status={c.subscriptionStatus} />
+                        ) : (
+                          "—"
+                        )}
+                      </td>
+                      <td>
+                        {c.vpnAccountId ? (
+                          <StatusBadge status={c.enabled ? "active" : "canceled"} />
+                        ) : (
+                          "—"
+                        )}
+                      </td>
+                      <td className="font-mono">{c.nodeId ?? "—"}</td>
+                      <td>
+                        {c.currentPeriodEnd
+                          ? new Date(c.currentPeriodEnd).toLocaleDateString()
+                          : "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </AdminTable>
+            </AdminTableWrap>
 
-          <div className="mt-4 flex items-center gap-3">
-            <button
-              type="button"
-              className="rounded border px-3 py-1.5 text-sm disabled:opacity-40"
-              disabled={page <= 1}
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
-            >
-              Previous
-            </button>
-            <span className="text-sm text-gray-500">
-              Page {page} of {meta.totalPages}
-            </span>
-            <button
-              type="button"
-              className="rounded border px-3 py-1.5 text-sm disabled:opacity-40"
-              disabled={page >= meta.totalPages}
-              onClick={() => setPage((p) => Math.min(meta.totalPages, p + 1))}
-            >
-              Next
-            </button>
-          </div>
-        </>
-      )}
+            <div className="mt-4 flex items-center gap-3">
+              <AdminButton type="button" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>
+                Previous
+              </AdminButton>
+              <span className="text-sm text-fg-2">
+                Page {page} of {meta.totalPages}
+              </span>
+              <AdminButton
+                type="button"
+                disabled={page >= meta.totalPages}
+                onClick={() => setPage((p) => Math.min(meta.totalPages, p + 1))}
+              >
+                Next
+              </AdminButton>
+            </div>
+          </>
+        )}
+      </AdminPage>
     </AdminShell>
   );
 }

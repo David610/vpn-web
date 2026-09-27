@@ -5,3 +5,8 @@
 export const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://arcana.example";
 export const SITE_NAME = "Arcana";
 export const IS_PRODUCTION = process.env.NODE_ENV === "production";
+
+// SUPPORT_EMAIL is a placeholder until a real support mailbox exists. This
+// is the ONLY place it may be hardcoded — scripts/check-production-config.mjs
+// refuses a production deploy while this still resolves to the placeholder.
+export const SUPPORT_EMAIL = process.env.NEXT_PUBLIC_SUPPORT_EMAIL || "support@arcana.example";

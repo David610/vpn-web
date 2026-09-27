@@ -2,7 +2,15 @@
 
 import { useEffect, useState } from "react";
 import { AdminShell } from "@/components/admin/AdminShell";
-import { MetricCard } from "@/components/admin/MetricCard";
+import {
+  AdminPage,
+  AdminSection,
+  AdminMetricLarge,
+  AdminMetricRow,
+  AdminStatRow,
+  AdminStatRows,
+  AdminNotice,
+} from "@/components/admin/AdminPrimitives";
 import { useAdminSession } from "@/hooks/useAdminSession";
 import { adminFetch } from "@/lib/adminFetch";
 
@@ -66,38 +74,66 @@ export default function AdminOverviewPage() {
 
   return (
     <AdminShell>
-      <h1 className="mb-6 text-xl font-semibold">Overview</h1>
-      {error ? (
-        <p className="text-red-600">{error}</p>
-      ) : !overview ? (
-        <p>Loading…</p>
-      ) : (
-        <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-          <MetricCard label="Customer accounts" value={overview.customers.total} />
-          <MetricCard label="Active paid" value={overview.customers.active} />
-          <MetricCard label="Free trials" value={overview.customers.trialing} />
-          <MetricCard label="Past due" value={overview.customers.past_due} />
+      <AdminPage title="Overview">
+        {error ? (
+          <AdminNotice tone="error">{error}</AdminNotice>
+        ) : !overview ? (
+          <p className="text-fg-2">Loading…</p>
+        ) : (
+          <>
+            <AdminMetricRow>
+              <AdminMetricLarge label="Customer accounts" value={overview.customers.total} />
+              <AdminMetricLarge label="Live subscriptions" value={overview.subscriptions?.live ?? "—"} />
+              <AdminMetricLarge
+                label="Devices / capacity"
+                value={overview.devices ? `${overview.devices.active} / ${overview.devices.capacity}` : "—"}
+              />
+              <AdminMetricLarge label="Nodes online" value={overview.nodes.online} />
+            </AdminMetricRow>
 
-          <MetricCard label="Live subscriptions" value={overview.subscriptions?.live ?? "—"} />
-          <MetricCard label="Extra device packs" value={overview.subscriptions?.extra_packs ?? "—"} />
-          <MetricCard label="Devices / capacity" value={overview.devices ? `${overview.devices.active} / ${overview.devices.capacity}` : "—"} />
-          <MetricCard label="Devices over capacity" value={overview.devices?.over_capacity ?? "—"} />
-          <MetricCard label="Support grants" value={overview.members?.admin_grants ?? "—"} />
+            <AdminSection label="Customer status">
+              <AdminStatRows>
+                <AdminStatRow label="Active paid" value={overview.customers.active} />
+                <AdminStatRow label="Free trials" value={overview.customers.trialing} />
+                <AdminStatRow label="Past due" value={overview.customers.past_due} warn />
+                <AdminStatRow label="Cancelled" value={overview.customers.canceled} />
+                <AdminStatRow label="Cancelling" value={overview.subscriptions?.cancelling ?? "—"} />
+                <AdminStatRow label="Several subscriptions" value={overview.subscriptions?.accounts_with_several ?? "—"} />
+                <AdminStatRow label="Extra device packs" value={overview.subscriptions?.extra_packs ?? "—"} />
+                <AdminStatRow label="Support grants" value={overview.members?.admin_grants ?? "—"} />
+              </AdminStatRows>
+            </AdminSection>
 
-          <MetricCard label="VPN enabled" value={overview.vpn.enabled} />
-          <MetricCard label="VPN disabled" value={overview.vpn.disabled} />
-          <MetricCard label="Traffic this month" value={bytes(overview.usage.month_total_bytes)} />
-          <MetricCard label="Current ↓ / ↑" value={`${mbps(overview.usage.download_bps)} / ${mbps(overview.usage.upload_bps)}`} />
+            <AdminSection label="Fleet status" action={overview.nodes.offline === 0 ? <span className="text-fg-2">Healthy</span> : <span className="text-danger">Degraded</span>}>
+              <AdminStatRows>
+                <AdminStatRow label="Nodes offline" value={overview.nodes.offline} warn />
+                <AdminStatRow label="Devices over capacity" value={overview.devices?.over_capacity ?? "—"} warn />
+                <AdminStatRow label="Devices without subscription" value={overview.devices?.without_subscription ?? "—"} warn />
+                <AdminStatRow label="Unschedulable devices" value={overview.devices?.unschedulable ?? "—"} warn />
+              </AdminStatRows>
+            </AdminSection>
 
-          <MetricCard label="Nodes online" value={overview.nodes.online} />
-          <MetricCard label="Nodes offline" value={overview.nodes.offline} />
-          <MetricCard label="Jobs pending" value={overview.jobs.pending} />
-          <MetricCard label="Jobs failed" value={overview.jobs.failed} />
+            <AdminSection label="Operations">
+              <AdminStatRows>
+                <AdminStatRow label="Jobs pending" value={overview.jobs.pending} />
+                <AdminStatRow label="Jobs claimed" value={overview.jobs.claimed} />
+                <AdminStatRow label="Jobs failed" value={overview.jobs.failed} warn />
+                <AdminStatRow label="Open alerts" value={overview.alerts.open} warn />
+                <AdminStatRow label="Abuse flags" value={overview.abuse.open} warn />
+              </AdminStatRows>
+            </AdminSection>
 
-          <MetricCard label="Open alerts" value={overview.alerts.open} />
-          <MetricCard label="Abuse flags" value={overview.abuse.open} />
-        </div>
-      )}
+            <AdminSection label="Traffic this month">
+              <AdminStatRows>
+                <AdminStatRow label="Total" value={bytes(overview.usage.month_total_bytes)} />
+                <AdminStatRow label="Down / up" value={`${bytes(overview.usage.month_download_bytes)} / ${bytes(overview.usage.month_upload_bytes)}`} />
+                <AdminStatRow label="Current ↓ / ↑" value={`${mbps(overview.usage.download_bps)} / ${mbps(overview.usage.upload_bps)}`} />
+                <AdminStatRow label="VPN enabled / disabled" value={`${overview.vpn.enabled} / ${overview.vpn.disabled}`} />
+              </AdminStatRows>
+            </AdminSection>
+          </>
+        )}
+      </AdminPage>
     </AdminShell>
   );
 }

@@ -72,9 +72,9 @@ export default function InvitePage() {
     }
 
     if (!session) {
-      // A seat is bound to a Supabase user, so the invitee has to be signed
-      // in before it can be claimed. Carry this page (token and all) through
-      // the auth pages so they land back here afterwards.
+      // A device slot is bound to a Supabase user, so the invitee has to be
+      // signed in before it can be claimed. Carry this page (token and all)
+      // through the auth pages so they land back here afterwards.
       const here = `/invite/?token=${encodeURIComponent(token)}`;
       const next = `?next=${encodeURIComponent(here)}`;
       setPhase({
@@ -115,7 +115,7 @@ export default function InvitePage() {
               <>
                 <p className="section-sub">
                   You&apos;ve been invited to share an Arcana VPN plan. Log in or create an
-                  account to claim your seat — we&apos;ll bring you straight back here.
+                  account to claim your device — we&apos;ll bring you straight back here.
                 </p>
                 <div
                   style={{
@@ -144,8 +144,8 @@ export default function InvitePage() {
               <>
                 <p className="section-sub">
                   {phase.provisioning
-                    ? "Your seat is active. We're setting up your own VPN configuration now — it usually takes a few seconds."
-                    : "Your seat is active."}
+                    ? "Your device is active. We're setting up your own VPN configuration now — it usually takes a few seconds."
+                    : "Your device is active."}
                 </p>
                 <button
                   type="button"

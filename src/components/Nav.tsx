@@ -24,7 +24,7 @@ export default function Nav() {
       </Link>
       <button
         type="button"
-        className="btn btn-secondary dm-nav__toggle"
+        className="dm-nav__toggle"
         aria-expanded={open}
         aria-controls="dm-nav-menu"
         onClick={() => setOpen((v) => !v)}
@@ -36,13 +36,10 @@ export default function Nav() {
         className={`dm-nav__desktop${open ? " dm-nav__desktop--open" : ""}`}
         aria-label="Main"
       >
-        <Link href="/#features" className="dm-nav__link" onClick={() => setOpen(false)}>
-          Features
-        </Link>
-        <Link href="/#locations" className="dm-nav__link" onClick={() => setOpen(false)}>
+        <Link href="/locations" className="dm-nav__link" onClick={() => setOpen(false)}>
           Locations
         </Link>
-        <Link href="/#pricing" className="dm-nav__link" onClick={() => setOpen(false)}>
+        <Link href="/pricing" className="dm-nav__link" onClick={() => setOpen(false)}>
           Pricing
         </Link>
         {loading ? null : session ? (

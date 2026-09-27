@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { AccountShell, Feedback, useAccount } from "@/components/account/AccountShell";
+import { ActionsDialog, ConfirmDialog, InputDialog, type DialogAction } from "@/components/Dialog";
 import { api, euro } from "@/lib/api";
 import { LIVE, monthlyCents, statusLabel, type Subscription } from "@/components/account/types";
 
@@ -10,6 +11,9 @@ function SubscriptionRow({ sub }: { sub: Subscription }) {
   const plan = overview!.plan;
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [managing, setManaging] = useState(false);
+  const [renaming, setRenaming] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   const canRemovePack = sub.extraPacks > 0 && sub.capacity - plan.devicesPerPack >= sub.used;
 
   async function setPacks(packs: number) {
@@ -26,11 +30,11 @@ function SubscriptionRow({ sub }: { sub: Subscription }) {
   }
 
   async function cancel() {
-    if (!window.confirm(`Cancel "${sub.name}"? You'll keep access until the end of the current billing period.`)) return;
     setBusy("cancel");
     setError(null);
     try {
       await api(session, `/api/account/subscriptions/${sub.id}/cancel`, { method: "POST" });
+      setCancelling(false);
       await reload();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not cancel this subscription.");
@@ -52,13 +56,16 @@ function SubscriptionRow({ sub }: { sub: Subscription }) {
     }
   }
 
-  async function rename() {
-    const name = window.prompt("Subscription name", sub.name);
-    if (!name || name === sub.name) return;
+  async function rename(name: string) {
+    if (name === sub.name) {
+      setRenaming(false);
+      return;
+    }
     setBusy("rename");
     setError(null);
     try {
       await api(session, `/api/account/subscriptions/${sub.id}`, { method: "PATCH", body: { name } });
+      setRenaming(false);
       await reload();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not rename this subscription.");
@@ -100,49 +107,76 @@ function SubscriptionRow({ sub }: { sub: Subscription }) {
           </div>
         </div>
 
-        <div className="row__actions" style={{ justifyContent: "flex-start" }}>
-          <button type="button" className="btn btn-secondary btn-sm" disabled={busy !== null} onClick={() => setPacks(sub.extraPacks + 1)}>
+        <div className="row__actions" style={{ justifyContent: "space-between" }}>
+          <button type="button" className="btn btn-primary btn-sm" disabled={busy !== null} onClick={() => setPacks(sub.extraPacks + 1)}>
             Add 3 devices
           </button>
-          {sub.extraPacks > 0 && (
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
-              disabled={busy !== null || !canRemovePack}
-              onClick={() => setPacks(sub.extraPacks - 1)}
-              title={canRemovePack ? undefined : "Remove or move devices out of this pack first"}
-            >
-              Remove pack
-            </button>
-          )}
-          <button type="button" className="btn-link" disabled={busy !== null} onClick={rename}>
-            Rename
-          </button>
-          {LIVE.has(sub.status) && !sub.cancelAtPeriodEnd && (
-            <button type="button" className="btn-link text-danger" disabled={busy !== null} onClick={cancel}>
-              Cancel
-            </button>
-          )}
-          {sub.cancelAtPeriodEnd && (
+          {sub.cancelAtPeriodEnd ? (
             <button type="button" className="btn-link" disabled={busy !== null} onClick={resume}>
               Resume
+            </button>
+          ) : (
+            <button type="button" className="btn-link" disabled={busy !== null} onClick={() => setManaging(true)}>
+              Manage
             </button>
           )}
         </div>
         {error && <p className="field-error" style={{ marginTop: "var(--space-2)" }}>{error}</p>}
       </div>
+      <ActionsDialog
+        open={managing}
+        title="Manage subscription"
+        onCancel={() => setManaging(false)}
+        actions={([
+          { label: "Rename", onSelect: () => { setManaging(false); setRenaming(true); } },
+          sub.extraPacks > 0
+            ? {
+                label: "Remove device pack",
+                disabled: !canRemovePack,
+                onSelect: () => { setManaging(false); void setPacks(sub.extraPacks - 1); },
+              }
+            : null,
+          LIVE.has(sub.status) && !sub.cancelAtPeriodEnd
+            ? {
+                label: "Cancel subscription",
+                danger: true,
+                separated: true,
+                onSelect: () => { setManaging(false); setCancelling(true); },
+              }
+            : null,
+        ] as Array<DialogAction | null>).filter((a): a is DialogAction => a !== null)}
+      />
+      <InputDialog
+        open={renaming}
+        title="Rename subscription"
+        label="Name"
+        initialValue={sub.name}
+        maxLength={80}
+        busy={busy === "rename"}
+        onConfirm={rename}
+        onCancel={() => setRenaming(false)}
+      />
+      <ConfirmDialog
+        open={cancelling}
+        title="Cancel subscription?"
+        description={`You'll keep access to “${sub.name}” until the end of the current billing period.`}
+        confirmLabel="Cancel subscription"
+        danger
+        busy={busy === "cancel"}
+        onConfirm={cancel}
+        onCancel={() => setCancelling(false)}
+      />
     </li>
   );
 }
 
 function SubscriptionsBody() {
   const { session, overview, error } = useAccount();
+  const [naming, setNaming] = useState(false);
   const [checkoutBusy, setCheckoutBusy] = useState(false);
   const [checkoutError, setCheckoutError] = useState<string | null>(null);
 
-  async function createSubscription() {
-    const name = window.prompt("Name for the new subscription", "New subscription");
-    if (!name) return;
+  async function createSubscription(name: string) {
     setCheckoutBusy(true);
     setCheckoutError(null);
     try {
@@ -176,10 +210,24 @@ function SubscriptionsBody() {
         )}
       </div>
 
-      <button type="button" className="btn btn-primary" disabled={checkoutBusy} onClick={createSubscription}>
+      <button type="button" className="btn btn-primary" disabled={checkoutBusy} onClick={() => setNaming(true)}>
         {checkoutBusy ? "Redirecting…" : "Create another subscription"}
       </button>
       <Feedback error={checkoutError} />
+      <InputDialog
+        open={naming}
+        title="New subscription"
+        label="Name"
+        initialValue="New subscription"
+        maxLength={80}
+        confirmLabel="Continue"
+        busy={checkoutBusy}
+        onConfirm={(name) => {
+          setNaming(false);
+          void createSubscription(name);
+        }}
+        onCancel={() => setNaming(false)}
+      />
     </>
   );
 }

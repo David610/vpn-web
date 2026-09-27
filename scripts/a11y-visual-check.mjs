@@ -16,7 +16,9 @@ const VIEWPORTS = [
   { name: "1440-desktop", width: 1440, height: 900 },
   { name: "1024-tablet", width: 1024, height: 768 },
   { name: "768-tablet", width: 768, height: 1024 },
+  { name: "430-iphone-max", width: 430, height: 932 },
   { name: "390-iphone", width: 390, height: 844 },
+  { name: "375-iphone-se", width: 375, height: 667 },
   { name: "360-android", width: 360, height: 800 },
 ];
 
@@ -198,6 +200,12 @@ ADMIN_SETTINGS_BODY.readiness = [
 ];
 
 const PAGES = [
+  { path: "/", label: "public-home" },
+  { path: "/login/", label: "public-login" },
+  { path: "/signup/", label: "public-signup" },
+  { path: "/terms/", label: "public-terms" },
+  { path: "/privacy/", label: "public-privacy" },
+  { path: "/impressum/", label: "public-impressum" },
   { path: "/account/", label: "account-overview" },
   { path: "/account/subscriptions/", label: "account-subscriptions" },
   { path: "/account/devices/", label: "account-devices" },
@@ -320,6 +328,13 @@ async function checkPage(browser, viewport, pageDef) {
     findings.push({ page: pageDef.label, viewport: viewport.name, issue: `console errors`, detail: consoleErrors.slice(0, 5) });
   }
 
+  // Screenshot the page in its resting state — before the keyboard-focus
+  // check below, which deliberately focuses an element and would otherwise
+  // freeze a focus ring into every capture (this bit us: a prior review
+  // mistook the ring around the nav brand link for a permanent boxed logo).
+  const screenshotPath = path.join(OUT_DIR, `${pageDef.label}--${viewport.name}.png`);
+  await page.screenshot({ path: screenshotPath, fullPage: true }).catch(() => {});
+
   // Keyboard focus reachability: Tab a few times, confirm something gets focus
   await page.keyboard.press("Tab");
   await page.keyboard.press("Tab");
@@ -328,13 +343,17 @@ async function checkPage(browser, viewport, pageDef) {
     findings.push({ page: pageDef.label, viewport: viewport.name, issue: "no element receives keyboard focus after 2 Tab presses" });
   }
 
-  const screenshotPath = path.join(OUT_DIR, `${pageDef.label}--${viewport.name}.png`);
-  await page.screenshot({ path: screenshotPath, fullPage: true }).catch(() => {});
-
   await context.close();
 }
 
-const browser = await chromium.launch();
+// PLAYWRIGHT_CHROMIUM_PATH lets a sandbox with a pre-installed browser at a
+// path Playwright's own version lookup doesn't match (e.g. this repo's
+// pinned @playwright/test vs. an environment-provided chromium build) point
+// straight at that executable. CI installs its own matching browser and
+// leaves this unset, so chromium.launch() behaves exactly as before there.
+const browser = await chromium.launch(
+  process.env.PLAYWRIGHT_CHROMIUM_PATH ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_PATH } : {}
+);
 for (const viewport of VIEWPORTS) {
   for (const pageDef of PAGES) {
     await checkPage(browser, viewport, pageDef);

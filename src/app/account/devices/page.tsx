@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { AccountShell, useAccount } from "@/components/account/AccountShell";
+import { ConfirmDialog, InputDialog } from "@/components/Dialog";
 import { api } from "@/lib/api";
 import type { Device, Subscription } from "@/components/account/types";
 
@@ -21,14 +22,19 @@ function DeviceRow({
   const { session, reload } = useAccount();
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [renaming, setRenaming] = useState(false);
+  const [revoking, setRevoking] = useState(false);
 
-  async function rename() {
-    const name = window.prompt("Device name", device.name);
-    if (!name || name === device.name) return;
+  async function rename(name: string) {
+    if (name === device.name) {
+      setRenaming(false);
+      return;
+    }
     setBusy("rename");
     setError(null);
     try {
       await api(session, `/api/account/devices/${device.id}`, { method: "PATCH", body: { name } });
+      setRenaming(false);
       await reload();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not rename this device.");
@@ -66,11 +72,11 @@ function DeviceRow({
   }
 
   async function revoke() {
-    if (!window.confirm(`Revoke ${device.name}? It will lose VPN access immediately.`)) return;
     setBusy("revoke");
     setError(null);
     try {
       await api(session, `/api/account/devices/${device.id}/revoke`, { method: "POST" });
+      setRevoking(false);
       await reload();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not revoke this device.");
@@ -111,7 +117,7 @@ function DeviceRow({
               </select>
             </div>
             <div>
-              <label className="field-label" htmlFor={`conn-${device.id}`}>Connection</label>
+              <label className="field-label" htmlFor={`conn-${device.id}`}>Configuration</label>
               <select
                 id={`conn-${device.id}`}
                 className="field select"
@@ -120,7 +126,7 @@ function DeviceRow({
                 onChange={(e) => changeConnection(e.target.value)}
               >
                 <option value="" disabled>
-                  {profiles.length === 0 ? "No connections yet" : "Choose a connection"}
+                  {profiles.length === 0 ? "No configurations yet" : "Choose a configuration"}
                 </option>
                 {profiles.map((p) => (
                   <option key={p.id} value={p.id} disabled={!p.enabled && p.id !== assignment?.profileId}>
@@ -135,15 +141,35 @@ function DeviceRow({
         <div className="row__actions" style={{ justifyContent: "flex-start", marginTop: "var(--space-3)" }}>
           {!revoked && (
             <>
-              <button type="button" className="btn-link" disabled={busy !== null} onClick={rename}>Rename</button>
-              <button type="button" className="btn-link text-danger" disabled={busy !== null} onClick={revoke}>
-                {busy === "revoke" ? "Revoking…" : "Revoke"}
+              <button type="button" className="btn-link" disabled={busy !== null} onClick={() => setRenaming(true)}>Rename</button>
+              <button type="button" className="btn-link text-danger" disabled={busy !== null} onClick={() => setRevoking(true)}>
+                Revoke
               </button>
             </>
           )}
         </div>
         {error && <p className="field-error" style={{ marginTop: "var(--space-2)" }}>{error}</p>}
       </div>
+      <InputDialog
+        open={renaming}
+        title="Rename device"
+        label="Device name"
+        initialValue={device.name}
+        maxLength={60}
+        busy={busy === "rename"}
+        onConfirm={rename}
+        onCancel={() => setRenaming(false)}
+      />
+      <ConfirmDialog
+        open={revoking}
+        title="Remove device?"
+        description="This device will immediately lose VPN access."
+        confirmLabel="Remove device"
+        danger
+        busy={busy === "revoke"}
+        onConfirm={revoke}
+        onCancel={() => setRevoking(false)}
+      />
     </li>
   );
 }

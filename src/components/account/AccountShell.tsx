@@ -14,7 +14,7 @@ const LINKS = [
   { href: "/account/", label: "Overview" },
   { href: "/account/subscriptions/", label: "Subscriptions" },
   { href: "/account/devices/", label: "Devices" },
-  { href: "/account/connections/", label: "Connections" },
+  { href: "/account/connections/", label: "Configurations" },
   { href: "/account/billing/", label: "Billing" },
   { href: "/account/security/", label: "Security" },
   { href: "/account/help/", label: "Help" },
@@ -77,6 +77,8 @@ export function AccountShell({
   const current = (href: string) =>
     href === "/account/" ? pathname === "/account" || pathname === "/account/" : pathname.startsWith(href.slice(0, -1));
 
+  const currentLink = LINKS.find((link) => current(link.href)) ?? LINKS[0];
+
   return (
     <>
       <Nav />
@@ -90,6 +92,21 @@ export function AccountShell({
               </Link>
             ))}
           </nav>
+          <details className="area__nav-mobile">
+            <summary>
+              <span className="area__nav-mobile-label">
+                Account <span aria-hidden="true">/</span> {currentLink.label}
+              </span>
+              <span className="area__nav-mobile-chevron" aria-hidden="true">⌄</span>
+            </summary>
+            <nav className="area__nav-mobile-list" aria-label="Account sections">
+              {LINKS.map((link) => (
+                <Link key={link.href} href={link.href} aria-current={current(link.href) ? "page" : undefined}>
+                  {link.label}
+                </Link>
+              ))}
+            </nav>
+          </details>
         </aside>
         <main className="area__main">
           <header className="area__head">

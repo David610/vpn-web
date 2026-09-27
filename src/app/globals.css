@@ -37,10 +37,14 @@
   --font-display: var(--font-sans);
   --font-body:    var(--font-sans);
 
-  /* Motion */
-  --t-fast:    120ms ease-out;
-  --t-base:    180ms ease-out;
-  --t-slow:    260ms ease-out;
+  /* Motion — one shared easing; duration buckets by what's changing.
+     --t-fast:  buttons/links/radio & selection state (120-150ms)
+     --t-base:  disclosures/menus (160-180ms)
+     --t-slow:  dialogs (180-220ms) */
+  --ease:      cubic-bezier(.2, .8, .2, 1);
+  --t-fast:    140ms var(--ease);
+  --t-base:    170ms var(--ease);
+  --t-slow:    200ms var(--ease);
 
   /* Type scale — rem-based so it grows with user text-size settings. */
   --text-xs:      0.75rem;
@@ -50,7 +54,7 @@
   --text-h3:      1.125rem;
   --text-h2-sub:  1.75rem;
   --text-h2:      2.25rem;
-  --text-h1:      clamp(2rem, 1.6rem + 1.6vw, 3.5rem);
+  --text-h1:      clamp(4.25rem, 3rem + 4vw, 7rem);
 
   --track-h1:   -0.03em;
   --track-h2:   -0.02em;
@@ -274,8 +278,9 @@ body {
   border-radius: var(--radius-sm);
   border: 1px solid transparent;
   cursor: pointer;
-  transition: background-color var(--t-base), color var(--t-base),
-              border-color var(--t-base), transform var(--t-fast);
+  transition: color var(--t-fast), border-color var(--t-fast),
+              background-color var(--t-fast), opacity var(--t-fast),
+              transform var(--t-base);
   letter-spacing: var(--track-xs);
   white-space: nowrap;
   max-width: 100%;
@@ -284,13 +289,14 @@ body {
 @media (max-width: 480px) {
   .btn { white-space: normal; }
 }
+/* A small immediate-but-not-abrupt press, not a bounce. */
+.btn:active:not(:disabled) { transform: translateY(1px); }
 .btn-primary {
   background: var(--accent);
   color: var(--fg-on-ink);
   border-color: var(--accent);
 }
 .btn-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
-.btn-primary:active { transform: scale(0.98); }
 .btn-primary:disabled { opacity: 0.55; cursor: not-allowed; transform: none; }
 .btn-secondary {
   background: transparent;
@@ -298,7 +304,6 @@ body {
   border-color: var(--border);
 }
 .btn-secondary:hover { border-color: var(--fg-3); background: var(--bg-panel); }
-.btn-secondary:active { transform: scale(0.98); }
 
 /* Tag / chip */
 .tag {
@@ -328,12 +333,39 @@ body {
   border-radius: var(--radius-md);
   padding: 0.625rem 0.75rem;
   min-height: 2.75rem;
-  transition: border-color var(--t-base), box-shadow var(--t-base);
+  transition: border-color var(--t-fast), box-shadow var(--t-fast);
 }
 .field::placeholder { color: var(--fg-3); }
-.field:focus { outline: none; border-color: var(--fg); box-shadow: 0 0 0 3px rgba(10, 10, 10, 0.08); }
+.field:hover { border-color: var(--fg-3); }
+/* A value Arcana sets automatically (e.g. 2-server Entry), not a disabled
+   control the customer could otherwise edit. Same box geometry as .field
+   so it lines up with a real field next to it, full-contrast text (not
+   muted --fg-2, which would read as "unavailable"), a quiet filled
+   background instead of a border, and deliberately no hover/focus state —
+   it isn't interactive and shouldn't look like it's waiting to be. */
+.field-static {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 2.75rem;
+  padding: 0.625rem 0.75rem;
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  color: var(--fg);
+  background: var(--bg-alt);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  margin: 0;
+}
+/* A box-shadow ring here (this used to be 0.08 alpha, then 0.35) does not
+   reliably paint on a native <select> across engines — confirmed by
+   screenshot, not just computed style, at both opacities. Use the same
+   solid outline every other focusable control on the site already uses;
+   modern browsers round outline corners to the element's border-radius,
+   so it still reads as one visual language. */
+.field:focus { outline: 2px solid var(--fg); outline-offset: 2px; border-color: var(--fg); }
 .field[aria-invalid='true'] { border-color: var(--danger); }
-.field[aria-invalid='true']:focus { box-shadow: 0 0 0 3px rgba(185, 28, 28, 0.12); }
+.field[aria-invalid='true']:focus { outline-color: var(--danger); }
 .field-label {
   display: block;
   font-family: var(--font-sans);
@@ -370,43 +402,86 @@ body {
 
 /* Hero */
 .hero {
-  padding: var(--space-16) var(--container-pad) var(--space-24);
-  border-bottom: 1px solid var(--border);
+  padding: var(--space-6) var(--container-pad) var(--space-12);
 }
 .hero__inner {
   max-width: var(--container-max);
   margin: 0 auto;
 }
+.hero__frame {
+  max-width: 88rem;
+  margin: 0 auto;
+  border: 1px solid var(--border);
+  padding: var(--space-16) var(--space-12) 0;
+}
+.hero__grid {
+  display: grid;
+  grid-template-columns: 5fr 7fr;
+  gap: var(--space-12);
+  align-items: center;
+  padding-bottom: var(--space-16);
+}
+.hero__copy { max-width: 34rem; }
 .hero__title {
   font-family: var(--font-display);
-  font-weight: 600;
+  font-weight: 700;
   font-size: var(--text-h1);
-  line-height: 1.05;
-  letter-spacing: var(--track-h1);
+  line-height: 0.94;
+  letter-spacing: -0.04em;
   color: var(--fg);
-  margin: 0 0 var(--space-6);
-  max-width: 18ch;
+  margin: var(--space-3) 0 var(--space-6);
 }
 .hero__lede {
   font-family: var(--font-body);
-  font-size: var(--text-base);
-  line-height: 1.65;
+  font-size: 1.25rem;
+  line-height: 1.5;
   color: var(--fg-2);
-  max-width: 52ch;
+  max-width: 30ch;
   margin: 0 0 var(--space-8);
 }
 .hero__actions {
   display: flex;
-  gap: var(--space-3);
+  align-items: center;
+  gap: var(--space-6);
   flex-wrap: wrap;
   margin-bottom: var(--space-8);
 }
+.hero__signup { font-size: var(--text-sm); }
 .hero__tags { display: flex; gap: var(--space-2); flex-wrap: wrap; }
-@media (max-width: 1024px) {
-  .hero { padding: var(--space-12) var(--container-pad) var(--space-16); }
+.hero__visual { display: flex; align-items: center; justify-content: center; }
+.world-map { width: 100%; height: auto; max-width: 34rem; }
+.world-map__dot { fill: var(--fg-3); opacity: 0.28; }
+.world-map__marker { fill: var(--fg); }
+.hero__strip {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  border-top: 1px solid var(--border);
 }
-@media (max-width: 768px) {
-  .hero { padding: var(--space-8) var(--container-pad) var(--space-12); }
+.hero__strip-cell {
+  padding: var(--space-4) var(--space-6) var(--space-4) 0;
+  font-family: var(--font-body);
+  font-size: 1rem;
+  font-weight: 500;
+  color: var(--fg-2);
+}
+.hero__strip-cell + .hero__strip-cell { padding-left: var(--space-6); border-left: 1px solid var(--border); }
+@media (max-width: 1024px) {
+  .hero__frame { padding: var(--space-12) var(--space-8) 0; }
+  .hero__grid { padding-bottom: var(--space-12); }
+}
+@media (max-width: 860px) {
+  .hero__grid { grid-template-columns: 1fr; gap: var(--space-8); }
+  .hero__copy { max-width: none; }
+  .world-map { max-width: 26rem; margin: 0 auto; }
+}
+@media (max-width: 640px) {
+  :root { --text-h1: clamp(3.25rem, 15vw, 4rem); }
+  .hero { padding: var(--space-4) var(--container-pad) var(--space-8); }
+  .hero__frame { padding: var(--space-8) var(--space-4) 0; }
+  .hero__grid { padding-bottom: var(--space-6); }
+  .hero__lede { font-size: 1.0625rem; max-width: none; margin-bottom: var(--space-8); }
+  .hero__actions { gap: var(--space-3); }
+  .world-map { margin-bottom: var(--space-2); }
 }
 
 /* Navigation */
@@ -456,10 +531,21 @@ body {
 }
 .dm-nav__toggle {
   display: none;
-  min-height: 2.25rem;
-  padding: 0.5rem 0.75rem;
-  font-size: var(--text-xs);
+  align-items: center;
+  min-height: 2.75rem;
+  min-width: 2.75rem;
+  padding: 0 var(--space-2);
+  margin-right: calc(var(--space-2) * -1);
+  background: none;
+  border: none;
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--fg);
+  cursor: pointer;
+  transition: color var(--t-fast);
 }
+.dm-nav__toggle:hover { color: var(--fg-2); }
 
 /* Below this width the link row no longer fits without wrapping/
    overflowing the viewport (confirmed via browser check at 360-390px) —
@@ -467,7 +553,7 @@ body {
 @media (max-width: 640px) {
   .dm-nav__toggle { display: inline-flex; }
   .dm-nav__desktop {
-    display: none;
+    display: flex;
     position: absolute;
     top: var(--header-h);
     left: 0;
@@ -478,14 +564,61 @@ body {
     background: var(--bg);
     border-bottom: 1px solid var(--border);
     padding: var(--space-2) var(--container-pad) var(--space-4);
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transform: translateY(-4px);
+    transition: opacity var(--t-base), transform var(--t-base), visibility 0s linear var(--t-base);
   }
-  .dm-nav__desktop--open { display: flex; }
+  .dm-nav__desktop--open {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+    transform: translateY(0);
+    transition: opacity var(--t-base), transform var(--t-base);
+  }
   .dm-nav__link {
     padding: var(--space-3) 0;
     border-bottom: 1px solid var(--border-soft);
   }
   .dm-nav__cta { margin-left: 0; margin-top: var(--space-3); }
 }
+
+/* ── Auth ── */
+/* Narrow open form for login/signup/reset flows: a brand label, one strong
+   heading, a single rule beneath it, then restrained fields — no
+   self-contained card, no shadow, no oversized radius. */
+.auth-frame {
+  max-width: 24rem;
+  width: 100%;
+  margin: 0 auto;
+}
+.auth-brand {
+  display: block;
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+  margin: 0 0 var(--space-3);
+}
+.auth-head {
+  padding-bottom: var(--space-6);
+  margin-bottom: var(--space-6);
+  border-bottom: 1px solid var(--border);
+}
+.auth-head .section-h2 { margin-bottom: 0; }
+.auth-head .section-sub { margin-top: var(--space-3); max-width: none; }
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.auth-foot {
+  margin-top: var(--space-6);
+}
+.auth-foot + .auth-foot { margin-top: var(--space-2); }
 
 /* Bordered rounded card */
 .dm-card {
@@ -536,7 +669,7 @@ body {
 
 /* Footer */
 .dm-footer {
-  padding: var(--space-8) var(--container-pad) var(--space-6);
+  padding: var(--space-6) var(--container-pad);
   border-top: 1px solid var(--border);
   background: var(--bg);
 }
@@ -551,10 +684,9 @@ body {
   gap: var(--space-3);
 }
 .dm-footer__top {
-  padding-bottom: var(--space-4);
-  border-bottom: 1px solid var(--border-soft);
+  padding-bottom: var(--space-3);
 }
-.dm-footer__bottom { margin-top: var(--space-4); }
+.dm-footer__bottom { margin-top: var(--space-1); }
 .dm-footer__brand {
   font-family: var(--font-display);
   font-weight: 600;
@@ -569,7 +701,7 @@ body {
   letter-spacing: var(--track-xs);
   color: var(--fg-2);
   text-decoration: none;
-  padding: var(--space-3) var(--space-2);
+  padding: var(--space-2);
   transition: color var(--t-base);
 }
 .dm-footer__link:hover { color: var(--fg); }
@@ -614,48 +746,6 @@ body {
   color: var(--fg-3);
 }
 .hero__meta span + span::before { content: "·"; margin-right: var(--space-2); }
-
-.grid-rule {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  border-top: 1px solid var(--fg);
-}
-.grid-rule--3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-.grid-rule__cell {
-  padding: var(--space-6) var(--space-6) var(--space-8) 0;
-  border-right: 1px solid var(--border);
-}
-.grid-rule__cell + .grid-rule__cell { padding-left: var(--space-6); }
-.grid-rule__cell:last-child { border-right: none; }
-.grid-rule__index {
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  color: var(--fg-3);
-  margin: 0 0 var(--space-3);
-}
-.grid-rule__title {
-  font-size: var(--text-lg);
-  font-weight: 600;
-  letter-spacing: var(--track-h3);
-  color: var(--fg);
-  margin: 0 0 var(--space-2);
-}
-.grid-rule__body {
-  font-size: var(--text-sm);
-  line-height: 1.6;
-  color: var(--fg-2);
-  margin: 0;
-}
-@media (max-width: 900px) {
-  .grid-rule, .grid-rule--3 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .grid-rule__cell:nth-child(2n) { border-right: none; }
-  .grid-rule__cell:nth-child(2n + 1) { padding-left: 0; }
-  .grid-rule__cell { border-bottom: 1px solid var(--border); }
-}
-@media (max-width: 560px) {
-  .grid-rule, .grid-rule--3 { grid-template-columns: minmax(0, 1fr); }
-  .grid-rule__cell { border-right: none; padding-left: 0 !important; }
-}
 
 .plan {
   display: grid;
@@ -733,12 +823,15 @@ body {
 }
 .area__side { position: sticky; top: calc(var(--header-h) + var(--space-8)); align-self: start; }
 .area__label {
-  font-family: var(--font-mono);
+  font-family: var(--font-body);
+  font-weight: 600;
   font-size: var(--text-xs);
+  letter-spacing: var(--track-xs);
+  text-transform: uppercase;
   color: var(--fg-3);
   margin: 0 0 var(--space-3);
 }
-.area__nav { display: flex; flex-direction: column; border-top: 1px solid var(--fg); }
+.area__nav { display: flex; flex-direction: column; border-top: 1px solid var(--border); }
 .area__nav a {
   display: flex;
   justify-content: space-between;
@@ -747,15 +840,20 @@ body {
   font-size: var(--text-sm);
   color: var(--fg-2);
   text-decoration: none;
+  transition: color var(--t-fast);
 }
 .area__nav a:hover { color: var(--fg); }
 .area__nav a[aria-current="page"] { color: var(--fg); font-weight: 600; }
 .area__nav a[aria-current="page"]::after { content: "●"; font-size: 0.5rem; align-self: center; }
+.area__nav-mobile { display: none; }
 .area__main { min-width: 0; }
 .area__head { margin-bottom: var(--space-8); }
 .area__eyebrow {
-  font-family: var(--font-mono);
+  font-family: var(--font-body);
+  font-weight: 600;
   font-size: var(--text-xs);
+  letter-spacing: var(--track-xs);
+  text-transform: uppercase;
   color: var(--fg-3);
   margin: 0 0 var(--space-2);
 }
@@ -770,10 +868,49 @@ body {
 @media (max-width: 860px) {
   .area { grid-template-columns: minmax(0, 1fr); gap: var(--space-6); padding-top: var(--space-6); }
   .area__side { position: static; }
-  .area__nav { flex-direction: row; flex-wrap: wrap; border-top: none; gap: var(--space-1) var(--space-4); }
-  .area__nav a { border-bottom: none; padding: var(--space-1) 0; }
-  .area__nav a[aria-current="page"]::after { content: none; }
-  .area__nav a[aria-current="page"] { text-decoration: underline; text-underline-offset: 4px; }
+  .area__label { display: none; }
+  /* The "Account / Section ▾" disclosure above already states the section
+     name, so the eyebrow directly above the H1 would repeat it a third
+     time on a narrow screen. */
+  .area__eyebrow { display: none; }
+  .area__nav { display: none; }
+  .area__nav-mobile {
+    display: block;
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+  }
+  .area__nav-mobile summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    padding: var(--space-4) 0;
+    font-size: var(--text-sm);
+    font-weight: 600;
+    color: var(--fg);
+    cursor: pointer;
+    list-style: none;
+    min-height: 2.75rem;
+  }
+  .area__nav-mobile summary::-webkit-details-marker { display: none; }
+  .area__nav-mobile-label { color: var(--fg-2); }
+  .area__nav-mobile-label span:first-child { color: var(--fg); font-weight: 600; }
+  .area__nav-mobile-chevron { color: var(--fg-3); transition: transform var(--t-fast); }
+  .area__nav-mobile[open] .area__nav-mobile-chevron { transform: rotate(180deg); }
+  .area__nav-mobile-list { display: flex; flex-direction: column; border-top: 1px solid var(--border); }
+  .area__nav-mobile-list a {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: var(--space-3) 0;
+    min-height: 2.75rem;
+    border-bottom: 1px solid var(--border-soft);
+    font-size: var(--text-sm);
+    color: var(--fg-2);
+    text-decoration: none;
+  }
+  .area__nav-mobile-list a:hover { color: var(--fg); }
+  .area__nav-mobile-list a[aria-current="page"] { color: var(--fg); font-weight: 600; }
 }
 
 .block { margin: 0 0 var(--space-12); }
@@ -782,12 +919,12 @@ body {
   align-items: baseline;
   justify-content: space-between;
   gap: var(--space-4);
-  border-bottom: 1px solid var(--fg);
+  border-bottom: 1px solid var(--border);
   padding-bottom: var(--space-2);
   margin-bottom: 0;
 }
 .block__title { font-size: var(--text-base); font-weight: 600; margin: 0; }
-.block__meta { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--fg-3); }
+.block__meta { font-family: var(--font-body); font-size: var(--text-xs); color: var(--fg-3); }
 
 .stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-top: 1px solid var(--fg); margin-bottom: var(--space-12); }
 .stats--4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
@@ -795,7 +932,7 @@ body {
 .stats__cell + .stats__cell { padding-left: var(--space-4); }
 .stats__cell:last-child { border-right: none; }
 .stats__value { font-size: 1.75rem; font-weight: 600; letter-spacing: var(--track-h2); line-height: 1.1; margin: 0; }
-.stats__label { font-size: var(--text-xs); color: var(--fg-3); margin: var(--space-1) 0 0; font-family: var(--font-mono); }
+.stats__label { font-size: var(--text-xs); color: var(--fg-3); margin: var(--space-1) 0 0; font-family: var(--font-body); }
 @media (max-width: 700px) {
   .stats, .stats--4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .stats__cell:nth-child(2n) { border-right: none; }
@@ -818,15 +955,20 @@ body {
 .row__panel { grid-column: 1 / -1; padding: var(--space-4); background: var(--bg-alt); border: 1px solid var(--border); border-radius: var(--radius-sm); }
 .btn-sm { min-height: 2rem; padding: 0.375rem 0.75rem; font-size: var(--text-xs); }
 .btn-link {
+  display: inline-flex;
+  align-items: center;
+  /* The visible underlined text stays inline-sized; the actual hit target
+     is the full ~44px row a thumb expects, not just the text's own line
+     height. */
+  min-height: 2.75rem;
   background: none; border: none; cursor: pointer;
-  /* Vertical padding only, so the visible underlined text keeps its inline
-     look while the actual hit target still clears the 24px minimum tap
-     size (confirmed too small at 19px before this). */
-  padding: var(--space-2) 0; margin: calc(var(--space-2) * -1) 0;
+  padding: 0; margin: 0;
   font: inherit; font-size: var(--text-xs); color: var(--fg-2);
   text-decoration: underline; text-underline-offset: 3px;
+  transition: color var(--t-fast);
 }
 .btn-link:hover { color: var(--fg); }
+.btn-link:active:not(:disabled) { transform: translateY(1px); }
 .btn-danger { background: var(--danger); border-color: var(--danger); color: #fff; }
 .btn-danger:hover { background: #991B1B; border-color: #991B1B; }
 .text-danger { color: var(--danger); }
@@ -841,6 +983,45 @@ body {
 .stepper span { text-align: center; font-size: var(--text-sm); font-weight: 500; }
 
 .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: var(--space-4); align-items: end; }
+/* Entry/Exit: an explicit two-column pair down to 480px, not an
+   auto-fit column count that could vary with container width; below
+   that it stacks, each field full-width, rather than squeezing two
+   columns into a narrow viewport. */
+.field-pair { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-4); align-items: end; }
+@media (max-width: 480px) {
+  .field-pair { grid-template-columns: 1fr; }
+}
+.radio-group { border: none; margin: var(--space-4) 0 0; padding: 0; display: flex; flex-direction: column; }
+.radio-group > legend { padding: 0; margin: 0 0 var(--space-2); }
+.radio-option {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 2.5rem;
+  font-size: var(--text-sm);
+  color: var(--fg);
+  cursor: pointer;
+  transition: color var(--t-fast);
+}
+.radio-option:hover { color: var(--fg-2); }
+.radio-option input[type="radio"] {
+  width: 1.125rem;
+  height: 1.125rem;
+  margin: 0;
+  accent-color: var(--fg);
+  transition: transform var(--t-fast);
+}
+.radio-option input[type="radio"]:active { transform: scale(0.92); }
+
+/* Entrance-only reveal for content that appears in response to a choice
+   (e.g. Entry when "2 servers" is picked) — small opacity + translateY,
+   not a height/layout animation, and not applied to the whole form.
+   prefers-reduced-motion already zeroes animation-duration globally. */
+@keyframes form-reveal {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.form-reveal { animation: form-reveal var(--t-base); }
 .notice { padding: var(--space-4); background: var(--bg-panel); border-radius: var(--radius-sm); font-size: var(--text-sm); color: var(--fg-2); margin: 0 0 var(--space-6); }
 .notice--error { color: var(--danger); }
 .notice strong { color: var(--fg); display: block; margin-bottom: var(--space-1); }
@@ -851,3 +1032,166 @@ body {
 .table td { padding: var(--space-3) var(--space-3) var(--space-3) 0; border-bottom: 1px solid var(--border); vertical-align: top; }
 .table td.num, .table th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .table-wrap { overflow-x: auto; }
+
+/* ── Dialog ──────────────────────────────────────────────────────────── */
+.dialog {
+  width: min(28rem, calc(100vw - var(--space-8)));
+  max-height: calc(100vh - var(--space-8));
+  padding: 0;
+  margin: auto;
+  border: 1px solid var(--fg);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  color: var(--fg);
+  box-shadow: none;
+  /* Small opacity + translateY entrance/exit, not a large movement.
+     @starting-style/allow-discrete are a progressive enhancement — an
+     unsupporting browser just shows/hides the dialog instantly, same as
+     before. */
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity var(--t-slow), transform var(--t-slow),
+              overlay var(--t-slow) allow-discrete, display var(--t-slow) allow-discrete;
+}
+.dialog:not([open]) { opacity: 0; transform: translateY(4px); }
+@starting-style {
+  .dialog[open] { opacity: 0; transform: translateY(4px); }
+}
+.dialog::backdrop {
+  background: rgba(10, 10, 10, 0.4);
+  opacity: 1;
+  transition: opacity var(--t-slow), overlay var(--t-slow) allow-discrete, display var(--t-slow) allow-discrete;
+}
+@starting-style {
+  .dialog[open]::backdrop { opacity: 0; }
+}
+.dialog__body { display: flex; flex-direction: column; gap: var(--space-4); padding: var(--space-6); }
+.dialog__title { font-size: var(--text-lg); font-weight: 600; margin: 0; letter-spacing: var(--track-h3); }
+.dialog__desc { font-size: var(--text-sm); color: var(--fg-2); margin: 0; }
+.dialog__actions { display: flex; justify-content: flex-end; gap: var(--space-3); margin-top: var(--space-2); }
+.dialog__menu { display: flex; flex-direction: column; }
+.dialog__menu-item {
+  text-align: left;
+  background: none;
+  border: none;
+  padding: var(--space-3) 0;
+  font-size: var(--text-sm);
+  color: var(--fg);
+  cursor: pointer;
+  min-height: 2.75rem;
+  transition: color var(--t-fast);
+}
+.dialog__menu-item:disabled { color: var(--fg-3); cursor: not-allowed; }
+.dialog__menu-item:not(:disabled):hover { color: var(--fg-2); }
+/* .text-danger is defined earlier in the cascade with equal specificity —
+   without this, .dialog__menu-item's own color would win and a
+   destructive item (e.g. "Cancel subscription") would render as plain
+   text instead of --danger. */
+.dialog__menu-item.text-danger { color: var(--danger); }
+.dialog__menu-item.text-danger:hover { color: #991B1B; }
+@media (max-width: 480px) {
+  .dialog__actions { flex-direction: column-reverse; }
+  .dialog__actions .btn { width: 100%; }
+}
+
+/* ── Admin ──────────────────────────────────────────────────────────────
+   Dense counterparts to .field/.select for the admin area (src/components/
+   admin/AdminPrimitives.tsx). Admin needs information density, so these are
+   shorter than the customer-facing .field, but built from the same tokens:
+   same border/radius/focus treatment, just less padding. Everything else
+   admin needs (buttons, notices, tables, danger text) reuses the rules
+   above (.btn*, .notice*, .table*, .text-danger) rather than duplicating
+   them here. */
+.admin-input,
+.admin-select {
+  display: block;
+  width: 100%;
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.375rem 0.5rem;
+  min-height: 2rem;
+  transition: border-color var(--t-fast), box-shadow var(--t-fast);
+}
+.admin-input::placeholder { color: var(--fg-3); }
+.admin-input:focus, .admin-select:focus {
+  outline: 2px solid var(--fg);
+  outline-offset: 1px;
+  border-color: var(--fg);
+}
+.admin-input[aria-invalid="true"] { border-color: var(--danger); }
+.admin-input:disabled, .admin-select:disabled { opacity: 0.5; cursor: not-allowed; }
+.admin-select {
+  appearance: none;
+  background: var(--bg) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%235F5F5A'/%3E%3C/svg%3E") no-repeat right 0.5rem center;
+  padding-right: 1.5rem;
+}
+.admin-label {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--fg-3);
+  margin-bottom: 0.25rem;
+}
+.admin-wordmark {
+  display: block;
+  font-size: var(--text-lg);
+  font-weight: 600;
+  letter-spacing: var(--track-h3);
+  color: var(--fg);
+  text-decoration: none;
+  margin: 0 0 var(--space-8);
+}
+.admin-status { padding: var(--space-12) var(--container-pad); font-size: var(--text-sm); color: var(--fg-2); }
+
+/* Prominent top-row metrics: larger and bordered as one strip, distinct
+   from the small AdminMetric/AdminMetricGrid cells so the 4-5 numbers
+   that matter (accounts, live subscriptions, device capacity, nodes
+   online) read at a different weight than a zero-value counter further
+   down the page. */
+.admin-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
+  border: 1px solid var(--fg);
+  margin-bottom: var(--space-12);
+}
+.admin-metrics--5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.admin-metric { padding: var(--space-6) var(--space-4); border-right: 1px solid var(--border); }
+.admin-metric:last-child { border-right: none; }
+.admin-metric__value { font-size: var(--text-h2-sub); font-weight: 600; letter-spacing: var(--track-h2); line-height: 1.05; margin: 0; font-family: var(--font-mono); }
+.admin-metric__label { font-size: var(--text-xs); color: var(--fg-2); margin: var(--space-2) 0 0; }
+@media (max-width: 700px) {
+  .admin-metrics, .admin-metrics--5 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .admin-metric { border-bottom: 1px solid var(--border); }
+  .admin-metric:nth-child(2n) { border-right: none; }
+}
+
+/* Secondary counts: a two-column list of "label ... value" rows, not one
+   more card in a grid. Admin can stay dense here without competing with
+   the headline metric row above. */
+.admin-stat-rows {
+  columns: 2;
+  column-gap: var(--space-8);
+}
+.admin-stat-row {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border-soft);
+  break-inside: avoid;
+  font-size: var(--text-sm);
+}
+.admin-stat-row__label { color: var(--fg-2); }
+.admin-stat-row__value { font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--fg); }
+@media (max-width: 560px) {
+  .admin-stat-rows { columns: 1; }
+}
+
+/* Admin needs more working width than the narrow customer account column;
+   the sidebar stays the same size, only the max total width grows. */
+.area--wide { max-width: 92rem; }
