@@ -10,29 +10,6 @@ export const metadata = {
   alternates: { canonical: `${SITE_URL}/` },
 };
 
-const FEATURES = [
-  {
-    title: "1 server or 2 servers",
-    body:
-      "Connect through one server for speed, or two for extra privacy — one server sees your address, the other where you go. A 2-server connection never quietly becomes 1.",
-  },
-  {
-    title: "Automatic",
-    body:
-      "Arcana picks a healthy location for you. Choose a country yourself whenever you want to.",
-  },
-  {
-    title: "Your devices",
-    body:
-      "Three devices on one plan. See and remove them from your account, and add more in packs of three.",
-  },
-  {
-    title: "Kept apart",
-    body:
-      "Your account and payment details are held separately from your VPN connection. No ads, no analytics, no browsing history.",
-  },
-];
-
 export default function Home() {
   return (
     <>
@@ -50,31 +27,12 @@ export default function Home() {
               <Link href="/signup" className="btn btn-primary">
                 Create account
               </Link>
-              <a href="#pricing" className="btn btn-secondary">
-                View pricing
-              </a>
             </div>
             <p className="hero__meta">
               <span>€6.99 / month</span>
               <span>3 devices</span>
               <span>Cancel anytime</span>
             </p>
-          </div>
-        </section>
-
-        <section id="features" className="dm-section">
-          <div className="section-head">
-            <p className="section-eyebrow">Features</p>
-            <h2 className="section-h2">What it does, and nothing else.</h2>
-          </div>
-          <div className="grid-rule">
-            {FEATURES.map((feature, index) => (
-              <div key={feature.title} className="grid-rule__cell">
-                <p className="grid-rule__index">{String(index + 1).padStart(2, "0")}</p>
-                <h3 className="grid-rule__title">{feature.title}</h3>
-                <p className="grid-rule__body">{feature.body}</p>
-              </div>
-            ))}
           </div>
         </section>
 
@@ -89,7 +47,7 @@ export default function Home() {
           <LocationsList />
         </section>
 
-        <section id="pricing" className="dm-section">
+        <section id="pricing" className="dm-section" style={{ borderBottom: "none" }}>
           <div className="section-head">
             <p className="section-eyebrow">Pricing</p>
             <h2 className="section-h2">One plan.</h2>
@@ -106,9 +64,8 @@ export default function Home() {
               <p className="muted">3 devices included</p>
               <ul className="plan__list">
                 <li>Every Arcana location</li>
-                <li>1-server and 2-server connections</li>
-                <li>Manage your devices from your account</li>
-                <li>Cancel anytime from your account</li>
+                <li>1 server for speed, or 2 for an extra hop — never silently downgraded</li>
+                <li>Manage devices and cancel anytime from your account</li>
               </ul>
               <Link href="/signup" className="btn btn-primary">
                 Subscribe
@@ -145,34 +102,9 @@ export default function Home() {
           </div>
         </section>
 
-        <section className="dm-section" style={{ borderBottom: "none" }}>
-          <div className="section-head">
-            <p className="section-eyebrow">Getting started</p>
-            <h2 className="section-h2">Three steps.</h2>
-          </div>
-          <div className="grid-rule grid-rule--3">
-            <div className="grid-rule__cell">
-              <p className="grid-rule__index">01</p>
-              <h3 className="grid-rule__title">Create an account</h3>
-              <p className="grid-rule__body">An email and a password.</p>
-            </div>
-            <div className="grid-rule__cell">
-              <p className="grid-rule__index">02</p>
-              <h3 className="grid-rule__title">Subscribe</h3>
-              <p className="grid-rule__body">€6.99 a month. Cancel anytime.</p>
-            </div>
-            <div className="grid-rule__cell">
-              <p className="grid-rule__index">03</p>
-              <h3 className="grid-rule__title">Connect</h3>
-              <p className="grid-rule__body">
-                Set up your devices from your account and connect.
-              </p>
-            </div>
-          </div>
-          <p className="muted" style={{ marginTop: "var(--space-8)" }}>
-            Already have an account? <Link href="/login" className="text-link">Log in</Link>
-          </p>
-        </section>
+        <p className="muted" style={{ maxWidth: "var(--container-max)", margin: "0 auto", padding: "0 var(--container-pad) var(--space-24)" }}>
+          Already have an account? <Link href="/login" className="text-link">Log in</Link>
+        </p>
       </main>
       <Footer />
     </>

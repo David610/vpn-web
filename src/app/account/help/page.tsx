@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { AccountShell, useAccount } from "@/components/account/AccountShell";
+import { SUPPORT_EMAIL } from "@/lib/site-config";
 
 type Setup =
   | { phase: "loading" }
@@ -91,15 +92,15 @@ export default function HelpPage() {
         <div className="block__head"><h2 className="block__title">Diagnostics</h2></div>
         <p className="section-sub" style={{ marginTop: "var(--space-3)" }}>
           Arcana does not log browsing activity, domains or destination history. If something
-          isn&apos;t connecting, check Devices for the device&apos;s status, or Connections for the
-          selected route, before contacting support.
+          isn&apos;t connecting, check Devices for the device&apos;s status, or Configurations for the
+          selected configuration, before contacting support.
         </p>
       </div>
 
       <div className="block">
         <div className="block__head"><h2 className="block__title">Contact support</h2></div>
         <p className="section-sub" style={{ marginTop: "var(--space-3)" }}>
-          Reach us at <a className="text-link" href="mailto:support@arcana.example">support@arcana.example</a>.
+          Reach us at <a className="text-link" href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a>.
         </p>
       </div>
     </AccountShell>

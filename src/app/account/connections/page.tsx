@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { AccountShell, Feedback, useAccount } from "@/components/account/AccountShell";
+import { ConfirmDialog, InputDialog } from "@/components/Dialog";
 import { api } from "@/lib/api";
 
 type Profile = {
@@ -34,18 +35,22 @@ function ProfileRow({
   const { session } = useAccount();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [renaming, setRenaming] = useState(false);
+  const [removing, setRemoving] = useState(false);
 
   const locationName = (id: string | null) => locations.find((l) => l.id === id)?.name ?? null;
   const detail =
     profile.routingMode === "DOUBLE_HOP"
-      ? `${locationName(profile.preferredEntryLocationId) ?? "Automatic"} → ${locationName(profile.preferredExitLocationId) ?? "Automatic"}`
+      ? `Automatic → ${locationName(profile.preferredExitLocationId) ?? "Automatic"}`
       : profile.routingMode === "DIRECT"
         ? locationName(profile.preferredExitLocationId) ?? "Automatic"
         : "Automatic";
 
-  async function rename() {
-    const name = window.prompt("Connection name", profile.name);
-    if (!name || name === profile.name) return;
+  async function rename(name: string) {
+    if (name === profile.name) {
+      setRenaming(false);
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -58,23 +63,24 @@ function ProfileRow({
           exitLocationId: profile.preferredExitLocationId,
         },
       });
+      setRenaming(false);
       onChanged();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not rename this connection.");
+      setError(err instanceof Error ? err.message : "Could not rename this configuration.");
     } finally {
       setBusy(false);
     }
   }
 
   async function remove() {
-    if (!window.confirm(`Delete "${profile.name}"? Devices using it will need a new connection.`)) return;
     setBusy(true);
     setError(null);
     try {
       await api(session, `/api/account/connection-profiles/${profile.id}`, { method: "DELETE" });
+      setRemoving(false);
       onChanged();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not delete this connection.");
+      setError(err instanceof Error ? err.message : "Could not remove this configuration.");
     } finally {
       setBusy(false);
     }
@@ -87,10 +93,30 @@ function ProfileRow({
         <p className="row__sub">{MODE_LABEL[profile.routingMode]} · {detail}{profile.enabled ? "" : " · disabled"}</p>
       </div>
       <div className="row__actions">
-        <button type="button" className="btn-link" disabled={busy} onClick={rename}>Rename</button>
-        <button type="button" className="btn-link text-danger" disabled={busy} onClick={remove}>Delete</button>
+        <button type="button" className="btn-link" disabled={busy} onClick={() => setRenaming(true)}>Rename</button>
+        <button type="button" className="btn-link text-danger" disabled={busy} onClick={() => setRemoving(true)}>Remove</button>
       </div>
       {error && <p className="field-error" style={{ gridColumn: "1 / -1", marginTop: "var(--space-2)" }}>{error}</p>}
+      <InputDialog
+        open={renaming}
+        title="Rename configuration"
+        label="Name"
+        initialValue={profile.name}
+        maxLength={40}
+        busy={busy}
+        onConfirm={rename}
+        onCancel={() => setRenaming(false)}
+      />
+      <ConfirmDialog
+        open={removing}
+        title="Remove configuration?"
+        description={`Devices using “${profile.name}” will need a new configuration.`}
+        confirmLabel="Remove configuration"
+        danger
+        busy={busy}
+        onConfirm={remove}
+        onCancel={() => setRemoving(false)}
+      />
     </li>
   );
 }
@@ -103,7 +129,6 @@ function ConnectionsBody() {
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [mode, setMode] = useState<Profile["routingMode"]>("AUTO");
-  const [entryLocationId, setEntryLocationId] = useState("");
   const [exitLocationId, setExitLocationId] = useState("");
 
   async function load() {
@@ -116,7 +141,7 @@ function ConnectionsBody() {
       setLocations(locationsData.locations ?? []);
       setLoadError(null);
     } catch {
-      setLoadError("Could not load your connections.");
+      setLoadError("Could not load your configurations.");
     }
   }
 
@@ -137,17 +162,16 @@ function ConnectionsBody() {
         body: {
           name,
           routingMode: mode,
-          entryLocationId: mode === "DOUBLE_HOP" ? entryLocationId || null : null,
+          entryLocationId: null,
           exitLocationId: mode === "AUTO" ? null : exitLocationId || null,
         },
       });
       (e.target as HTMLFormElement).reset();
       setMode("AUTO");
-      setEntryLocationId("");
       setExitLocationId("");
       await load();
     } catch (err) {
-      setCreateError(err instanceof Error ? err.message : "Could not create this connection.");
+      setCreateError(err instanceof Error ? err.message : "Could not create this configuration.");
     } finally {
       setCreating(false);
     }
@@ -160,10 +184,10 @@ function ConnectionsBody() {
   return (
     <>
       <div className="block">
-        <div className="block__head"><h2 className="block__title">Saved connections</h2></div>
+        <div className="block__head"><h2 className="block__title">Saved configurations</h2></div>
         {profiles.length === 0 ? (
           <p className="muted" style={{ marginTop: "var(--space-4)" }}>
-            No saved connections yet. Arcana uses Automatic 1-server routing by default until you create one.
+            No saved configurations yet. Arcana uses Automatic 1-server routing by default until you create one.
           </p>
         ) : (
           <ul className="rows">
@@ -175,7 +199,7 @@ function ConnectionsBody() {
       </div>
 
       <div className="block">
-        <div className="block__head"><h2 className="block__title">Add a connection</h2></div>
+        <div className="block__head"><h2 className="block__title">Add a configuration</h2></div>
         <form onSubmit={create} className="form-grid" style={{ marginTop: "var(--space-4)" }}>
           <div>
             <label className="field-label" htmlFor="conn-name">Name</label>
@@ -196,19 +220,8 @@ function ConnectionsBody() {
           </div>
           {mode === "DOUBLE_HOP" && (
             <div>
-              <label className="field-label" htmlFor="conn-entry">Entry</label>
-              <select
-                id="conn-entry"
-                className="field select"
-                required
-                value={entryLocationId}
-                onChange={(e) => setEntryLocationId(e.target.value)}
-              >
-                <option value="" disabled>Choose entry location</option>
-                {locations.map((l) => (
-                  <option key={l.id} value={l.id}>{l.name}</option>
-                ))}
-              </select>
+              <label className="field-label">Entry</label>
+              <p className="field" style={{ display: "flex", alignItems: "center", color: "var(--fg-2)" }}>Automatic</p>
             </div>
           )}
           {mode !== "AUTO" && (
@@ -244,8 +257,8 @@ export default function ConnectionsPage() {
   return (
     <AccountShell
       eyebrow="Account"
-      title="Connections"
-      sub="1 server is faster. 2 servers routes through an extra hop for more privacy. A 2-server connection never silently becomes 1."
+      title="Configurations"
+      sub="1 server is faster. 2 servers routes through an extra hop for more privacy, with entry chosen automatically. A 2-server configuration never silently becomes 1."
     >
       <ConnectionsBody />
     </AccountShell>
