@@ -83,6 +83,27 @@ export function AdminMetricGrid({ children, className }: { children: ReactNode; 
   return <div className={`grid grid-cols-2 gap-3 md:grid-cols-4 ${className ?? ""}`}>{children}</div>;
 }
 
+/** One large bordered value+label cell for the prominent top-of-page metric row. */
+export function AdminMetricLarge({ label, value }: { label: string; value: number | string }) {
+  return (
+    <div className="admin-metric">
+      <p className="admin-metric__value">{value}</p>
+      <p className="admin-metric__label">{label}</p>
+    </div>
+  );
+}
+
+/**
+ * The 4-5 numbers that matter most (accounts, live subscriptions, device
+ * capacity, nodes online, …) at higher visual weight than everything else
+ * on the page — a bordered strip, not one more card in an equal-weight
+ * grid. Everything that isn't headline-worthy belongs in an AdminSection
+ * below instead of here.
+ */
+export function AdminMetricRow({ children, count }: { children: ReactNode; count?: 4 | 5 }) {
+  return <div className={`admin-metrics ${count === 5 ? "admin-metrics--5" : ""}`.trim()}>{children}</div>;
+}
+
 // ── Form controls ────────────────────────────────────────────────────────
 
 /** Dense admin input: `.admin-input` (see the Admin block at the end of globals.css). */

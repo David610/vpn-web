@@ -1,8 +1,10 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
 import { useAdminSession } from "@/hooks/useAdminSession";
+import { SITE_NAME } from "@/lib/site-config";
 import { AdminNav } from "./AdminNav";
 
 export function AdminShell({ children }: { children: React.ReactNode }) {
@@ -21,16 +23,22 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
     if (access === "mfa-required") router.replace("/admin/login");
   }, [loading, session, access, router]);
 
-  if (loading) return <div className="p-8 text-fg-2">Loading…</div>;
+  if (loading) return <div className="admin-status">Loading…</div>;
   if (!session || access === "mfa-required") return null;
   if (access === "denied") {
-    return <div className="p-8 text-danger">You do not have admin access.</div>;
+    return <div className="admin-status text-danger">You do not have admin access.</div>;
   }
 
   return (
-    <div className="min-h-screen bg-bg-alt">
-      <AdminNav />
-      <main className="mx-auto max-w-6xl p-6">{children}</main>
+    <div className="area">
+      <aside className="area__side">
+        <Link href="/admin" className="admin-wordmark">
+          {SITE_NAME}
+        </Link>
+        <p className="area__label">Admin</p>
+        <AdminNav />
+      </aside>
+      <main className="area__main">{children}</main>
     </div>
   );
 }

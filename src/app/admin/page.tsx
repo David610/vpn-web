@@ -2,7 +2,15 @@
 
 import { useEffect, useState } from "react";
 import { AdminShell } from "@/components/admin/AdminShell";
-import { AdminPage, AdminMetric, AdminMetricGrid, AdminNotice } from "@/components/admin/AdminPrimitives";
+import {
+  AdminPage,
+  AdminSection,
+  AdminMetric,
+  AdminMetricGrid,
+  AdminMetricLarge,
+  AdminMetricRow,
+  AdminNotice,
+} from "@/components/admin/AdminPrimitives";
 import { useAdminSession } from "@/hooks/useAdminSession";
 import { adminFetch } from "@/lib/adminFetch";
 
@@ -72,31 +80,61 @@ export default function AdminOverviewPage() {
         ) : !overview ? (
           <p className="text-fg-2">Loading…</p>
         ) : (
-          <AdminMetricGrid>
-            <AdminMetric label="Customer accounts" value={overview.customers.total} />
-            <AdminMetric label="Active paid" value={overview.customers.active} />
-            <AdminMetric label="Free trials" value={overview.customers.trialing} />
-            <AdminMetric label="Past due" value={overview.customers.past_due} />
+          <>
+            <AdminMetricRow count={5}>
+              <AdminMetricLarge label="Customer accounts" value={overview.customers.total} />
+              <AdminMetricLarge label="Live subscriptions" value={overview.subscriptions?.live ?? "—"} />
+              <AdminMetricLarge
+                label="Devices / capacity"
+                value={overview.devices ? `${overview.devices.active} / ${overview.devices.capacity}` : "—"}
+              />
+              <AdminMetricLarge label="Nodes online" value={overview.nodes.online} />
+              <AdminMetricLarge label="Jobs pending" value={overview.jobs.pending} />
+            </AdminMetricRow>
 
-            <AdminMetric label="Live subscriptions" value={overview.subscriptions?.live ?? "—"} />
-            <AdminMetric label="Extra device packs" value={overview.subscriptions?.extra_packs ?? "—"} />
-            <AdminMetric label="Devices / capacity" value={overview.devices ? `${overview.devices.active} / ${overview.devices.capacity}` : "—"} />
-            <AdminMetric label="Devices over capacity" value={overview.devices?.over_capacity ?? "—"} />
-            <AdminMetric label="Support grants" value={overview.members?.admin_grants ?? "—"} />
+            <AdminSection label="Customer status">
+              <AdminMetricGrid>
+                <AdminMetric label="Active paid" value={overview.customers.active} />
+                <AdminMetric label="Free trials" value={overview.customers.trialing} />
+                <AdminMetric label="Past due" value={overview.customers.past_due} />
+                <AdminMetric label="Cancelled" value={overview.customers.canceled} />
+                <AdminMetric label="Cancelling" value={overview.subscriptions?.cancelling ?? "—"} />
+                <AdminMetric label="Accounts with several subs" value={overview.subscriptions?.accounts_with_several ?? "—"} />
+                <AdminMetric label="Extra device packs" value={overview.subscriptions?.extra_packs ?? "—"} />
+                <AdminMetric label="Support grants" value={overview.members?.admin_grants ?? "—"} />
+              </AdminMetricGrid>
+            </AdminSection>
 
-            <AdminMetric label="VPN enabled" value={overview.vpn.enabled} />
-            <AdminMetric label="VPN disabled" value={overview.vpn.disabled} />
-            <AdminMetric label="Traffic this month" value={bytes(overview.usage.month_total_bytes)} />
-            <AdminMetric label="Current ↓ / ↑" value={`${mbps(overview.usage.download_bps)} / ${mbps(overview.usage.upload_bps)}`} />
+            <AdminSection label="Fleet">
+              <AdminMetricGrid>
+                <AdminMetric label="Nodes offline" value={overview.nodes.offline} />
+                <AdminMetric label="Devices over capacity" value={overview.devices?.over_capacity ?? "—"} />
+                <AdminMetric label="Devices without subscription" value={overview.devices?.without_subscription ?? "—"} />
+                <AdminMetric label="Devices unschedulable" value={overview.devices?.unschedulable ?? "—"} />
+              </AdminMetricGrid>
+            </AdminSection>
 
-            <AdminMetric label="Nodes online" value={overview.nodes.online} />
-            <AdminMetric label="Nodes offline" value={overview.nodes.offline} />
-            <AdminMetric label="Jobs pending" value={overview.jobs.pending} />
-            <AdminMetric label="Jobs failed" value={overview.jobs.failed} />
+            <AdminSection label="Jobs & operational health">
+              <AdminMetricGrid>
+                <AdminMetric label="Jobs claimed" value={overview.jobs.claimed} />
+                <AdminMetric label="Jobs failed" value={overview.jobs.failed} />
+                <AdminMetric label="Open alerts" value={overview.alerts.open} />
+                <AdminMetric label="Abuse flags" value={overview.abuse.open} />
+              </AdminMetricGrid>
+            </AdminSection>
 
-            <AdminMetric label="Open alerts" value={overview.alerts.open} />
-            <AdminMetric label="Abuse flags" value={overview.abuse.open} />
-          </AdminMetricGrid>
+            <AdminSection
+              label="Traffic this month"
+              action={<span className="font-mono text-xs text-fg-3">{`${mbps(overview.usage.download_bps)} ↓ / ${mbps(overview.usage.upload_bps)} ↑ now`}</span>}
+            >
+              <AdminMetricGrid>
+                <AdminMetric label="Total" value={bytes(overview.usage.month_total_bytes)} />
+                <AdminMetric label="Down" value={bytes(overview.usage.month_download_bytes)} />
+                <AdminMetric label="Up" value={bytes(overview.usage.month_upload_bytes)} />
+                <AdminMetric label="VPN enabled / disabled" value={`${overview.vpn.enabled} / ${overview.vpn.disabled}`} />
+              </AdminMetricGrid>
+            </AdminSection>
+          </>
         )}
       </AdminPage>
     </AdminShell>
