@@ -337,9 +337,15 @@ body {
 }
 .field::placeholder { color: var(--fg-3); }
 .field:hover { border-color: var(--fg-3); }
-.field:focus { outline: none; border-color: var(--fg); box-shadow: 0 0 0 3px rgba(10, 10, 10, 0.08); }
+/* A box-shadow ring here (this used to be 0.08 alpha, then 0.35) does not
+   reliably paint on a native <select> across engines — confirmed by
+   screenshot, not just computed style, at both opacities. Use the same
+   solid outline every other focusable control on the site already uses;
+   modern browsers round outline corners to the element's border-radius,
+   so it still reads as one visual language. */
+.field:focus { outline: 2px solid var(--fg); outline-offset: 2px; border-color: var(--fg); }
 .field[aria-invalid='true'] { border-color: var(--danger); }
-.field[aria-invalid='true']:focus { box-shadow: 0 0 0 3px rgba(185, 28, 28, 0.12); }
+.field[aria-invalid='true']:focus { outline-color: var(--danger); }
 .field-label {
   display: block;
   font-family: var(--font-sans);
@@ -963,7 +969,7 @@ body {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  min-height: 2.75rem;
+  min-height: 2.5rem;
   font-size: var(--text-sm);
   color: var(--fg);
   cursor: pointer;
@@ -978,6 +984,16 @@ body {
   transition: transform var(--t-fast);
 }
 .radio-option input[type="radio"]:active { transform: scale(0.92); }
+
+/* Entrance-only reveal for content that appears in response to a choice
+   (e.g. Entry when "2 servers" is picked) — small opacity + translateY,
+   not a height/layout animation, and not applied to the whole form.
+   prefers-reduced-motion already zeroes animation-duration globally. */
+@keyframes form-reveal {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.form-reveal { animation: form-reveal var(--t-base); }
 .notice { padding: var(--space-4); background: var(--bg-panel); border-radius: var(--radius-sm); font-size: var(--text-sm); color: var(--fg-2); margin: 0 0 var(--space-6); }
 .notice--error { color: var(--danger); }
 .notice strong { color: var(--fg); display: block; margin-bottom: var(--space-1); }
@@ -1070,13 +1086,13 @@ body {
   border-radius: var(--radius-sm);
   padding: 0.375rem 0.5rem;
   min-height: 2rem;
-  transition: border-color var(--t-base), box-shadow var(--t-base);
+  transition: border-color var(--t-fast), box-shadow var(--t-fast);
 }
 .admin-input::placeholder { color: var(--fg-3); }
 .admin-input:focus, .admin-select:focus {
-  outline: none;
+  outline: 2px solid var(--fg);
+  outline-offset: 1px;
   border-color: var(--fg);
-  box-shadow: 0 0 0 2px rgba(10, 10, 10, 0.08);
 }
 .admin-input[aria-invalid="true"] { border-color: var(--danger); }
 .admin-input:disabled, .admin-select:disabled { opacity: 0.5; cursor: not-allowed; }

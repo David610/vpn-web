@@ -236,7 +236,7 @@ function ConnectionsBody() {
 
           <div className="form-grid" style={{ marginTop: "var(--space-4)" }}>
             {servers === "2" && (
-              <div>
+              <div className="form-reveal">
                 <label className="field-label">Entry</label>
                 <p className="field" style={{ display: "flex", alignItems: "center", color: "var(--fg-2)" }}>Automatic</p>
               </div>
