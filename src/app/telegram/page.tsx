@@ -199,7 +199,7 @@ function RouteSelect({
   const hasAuto = profiles.some((p) => p.routingMode === "AUTO" && p.enabled);
   return (
     <select
-      aria-label={`Route for ${device.name}`}
+      aria-label={`Configuration for ${device.name}`}
       value={device.profileId ?? ""}
       disabled={busy}
       onChange={(e) => onAssign(device, e.target.value)}
@@ -243,7 +243,7 @@ function DeviceRow({
       </div>
       <div className="muted">
         {sub ? sub.name : "Not on a subscription — not connected"}
-        {device.placement?.status === "UNSCHEDULABLE" ? " · No server available for this route" : ""}
+        {device.placement?.status === "UNSCHEDULABLE" ? " · No server available for this configuration" : ""}
       </div>
       {renaming ? (
         <form
@@ -266,7 +266,7 @@ function DeviceRow({
         </form>
       ) : (
         <>
-          <label>Route</label>
+          <label>Configuration</label>
           <RouteSelect device={device} profiles={overview.profiles} busy={busy} onAssign={onAssign} />
           {live.length > 1 && (
             <>
@@ -322,12 +322,11 @@ function NewConnection({
   const [name, setName] = useState("");
   const [mode, setMode] = useState<RoutingMode>("DIRECT");
   const [exit, setExit] = useState("");
-  const [entry, setEntry] = useState("");
 
   if (!open) {
     return (
       <div className="actions">
-        <button onClick={() => setOpen(true)}>New connection</button>
+        <button onClick={() => setOpen(true)}>New configuration</button>
       </div>
     );
   }
@@ -341,7 +340,7 @@ function NewConnection({
               name: name.trim(),
               routingMode: mode,
               exitLocationId: mode === "AUTO" ? undefined : exit,
-              entryLocationId: mode === "DOUBLE_HOP" ? entry : undefined,
+              entryLocationId: undefined,
             },
           })
         );
@@ -351,7 +350,7 @@ function NewConnection({
     >
       <label htmlFor="conn-name">Name</label>
       <input id="conn-name" value={name} maxLength={40} onChange={(e) => setName(e.target.value)} />
-      <label htmlFor="conn-mode">Route</label>
+      <label htmlFor="conn-mode">Servers</label>
       <select id="conn-mode" value={mode} onChange={(e) => setMode(e.target.value as RoutingMode)}>
         <option value="AUTO">Automatic — we pick the best server</option>
         <option value="DIRECT">Fast — 1 server</option>
@@ -359,15 +358,8 @@ function NewConnection({
       </select>
       {mode === "DOUBLE_HOP" && (
         <>
-          <label htmlFor="conn-entry">Entry location</label>
-          <select id="conn-entry" value={entry} onChange={(e) => setEntry(e.target.value)}>
-            <option value="">Choose…</option>
-            {locations.map((l) => (
-              <option key={l.id} value={l.id}>
-                {l.name}
-              </option>
-            ))}
-          </select>
+          <label htmlFor="conn-entry">Entry</label>
+          <p className="muted">Automatic</p>
         </>
       )}
       {mode !== "AUTO" && (
@@ -545,9 +537,9 @@ export default function TelegramMiniAppPage() {
           </section>
 
           <section>
-            <h2>Connections</h2>
+            <h2>Configurations</h2>
             {overview.profiles.length === 0 && (
-              <p className="muted row">Devices use Automatic until you create a connection.</p>
+              <p className="muted row">Devices use Automatic until you create a configuration.</p>
             )}
             {overview.profiles.map((p) => (
               <div className="row" key={p.id}>
@@ -557,7 +549,7 @@ export default function TelegramMiniAppPage() {
                 </div>
                 {p.routingMode !== "AUTO" && (
                   <div className="muted">
-                    {p.routingMode === "DOUBLE_HOP" ? `${locationName(p.entryLocationId)} → ` : ""}
+                    {p.routingMode === "DOUBLE_HOP" ? "Automatic → " : ""}
                     {locationName(p.exitLocationId)}
                   </div>
                 )}
@@ -566,12 +558,12 @@ export default function TelegramMiniAppPage() {
                     className="danger"
                     disabled={busy}
                     onClick={async () => {
-                      if (await confirmAction(`Delete ${p.name}? Devices using it switch to Automatic.`)) {
+                      if (await confirmAction(`Remove ${p.name}? Devices using it switch to Automatic.`)) {
                         run(() => call(`/api/telegram/profiles/${p.id}`, { method: "DELETE" }));
                       }
                     }}
                   >
-                    Delete
+                    Remove
                   </button>
                 </div>
               </div>
@@ -606,7 +598,7 @@ export default function TelegramMiniAppPage() {
             <h2>Help</h2>
             <ol>
               <li>Set up a device with the Arcana app — the setup link is on the website, not in Telegram.</li>
-              <li>Pick a route for each device: Automatic, Fast (1 server) or Privacy+ (2 servers).</li>
+              <li>Pick a configuration for each device: Automatic, Fast (1 server) or Privacy+ (2 servers).</li>
               <li>Changes need a fresh session; if asked, close and reopen this app.</li>
             </ol>
             <div className="actions">
