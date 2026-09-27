@@ -12,8 +12,9 @@
  * but a raw 23514/trigger exception is not a fit response for an API
  * client, so both sides are checked here first for a clean 400/403.
  */
-import { getAccountForUser, getEffectiveEntitlement } from "./accounts.js";
+import { getAccountForUser } from "./accounts.js";
 import { reconcileDeviceProvisioning } from "./device-provisioning.js";
+import { getDeviceEntitlement } from "./subscriptions.js";
 
 const fail = (status, error) => ({ status, body: { error } });
 
@@ -98,20 +99,29 @@ export async function assignDeviceProfile(supabaseAdmin, env, user, deviceId, pr
   // A new profile can mean a new route: re-place the device now so its
   // identity moves (make-before-break) or, fail-closed, stops serving a
   // route the new profile does not allow.
-  let placement = null;
-  const entitlement = await getEffectiveEntitlement(supabaseAdmin, account.accountId);
-  if (entitlement) {
-    const result = await reconcileDeviceProvisioning(supabaseAdmin, env, {
-      device: { ...device, status: deviceAfter.status },
-      entitlement,
-      idempotencyPrefix: `device-profile:${deviceId}:${profileId}:${Date.now()}`,
-    });
-    placement = result.placement?.ok
-      ? { status: "PLACED" }
-      : result.placement
-        ? { status: "UNSCHEDULABLE", error: result.placement.reason }
-        : null;
-  }
+  // Security boundary: routing changes must use THIS device's subscription
+  // entitlement, not the account-level "someone paid" aggregate. Otherwise a
+  // fourth device on a three-device subscription can trigger CREATE_USER and
+  // receive working credentials.
+  const entitlement = await getDeviceEntitlement(
+    supabaseAdmin,
+    account.accountId,
+    deviceId
+  );
+  const result = await reconcileDeviceProvisioning(supabaseAdmin, env, {
+    device: { ...device, status: deviceAfter.status },
+    entitlement,
+    // Deterministic desired-state key: retries of the same assignment must
+    // not manufacture more node mutations.
+    idempotencyPrefix: `device-profile:${deviceId}:${profileId}`,
+  });
+  const placement = result.placement?.ok
+    ? { status: "PLACED" }
+    : result.placement
+      ? { status: "UNSCHEDULABLE", error: result.placement.reason }
+      : entitlement
+        ? null
+        : { status: "NOT_ENTITLED" };
 
   return { status: 200, body: { ok: true, deviceId, profileId, placement } };
 }

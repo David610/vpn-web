@@ -1,3 +1,5 @@
+import { getDeviceEntitlement } from "./subscriptions.js";
+
 /**
  * What must happen right after a node reports a new VPN identity created
  * (functions/api/agent/jobs/[id]/complete.js, CREATE_USER).
@@ -28,6 +30,17 @@ export async function finalizeCreatedIdentity(supabaseAdmin, { identity, nodeId,
       .maybeSingle();
     if (memberError) throw new Error(`account_members lookup failed: ${memberError.message}`);
     stillEntitled = !!membership;
+    if (stillEntitled) {
+      // CREATE_USER may finish after another device consumed the last slot,
+      // a pack was removed, or this device's own subscription ended. Recheck
+      // the same per-device entitlement gate immediately before accepting the
+      // newly-created network identity.
+      stillEntitled = !!(await getDeviceEntitlement(
+        supabaseAdmin,
+        device.account_id,
+        device.id
+      ));
+    }
   }
 
   const disable = async (target, key) => {

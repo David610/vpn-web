@@ -21,12 +21,27 @@ function node(node_id, location_id, extra = {}) {
 }
 
 function world({ nodes = [], paths = [], profile = null, identities = [], deviceStatus = "ACTIVE" } = {}) {
-  const device = { id: "dev-1", account_id: "acct-1", user_id: "user-1", status: deviceStatus };
+  const device = {
+    id: "dev-1",
+    account_id: "acct-1",
+    user_id: "user-1",
+    status: deviceStatus,
+    subscription_id: "sub-1",
+    created_at: "2026-02-01T00:00:00Z",
+  };
   return {
     device,
     db: makeFakeSupabase({
       customer_accounts: [{ id: "acct-1" }],
       account_members: [{ account_id: "acct-1", user_id: "user-1", role: "owner" }],
+      subscriptions: [{
+        id: "sub-1",
+        account_id: "acct-1",
+        status: "active",
+        current_period_end: "2030-01-01T00:00:00.000Z",
+        extra_seats: 0,
+        created_at: "2026-01-01T00:00:00Z",
+      }],
       devices: [{ ...device, name: "Phone" }],
       nodes,
       allowed_paths: paths,
@@ -248,6 +263,29 @@ describe("device revocation removes real network access", () => {
     expect(jobs(db)).toEqual([
       expect.objectContaining({ job_type: "DISABLE_USER", node_id: "de-fsn-001", vpn_account_id: 5 }),
     ]);
+  });
+
+  it("disables a newly-created identity if the device fell outside subscription capacity while the job was in flight", async () => {
+    const { db } = world();
+    db._tables.devices.push(
+      { id: "dev-2", account_id: "acct-1", user_id: "user-1", status: "ACTIVE", subscription_id: "sub-1", created_at: "2026-01-01T00:00:00Z" },
+      { id: "dev-3", account_id: "acct-1", user_id: "user-1", status: "ACTIVE", subscription_id: "sub-1", created_at: "2026-01-02T00:00:00Z" },
+      { id: "dev-4", account_id: "acct-1", user_id: "user-1", status: "ACTIVE", subscription_id: "sub-1", created_at: "2026-01-03T00:00:00Z" },
+    );
+    // Make dev-1 newest: it is now fourth in a 3-device subscription.
+    db._tables.devices.find((d) => d.id === "dev-1").created_at = "2026-02-01T00:00:00Z";
+    db._tables.vpn_accounts.push({ id: 9, user_id: "user-1", device_id: "dev-1", node_id: "de-fsn-001", vpn_user_id: "vpn-over-capacity", enabled: true });
+
+    const result = await finalizeCreatedIdentity(db, {
+      identity: { id: 9, deviceId: "dev-1", vpnUserId: "vpn-over-capacity" },
+      nodeId: "de-fsn-001",
+      userId: "user-1",
+    });
+
+    expect(result.disabledNew).toBe(true);
+    expect(jobs(db)).toContainEqual(
+      expect.objectContaining({ job_type: "DISABLE_USER", vpn_account_id: 9, device_id: "dev-1" })
+    );
   });
 
   it("billing never resurrects a revoked device or gives its member a fresh one", async () => {

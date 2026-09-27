@@ -2,20 +2,29 @@ import { createClient } from "@supabase/supabase-js";
 import { decryptSecret } from "../../lib/crypto.js";
 import { requireUser } from "../../lib/user-auth.js";
 import { loadCustomerDashboardState } from "../../lib/dashboard-state.js";
+import { getDeviceEntitlement } from "../../lib/subscriptions.js";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 async function newestEnabledIdentity(supabaseAdmin, column, value) {
   const { data, error } = await supabaseAdmin
     .from("vpn_accounts")
-    .select("id, enabled, vpn_user_id, node_id")
+    .select("id, enabled, vpn_user_id, node_id, device_id")
     .eq(column, value)
     .eq("enabled", true)
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
   if (error) throw new Error(`vpn_accounts lookup failed: ${error.message}`);
-  return data ? { id: data.id, enabled: data.enabled, vpnUserId: data.vpn_user_id, nodeId: data.node_id } : null;
+  return data
+    ? {
+        id: data.id,
+        enabled: data.enabled,
+        vpnUserId: data.vpn_user_id,
+        nodeId: data.node_id,
+        deviceId: data.device_id ?? null,
+      }
+    : null;
 }
 
 export async function onRequestGet({ env, request }) {
@@ -87,6 +96,26 @@ export async function onRequestGet({ env, request }) {
     if (!vpnAccount) return noStoreJson({ error: "Provisioning still in progress" }, 404);
     if (!vpnAccount.enabled) return noStoreJson({ error: "VPN access is disabled" }, 403);
 
+    // Credential disclosure is gated by the identity's own device, not by
+    // the account-level entitlement aggregate. This closes the capacity
+    // bypass where a fourth device on a three-device subscription could
+    // still download an already-created config.
+    let credentialEntitlement = state.entitlement;
+    const entitlementDeviceId = deviceId ?? vpnAccount.deviceId;
+    if (entitlementDeviceId) {
+      credentialEntitlement = await getDeviceEntitlement(
+        supabaseAdmin,
+        state.account.accountId,
+        entitlementDeviceId
+      );
+      if (!credentialEntitlement) {
+        return noStoreJson(
+          { error: "This device is not entitled to VPN access", code: "device_not_entitled" },
+          403
+        );
+      }
+    }
+
     const { data: secret, error: secretError } = await supabaseAdmin
       .from("vpn_secrets")
       .select("ciphertext, nonce, provisioning_ciphertext, provisioning_nonce")
@@ -117,10 +146,10 @@ export async function onRequestGet({ env, request }) {
         subscription_url: subscriptionUrl,
         provisioning_url: provisioningUrl,
         preferred_setup_url: provisioningUrl ?? subscriptionUrl,
-        entitlement_source: state.entitlement.source,
-        status: state.entitlement.status,
-        current_period_end: state.entitlement.currentPeriodEnd,
-        cancel_at_period_end: state.entitlement.cancelAtPeriodEnd,
+        entitlement_source: credentialEntitlement.source,
+        status: credentialEntitlement.status,
+        current_period_end: credentialEntitlement.currentPeriodEnd,
+        cancel_at_period_end: credentialEntitlement.cancelAtPeriodEnd,
         account: state.overview,
       },
       200

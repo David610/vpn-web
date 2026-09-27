@@ -98,6 +98,27 @@ export async function loadDeviceEntitlements(supabaseAdmin, accountId, devices) 
 }
 
 /**
+ * Authoritative application-level entitlement lookup for one device.
+ *
+ * Security-sensitive credential/config paths must call this instead of the
+ * account-level entitlement aggregate. It deliberately evaluates the whole
+ * account's device set so subscription capacity is enforced oldest-first.
+ */
+export async function getDeviceEntitlement(supabaseAdmin, accountId, deviceId) {
+  const { data: devices, error } = await supabaseAdmin
+    .from("devices")
+    .select("id, account_id, user_id, status, subscription_id, created_at")
+    .eq("account_id", accountId);
+  if (error) throw new Error(`devices entitlement lookup failed: ${error.message}`);
+  const entitlements = await loadDeviceEntitlements(
+    supabaseAdmin,
+    accountId,
+    devices ?? []
+  );
+  return entitlements.get(deviceId) ?? null;
+}
+
+/**
  * The live subscription a new device should join: the oldest one with a
  * free place, or null when every subscription is full.
  */
