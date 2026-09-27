@@ -95,7 +95,7 @@ export default function AdminOverviewPage() {
               <AdminStatRows>
                 <AdminStatRow label="Active paid" value={overview.customers.active} />
                 <AdminStatRow label="Free trials" value={overview.customers.trialing} />
-                <AdminStatRow label="Past due" value={overview.customers.past_due} />
+                <AdminStatRow label="Past due" value={overview.customers.past_due} warn />
                 <AdminStatRow label="Cancelled" value={overview.customers.canceled} />
                 <AdminStatRow label="Cancelling" value={overview.subscriptions?.cancelling ?? "—"} />
                 <AdminStatRow label="Several subscriptions" value={overview.subscriptions?.accounts_with_several ?? "—"} />
@@ -106,10 +106,10 @@ export default function AdminOverviewPage() {
 
             <AdminSection label="Fleet status" action={overview.nodes.offline === 0 ? <span className="text-fg-2">Healthy</span> : <span className="text-danger">Degraded</span>}>
               <AdminStatRows>
-                <AdminStatRow label="Nodes offline" value={overview.nodes.offline} />
-                <AdminStatRow label="Devices over capacity" value={overview.devices?.over_capacity ?? "—"} />
-                <AdminStatRow label="Devices without subscription" value={overview.devices?.without_subscription ?? "—"} />
-                <AdminStatRow label="Unschedulable devices" value={overview.devices?.unschedulable ?? "—"} />
+                <AdminStatRow label="Nodes offline" value={overview.nodes.offline} warn />
+                <AdminStatRow label="Devices over capacity" value={overview.devices?.over_capacity ?? "—"} warn />
+                <AdminStatRow label="Devices without subscription" value={overview.devices?.without_subscription ?? "—"} warn />
+                <AdminStatRow label="Unschedulable devices" value={overview.devices?.unschedulable ?? "—"} warn />
               </AdminStatRows>
             </AdminSection>
 
@@ -117,9 +117,9 @@ export default function AdminOverviewPage() {
               <AdminStatRows>
                 <AdminStatRow label="Jobs pending" value={overview.jobs.pending} />
                 <AdminStatRow label="Jobs claimed" value={overview.jobs.claimed} />
-                <AdminStatRow label="Jobs failed" value={overview.jobs.failed} />
-                <AdminStatRow label="Open alerts" value={overview.alerts.open} />
-                <AdminStatRow label="Abuse flags" value={overview.abuse.open} />
+                <AdminStatRow label="Jobs failed" value={overview.jobs.failed} warn />
+                <AdminStatRow label="Open alerts" value={overview.alerts.open} warn />
+                <AdminStatRow label="Abuse flags" value={overview.abuse.open} warn />
               </AdminStatRows>
             </AdminSection>
 

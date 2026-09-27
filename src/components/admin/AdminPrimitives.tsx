@@ -106,12 +106,20 @@ export function AdminMetricRow({ children, count }: { children: ReactNode; count
 
 // ── Compact stat rows ───────────────────────────────────────────────────
 
-/** "Label ........ value" line — for secondary counts that don't need card weight. */
-export function AdminStatRow({ label, value }: { label: ReactNode; value: ReactNode }) {
+/**
+ * "Label ........ value" line — for secondary counts that don't need card
+ * weight. Pass `warn` for a count that's only meaningful when nonzero
+ * (failures, past-due, offline nodes, abuse flags, …) — it highlights in
+ * --danger then; a healthy zero stays exactly as quiet as everything else.
+ * Don't pass it for ordinary counts (active customers, extra packs, …)
+ * where a bigger number isn't a problem.
+ */
+export function AdminStatRow({ label, value, warn }: { label: ReactNode; value: number | string; warn?: boolean }) {
+  const flagged = warn && typeof value === "number" && value > 0;
   return (
     <div className="admin-stat-row">
       <span className="admin-stat-row__label">{label}</span>
-      <span className="admin-stat-row__value">{value}</span>
+      <span className={`admin-stat-row__value ${flagged ? "text-danger" : ""}`.trim()}>{value}</span>
     </div>
   );
 }

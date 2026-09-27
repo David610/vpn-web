@@ -233,7 +233,7 @@ export function ActionsDialog({
               className={`dialog__menu-item ${action.danger ? "text-danger" : ""}`.trim()}
               disabled={action.disabled}
               onClick={action.onSelect}
-              style={action.separated && i > 0 ? { marginTop: "var(--space-2)", borderTop: "1px solid var(--border)", paddingTop: "var(--space-4)" } : undefined}
+              style={action.separated && i > 0 ? { marginTop: "var(--space-4)", borderTop: "1px solid var(--border)", paddingTop: "var(--space-6)" } : undefined}
             >
               {action.label}
             </button>

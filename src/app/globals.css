@@ -37,10 +37,14 @@
   --font-display: var(--font-sans);
   --font-body:    var(--font-sans);
 
-  /* Motion */
-  --t-fast:    120ms ease-out;
-  --t-base:    180ms ease-out;
-  --t-slow:    260ms ease-out;
+  /* Motion — one shared easing; duration buckets by what's changing.
+     --t-fast:  buttons/links/radio & selection state (120-150ms)
+     --t-base:  disclosures/menus (160-180ms)
+     --t-slow:  dialogs (180-220ms) */
+  --ease:      cubic-bezier(.2, .8, .2, 1);
+  --t-fast:    140ms var(--ease);
+  --t-base:    170ms var(--ease);
+  --t-slow:    200ms var(--ease);
 
   /* Type scale — rem-based so it grows with user text-size settings. */
   --text-xs:      0.75rem;
@@ -274,8 +278,9 @@ body {
   border-radius: var(--radius-sm);
   border: 1px solid transparent;
   cursor: pointer;
-  transition: background-color var(--t-base), color var(--t-base),
-              border-color var(--t-base), transform var(--t-fast);
+  transition: color var(--t-fast), border-color var(--t-fast),
+              background-color var(--t-fast), opacity var(--t-fast),
+              transform var(--t-base);
   letter-spacing: var(--track-xs);
   white-space: nowrap;
   max-width: 100%;
@@ -284,13 +289,14 @@ body {
 @media (max-width: 480px) {
   .btn { white-space: normal; }
 }
+/* A small immediate-but-not-abrupt press, not a bounce. */
+.btn:active:not(:disabled) { transform: translateY(1px); }
 .btn-primary {
   background: var(--accent);
   color: var(--fg-on-ink);
   border-color: var(--accent);
 }
 .btn-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
-.btn-primary:active { transform: scale(0.98); }
 .btn-primary:disabled { opacity: 0.55; cursor: not-allowed; transform: none; }
 .btn-secondary {
   background: transparent;
@@ -298,7 +304,6 @@ body {
   border-color: var(--border);
 }
 .btn-secondary:hover { border-color: var(--fg-3); background: var(--bg-panel); }
-.btn-secondary:active { transform: scale(0.98); }
 
 /* Tag / chip */
 .tag {
@@ -328,9 +333,10 @@ body {
   border-radius: var(--radius-md);
   padding: 0.625rem 0.75rem;
   min-height: 2.75rem;
-  transition: border-color var(--t-base), box-shadow var(--t-base);
+  transition: border-color var(--t-fast), box-shadow var(--t-fast);
 }
 .field::placeholder { color: var(--fg-3); }
+.field:hover { border-color: var(--fg-3); }
 .field:focus { outline: none; border-color: var(--fg); box-shadow: 0 0 0 3px rgba(10, 10, 10, 0.08); }
 .field[aria-invalid='true'] { border-color: var(--danger); }
 .field[aria-invalid='true']:focus { box-shadow: 0 0 0 3px rgba(185, 28, 28, 0.12); }
@@ -511,6 +517,7 @@ body {
   font-weight: 500;
   color: var(--fg);
   cursor: pointer;
+  transition: color var(--t-fast);
 }
 .dm-nav__toggle:hover { color: var(--fg-2); }
 
@@ -520,7 +527,7 @@ body {
 @media (max-width: 640px) {
   .dm-nav__toggle { display: inline-flex; }
   .dm-nav__desktop {
-    display: none;
+    display: flex;
     position: absolute;
     top: var(--header-h);
     left: 0;
@@ -531,8 +538,19 @@ body {
     background: var(--bg);
     border-bottom: 1px solid var(--border);
     padding: var(--space-2) var(--container-pad) var(--space-4);
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transform: translateY(-4px);
+    transition: opacity var(--t-base), transform var(--t-base), visibility 0s linear var(--t-base);
   }
-  .dm-nav__desktop--open { display: flex; }
+  .dm-nav__desktop--open {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+    transform: translateY(0);
+    transition: opacity var(--t-base), transform var(--t-base);
+  }
   .dm-nav__link {
     padding: var(--space-3) 0;
     border-bottom: 1px solid var(--border-soft);
@@ -911,15 +929,20 @@ body {
 .row__panel { grid-column: 1 / -1; padding: var(--space-4); background: var(--bg-alt); border: 1px solid var(--border); border-radius: var(--radius-sm); }
 .btn-sm { min-height: 2rem; padding: 0.375rem 0.75rem; font-size: var(--text-xs); }
 .btn-link {
+  display: inline-flex;
+  align-items: center;
+  /* The visible underlined text stays inline-sized; the actual hit target
+     is the full ~44px row a thumb expects, not just the text's own line
+     height. */
+  min-height: 2.75rem;
   background: none; border: none; cursor: pointer;
-  /* Vertical padding only, so the visible underlined text keeps its inline
-     look while the actual hit target still clears the 24px minimum tap
-     size (confirmed too small at 19px before this). */
-  padding: var(--space-2) 0; margin: calc(var(--space-2) * -1) 0;
+  padding: 0; margin: 0;
   font: inherit; font-size: var(--text-xs); color: var(--fg-2);
   text-decoration: underline; text-underline-offset: 3px;
+  transition: color var(--t-fast);
 }
 .btn-link:hover { color: var(--fg); }
+.btn-link:active:not(:disabled) { transform: translateY(1px); }
 .btn-danger { background: var(--danger); border-color: var(--danger); color: #fff; }
 .btn-danger:hover { background: #991B1B; border-color: #991B1B; }
 .text-danger { color: var(--danger); }
@@ -934,10 +957,27 @@ body {
 .stepper span { text-align: center; font-size: var(--text-sm); font-weight: 500; }
 
 .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: var(--space-4); align-items: end; }
-.radio-group { border: none; margin: var(--space-4) 0 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.radio-group { border: none; margin: var(--space-4) 0 0; padding: 0; display: flex; flex-direction: column; }
 .radio-group > legend { padding: 0; margin: 0 0 var(--space-2); }
-.radio-option { display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-sm); color: var(--fg); cursor: pointer; }
-.radio-option input[type="radio"] { width: 1rem; height: 1rem; accent-color: var(--fg); margin: 0; }
+.radio-option {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 2.75rem;
+  font-size: var(--text-sm);
+  color: var(--fg);
+  cursor: pointer;
+  transition: color var(--t-fast);
+}
+.radio-option:hover { color: var(--fg-2); }
+.radio-option input[type="radio"] {
+  width: 1.125rem;
+  height: 1.125rem;
+  margin: 0;
+  accent-color: var(--fg);
+  transition: transform var(--t-fast);
+}
+.radio-option input[type="radio"]:active { transform: scale(0.92); }
 .notice { padding: var(--space-4); background: var(--bg-panel); border-radius: var(--radius-sm); font-size: var(--text-sm); color: var(--fg-2); margin: 0 0 var(--space-6); }
 .notice--error { color: var(--danger); }
 .notice strong { color: var(--fg); display: block; margin-bottom: var(--space-1); }
@@ -960,8 +1000,27 @@ body {
   background: var(--bg);
   color: var(--fg);
   box-shadow: none;
+  /* Small opacity + translateY entrance/exit, not a large movement.
+     @starting-style/allow-discrete are a progressive enhancement — an
+     unsupporting browser just shows/hides the dialog instantly, same as
+     before. */
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity var(--t-slow), transform var(--t-slow),
+              overlay var(--t-slow) allow-discrete, display var(--t-slow) allow-discrete;
 }
-.dialog::backdrop { background: rgba(10, 10, 10, 0.4); }
+.dialog:not([open]) { opacity: 0; transform: translateY(4px); }
+@starting-style {
+  .dialog[open] { opacity: 0; transform: translateY(4px); }
+}
+.dialog::backdrop {
+  background: rgba(10, 10, 10, 0.4);
+  opacity: 1;
+  transition: opacity var(--t-slow), overlay var(--t-slow) allow-discrete, display var(--t-slow) allow-discrete;
+}
+@starting-style {
+  .dialog[open]::backdrop { opacity: 0; }
+}
 .dialog__body { display: flex; flex-direction: column; gap: var(--space-4); padding: var(--space-6); }
 .dialog__title { font-size: var(--text-lg); font-weight: 600; margin: 0; letter-spacing: var(--track-h3); }
 .dialog__desc { font-size: var(--text-sm); color: var(--fg-2); margin: 0; }
@@ -980,6 +1039,12 @@ body {
 }
 .dialog__menu-item:disabled { color: var(--fg-3); cursor: not-allowed; }
 .dialog__menu-item:not(:disabled):hover { color: var(--fg-2); }
+/* .text-danger is defined earlier in the cascade with equal specificity —
+   without this, .dialog__menu-item's own color would win and a
+   destructive item (e.g. "Cancel subscription") would render as plain
+   text instead of --danger. */
+.dialog__menu-item.text-danger { color: var(--danger); }
+.dialog__menu-item.text-danger:hover { color: #991B1B; }
 @media (max-width: 480px) {
   .dialog__actions { flex-direction: column-reverse; }
   .dialog__actions .btn { width: 100%; }
