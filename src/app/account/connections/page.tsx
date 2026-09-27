@@ -234,30 +234,45 @@ function ConnectionsBody() {
             </label>
           </fieldset>
 
-          <div className="form-grid" style={{ marginTop: "var(--space-4)" }}>
-            {servers === "2" && (
-              <div className="form-reveal">
-                <label className="field-label">Entry</label>
-                <p className="field" style={{ display: "flex", alignItems: "center", color: "var(--fg-2)" }}>Automatic</p>
+          {servers === "1" ? (
+            <div className="form-grid" style={{ marginTop: "var(--space-4)" }} key="one-server">
+              <div>
+                <label className="field-label" htmlFor="conn-exit">Location</label>
+                <select
+                  id="conn-exit"
+                  className="field select"
+                  value={exitLocationId}
+                  onChange={(e) => setExitLocationId(e.target.value)}
+                >
+                  <option value="">Automatic</option>
+                  {locations.map((l) => (
+                    <option key={l.id} value={l.id}>{l.name}</option>
+                  ))}
+                </select>
               </div>
-            )}
-            <div>
-              <label className="field-label" htmlFor="conn-exit">
-                {servers === "2" ? "Exit" : "Location"}
-              </label>
-              <select
-                id="conn-exit"
-                className="field select"
-                value={exitLocationId}
-                onChange={(e) => setExitLocationId(e.target.value)}
-              >
-                <option value="">Automatic</option>
-                {locations.map((l) => (
-                  <option key={l.id} value={l.id}>{l.name}</option>
-                ))}
-              </select>
             </div>
-          </div>
+          ) : (
+            <div className="field-pair form-reveal" style={{ marginTop: "var(--space-4)" }} key="two-server">
+              <div>
+                <label className="field-label">Entry</label>
+                <p className="field-static">Automatic</p>
+              </div>
+              <div>
+                <label className="field-label" htmlFor="conn-exit">Exit</label>
+                <select
+                  id="conn-exit"
+                  className="field select"
+                  value={exitLocationId}
+                  onChange={(e) => setExitLocationId(e.target.value)}
+                >
+                  <option value="">Automatic</option>
+                  {locations.map((l) => (
+                    <option key={l.id} value={l.id}>{l.name}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          )}
 
           <button type="submit" className="btn btn-primary" disabled={creating} style={{ marginTop: "var(--space-4)" }}>
             {creating ? "Creating…" : "Create configuration"}

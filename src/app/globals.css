@@ -337,6 +337,26 @@ body {
 }
 .field::placeholder { color: var(--fg-3); }
 .field:hover { border-color: var(--fg-3); }
+/* A value Arcana sets automatically (e.g. 2-server Entry), not a disabled
+   control the customer could otherwise edit. Same box geometry as .field
+   so it lines up with a real field next to it, full-contrast text (not
+   muted --fg-2, which would read as "unavailable"), a quiet filled
+   background instead of a border, and deliberately no hover/focus state —
+   it isn't interactive and shouldn't look like it's waiting to be. */
+.field-static {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 2.75rem;
+  padding: 0.625rem 0.75rem;
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  color: var(--fg);
+  background: var(--bg-alt);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  margin: 0;
+}
 /* A box-shadow ring here (this used to be 0.08 alpha, then 0.35) does not
    reliably paint on a native <select> across engines — confirmed by
    screenshot, not just computed style, at both opacities. Use the same
@@ -963,6 +983,14 @@ body {
 .stepper span { text-align: center; font-size: var(--text-sm); font-weight: 500; }
 
 .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: var(--space-4); align-items: end; }
+/* Entry/Exit: an explicit two-column pair down to 480px, not an
+   auto-fit column count that could vary with container width; below
+   that it stacks, each field full-width, rather than squeezing two
+   columns into a narrow viewport. */
+.field-pair { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-4); align-items: end; }
+@media (max-width: 480px) {
+  .field-pair { grid-template-columns: 1fr; }
+}
 .radio-group { border: none; margin: var(--space-4) 0 0; padding: 0; display: flex; flex-direction: column; }
 .radio-group > legend { padding: 0; margin: 0 0 var(--space-2); }
 .radio-option {
