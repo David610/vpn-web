@@ -2,6 +2,7 @@
 
 import { FleetPage, Empty, when } from "@/components/admin/FleetPage";
 import { StatusBadge } from "@/components/admin/StatusBadge";
+import { AdminSection, AdminTable, AdminTableWrap } from "@/components/admin/AdminPrimitives";
 import { useFleetData } from "@/hooks/useFleetData";
 
 type HealthNode = {
@@ -53,13 +54,13 @@ function ProtocolCell({ p }: { p: HealthNode["protocol"] }) {
         <div key={proto}>
           <span className="font-mono">{proto}</span>{" "}
           {s.ok ? "OK" : <strong>FAIL{s.error ? ` (${s.error})` : ""}</strong>}{" "}
-          <span className="text-gray-600">
+          <span className="text-fg-3">
             {s.vantage} · {s.latencyMs ?? "—"} ms · loss {s.lossPct ?? "—"}% · dns {mark(s.dims.dns as boolean | null)} · v6 {String(s.dims.ipv6 ?? "—")}
             {s.dims.egress_ip_match === false ? " · EGRESS IP MISMATCH" : ""}
           </span>
         </div>
       ))}
-      <div className="text-gray-600">
+      <div className="text-fg-3">
         streak {p.consecutiveFailures} / {p.consecutiveSuccesses}
         {p.hysteria2CertDays != null ? ` · hy2 cert ${p.hysteria2CertDays}d` : ""}
       </div>
@@ -78,8 +79,8 @@ export default function FleetHealthPage() {
           {data.nodes.length === 0 ? (
             <Empty>No nodes.</Empty>
           ) : (
-            <div className="table-wrap">
-              <table className="table">
+            <AdminTableWrap label="Node health, capacity & revisions">
+              <AdminTable>
                 <thead>
                   <tr>
                     <th>Node</th><th>Lifecycle</th><th>Last probe</th><th className="num">Fail / OK streak</th><th>Protocols</th>
@@ -91,43 +92,42 @@ export default function FleetHealthPage() {
                     <tr key={n.nodeId}>
                       <td>
                         <span className="font-mono font-medium">{n.nodeId}</span>
-                        <div className="text-xs text-gray-600">{n.location ?? "unassigned"} · {n.role}</div>
+                        <div className="text-xs text-fg-3">{n.location ?? "unassigned"} · {n.role}</div>
                       </td>
                       <td>
                         <StatusBadge status={n.lifecycleState} />
-                        {n.failedReason && <div className="text-xs text-gray-600">{n.failedReason}</div>}
-                        <div className="text-xs text-gray-600">since {when(n.lifecycleStateChangedAt)}</div>
+                        {n.failedReason && <div className="text-xs text-fg-3">{n.failedReason}</div>}
+                        <div className="text-xs text-fg-3">since {when(n.lifecycleStateChangedAt)}</div>
                       </td>
                       <td>
                         {n.probe.lastOk == null ? "—" : n.probe.lastOk ? "OK" : <strong>FAIL</strong>}
-                        <div className="text-xs text-gray-600">{when(n.probe.lastAt)}</div>
+                        <div className="text-xs text-fg-3">{when(n.probe.lastAt)}</div>
                       </td>
                       <td className="num">{n.probe.consecutiveFailures} / {n.probe.consecutiveSuccesses}</td>
                       <td>
                         <ProtocolCell p={n.protocol} />
-                        {n.ipReputation?.value && <div className="text-xs text-gray-600">IP rep. {n.ipReputation.value} (info)</div>}
+                        {n.ipReputation?.value && <div className="text-xs text-fg-3">IP rep. {n.ipReputation.value} (info)</div>}
                       </td>
                       <td className="num">{n.capacity.assignedDevices} / {n.capacity.maxSessions ?? "—"}</td>
                       <td className="num">{pct(n.capacity.utilization)}</td>
                       <td className="tabular-nums">
                         {n.revision.observed}/{n.revision.desired} {n.revision.inSync ? "" : <strong className="text-xs">DRIFT</strong>}
                       </td>
-                      <td className="text-xs text-gray-700">
+                      <td className="text-xs text-fg-2">
                         agent {n.versions.agent ?? "—"}<br />vpn {n.versions.vpn ?? "—"}<br />sing-box {n.versions.singbox ?? "—"}
                       </td>
                       <td className="text-xs">{n.bootstrap.status ? `${n.bootstrap.status} · ${n.bootstrap.stage ?? ""}` : "—"}</td>
                     </tr>
                   ))}
                 </tbody>
-              </table>
-            </div>
+              </AdminTable>
+            </AdminTableWrap>
           )}
-          <section>
-            <h3 className="mb-2 font-mono text-xs text-gray-600">PROTOCOL PROBE HISTORY (useful egress, newest first)</h3>
+          <AdminSection label="Protocol probe history (useful egress, newest first)">
             {(data.probeHistory ?? []).filter((r) => r.dimension === "useful_egress").length === 0 ? (
               <Empty>No protocol probe results yet.</Empty>
             ) : (
-              <ul className="divide-y divide-gray-200 border-t border-black text-sm">
+              <ul className="divide-y divide-border text-sm">
                 {(data.probeHistory ?? [])
                   .filter((r) => r.dimension === "useful_egress")
                   .slice(0, 40)
@@ -135,41 +135,39 @@ export default function FleetHealthPage() {
                     <li key={r.id} className="flex flex-wrap justify-between gap-x-3 py-2">
                       <span>
                         <span className="font-mono">{r.target}</span> {r.protocol} {r.ok ? "OK" : <strong>FAIL{r.text ? ` (${r.text})` : ""}</strong>}
-                        <span className="text-xs text-gray-600"> via {r.vantage === "self" ? "self (loopback)" : r.reporter}</span>
+                        <span className="text-xs text-fg-3"> via {r.vantage === "self" ? "self (loopback)" : r.reporter}</span>
                       </span>
-                      <span className="whitespace-nowrap text-xs text-gray-600">{when(r.at)}</span>
+                      <span className="whitespace-nowrap text-xs text-fg-3">{when(r.at)}</span>
                     </li>
                   ))}
               </ul>
             )}
-          </section>
+          </AdminSection>
           <div className="grid gap-8 md:grid-cols-2">
-            <section>
-              <h3 className="mb-2 font-mono text-xs text-gray-600">RECENT NODE EVENTS</h3>
+            <AdminSection label="Recent node events">
               {data.events.length === 0 ? <Empty>No recorded events.</Empty> : (
-                <ul className="divide-y divide-gray-200 border-t border-black text-sm">
+                <ul className="divide-y divide-border text-sm">
                   {data.events.slice(0, 25).map((e) => (
                     <li key={e.id} className="flex flex-wrap justify-between gap-x-3 py-2">
                       <span><span className="font-mono">{e.nodeId}</span> {e.action}</span>
-                      <span className="whitespace-nowrap text-xs text-gray-600">{when(e.createdAt)}</span>
+                      <span className="whitespace-nowrap text-xs text-fg-3">{when(e.createdAt)}</span>
                     </li>
                   ))}
                 </ul>
               )}
-            </section>
-            <section>
-              <h3 className="mb-2 font-mono text-xs text-gray-600">RECENT REVISIONS</h3>
+            </AdminSection>
+            <AdminSection label="Recent revisions">
               {data.revisions.length === 0 ? <Empty>No revisions pushed.</Empty> : (
-                <ul className="divide-y divide-gray-200 border-t border-black text-sm">
+                <ul className="divide-y divide-border text-sm">
                   {data.revisions.slice(0, 25).map((r) => (
                     <li key={`${r.nodeId}-${r.revision}`} className="flex flex-wrap justify-between gap-x-3 py-2">
                       <span><span className="font-mono">{r.nodeId}</span> r{r.revision} {r.reason ? `· ${r.reason}` : ""}</span>
-                      <span className="whitespace-nowrap text-xs text-gray-600">{when(r.createdAt)}</span>
+                      <span className="whitespace-nowrap text-xs text-fg-3">{when(r.createdAt)}</span>
                     </li>
                   ))}
                 </ul>
               )}
-            </section>
+            </AdminSection>
           </div>
         </div>
       )}

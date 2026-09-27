@@ -5,6 +5,16 @@ import { AdminShell } from "@/components/admin/AdminShell";
 import { StatusBadge } from "@/components/admin/StatusBadge";
 import { FleetTabs } from "@/components/admin/FleetTabs";
 import { TypedConfirmDialog } from "@/components/admin/TypedConfirmDialog";
+import {
+  AdminButton,
+  AdminField,
+  AdminNotice,
+  AdminSection,
+  AdminTable,
+  AdminTableWrap,
+  adminInputClass,
+  adminSelectClass,
+} from "@/components/admin/AdminPrimitives";
 import { useAdminSession } from "@/hooks/useAdminSession";
 import { adminFetch } from "@/lib/adminFetch";
 
@@ -254,70 +264,64 @@ export default function AdminNodesPage() {
 
   return (
     <AdminShell>
-      <h1 className="mb-4 text-xl font-semibold">Fleet</h1>
+      <h1 className="mb-4 text-xl font-semibold text-fg">Fleet</h1>
       <FleetTabs />
       <div className="mb-4 flex flex-wrap items-baseline justify-between gap-x-4">
-        <h2 className="text-base font-semibold">Nodes</h2>
-        <span className="text-xs text-gray-500">
+        <h2 className="text-base font-semibold text-fg">Nodes</h2>
+        <span className="text-xs text-fg-3">
           VPN traffic and host health · refresh {REFRESH_MS / 1000}s
         </span>
       </div>
 
-      <form onSubmit={createPendingNode} className="mb-4 flex flex-wrap items-end gap-2 rounded border p-3 text-sm">
-        <div>
-          <label className="block text-xs text-gray-500">Node id</label>
-          <input
-            className="rounded border px-2 py-1"
-            placeholder="de-fra-3"
-            value={newNodeId}
-            onChange={(e) => setNewNodeId(e.target.value)}
-            disabled={creating}
-          />
-        </div>
-        <div>
-          <label className="block text-xs text-gray-500">Role</label>
-          <select
-            className="rounded border px-2 py-1"
-            value={newNodeRole}
-            onChange={(e) => setNewNodeRole(e.target.value as "EXIT" | "RELAY")}
-            disabled={creating}
-          >
-            <option value="EXIT">EXIT</option>
-            <option value="RELAY">RELAY</option>
-          </select>
-        </div>
-        <button
-          type="submit"
-          disabled={creating || !newNodeId.trim() || !!enrollment}
-          className="rounded bg-gray-900 px-3 py-1 text-white disabled:opacity-50"
-        >
-          {creating ? "Creating…" : "Enroll node"}
-        </button>
-        {createError && <span className="text-red-600">{createError}</span>}
-      </form>
+      <AdminSection>
+        <form onSubmit={createPendingNode} className="flex flex-wrap items-end gap-2 rounded-sm border border-border bg-bg-alt p-3 text-sm">
+          <AdminField label="Node id">
+            <input
+              className={adminInputClass}
+              placeholder="de-fra-3"
+              value={newNodeId}
+              onChange={(e) => setNewNodeId(e.target.value)}
+              disabled={creating}
+            />
+          </AdminField>
+          <AdminField label="Role">
+            <select
+              className={adminSelectClass}
+              value={newNodeRole}
+              onChange={(e) => setNewNodeRole(e.target.value as "EXIT" | "RELAY")}
+              disabled={creating}
+            >
+              <option value="EXIT">EXIT</option>
+              <option value="RELAY">RELAY</option>
+            </select>
+          </AdminField>
+          <AdminButton type="submit" variant="primary" disabled={creating || !newNodeId.trim() || !!enrollment}>
+            {creating ? "Creating…" : "Enroll node"}
+          </AdminButton>
+          {createError && <span className="text-danger">{createError}</span>}
+        </form>
+      </AdminSection>
 
       {enrollment && (
-        <div className="mb-4 rounded border border-yellow-300 bg-yellow-50 p-3 text-sm">
-          <p className="font-medium">
-            Enrollment token for {enrollment.nodeId} (shown once — copy it now):
-          </p>
-          <code className="block break-all rounded bg-white p-2 text-xs">{enrollment.token}</code>
-          <p className="mt-1 text-xs text-gray-500">
+        <AdminNotice>
+          <strong>Enrollment token for {enrollment.nodeId} (shown once — copy it now):</strong>
+          <code className="mt-2 block break-all rounded-sm border border-border bg-bg p-2 font-mono text-xs text-fg">{enrollment.token}</code>
+          <p className="mt-1 text-xs text-fg-3">
             Expires {new Date(enrollment.expiresAt).toLocaleString()}. Pass it to the new VPS&apos;s
             bootstrap step; it calls POST /api/agent/enroll once and is then useless.
           </p>
-          <button className="mt-1 text-xs underline" onClick={() => setEnrollment(null)}>
+          <AdminButton variant="link" className="mt-1" onClick={() => setEnrollment(null)}>
             Dismiss
-          </button>
-        </div>
+          </AdminButton>
+        </AdminNotice>
       )}
 
-      {transitionError && <p className="mb-2 text-red-600">{transitionError}</p>}
+      {transitionError && <AdminNotice tone="error">{transitionError}</AdminNotice>}
       {notice && (
-        <p className="mb-2 border-l-2 border-black pl-2 text-sm">
+        <AdminNotice>
           {notice}{" "}
-          <button type="button" className="underline" onClick={() => setNotice(null)}>Dismiss</button>
-        </p>
+          <AdminButton variant="link" onClick={() => setNotice(null)}>Dismiss</AdminButton>
+        </AdminNotice>
       )}
 
       <TypedConfirmDialog
@@ -346,48 +350,46 @@ export default function AdminNodesPage() {
       >
         {pendingAction?.kind === "replace" && (
           <div className="grid grid-cols-2 gap-2 text-sm">
-            <label className="text-xs text-gray-600">
-              New node id
-              <input className="mt-1 w-full border border-gray-400 px-2 py-1 font-mono" value={replaceNewId} onChange={(e) => setReplaceNewId(e.target.value)} placeholder="de-fra-4" />
-            </label>
-            <label className="text-xs text-gray-600">
-              Provider region
-              <input className="mt-1 w-full border border-gray-400 px-2 py-1 font-mono" value={replaceRegion} onChange={(e) => setReplaceRegion(e.target.value)} />
-            </label>
+            <AdminField label="New node id">
+              <input className={`${adminInputClass} font-mono`} value={replaceNewId} onChange={(e) => setReplaceNewId(e.target.value)} placeholder="de-fra-4" />
+            </AdminField>
+            <AdminField label="Provider region">
+              <input className={`${adminInputClass} font-mono`} value={replaceRegion} onChange={(e) => setReplaceRegion(e.target.value)} />
+            </AdminField>
           </div>
         )}
       </TypedConfirmDialog>
 
       {error ? (
-        <p className="text-red-600">{error}</p>
+        <AdminNotice tone="error">{error}</AdminNotice>
       ) : !nodes ? (
-        <p>Loading…</p>
+        <p className="text-fg-2">Loading…</p>
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[960px] border-collapse text-left text-sm [&_td]:px-3 [&_td]:py-3 [&_th]:px-3 [&_th]:py-2 [&_th]:font-medium">
+        <AdminTableWrap label="Nodes">
+          <AdminTable className="min-w-[960px]">
             <thead>
-              <tr className="border-b border-gray-300 text-xs uppercase tracking-wide text-gray-500">
+              <tr>
                 <th className="min-w-[180px]">Node</th>
                 <th className="min-w-[170px]">State</th>
-                <th className="min-w-[150px] text-right">VPN traffic</th>
+                <th className="num min-w-[150px]">VPN traffic</th>
                 <th className="min-w-[170px]">Host</th>
-                <th className="min-w-[110px] text-right">Users</th>
+                <th className="num min-w-[110px]">Users</th>
                 <th className="min-w-[160px]">Last seen</th>
               </tr>
             </thead>
             <tbody>
               {nodes.map((node) => (
-                <tr key={node.nodeId} className="border-b border-gray-200 align-top">
+                <tr key={node.nodeId} className="align-top">
                   <td>
-                    <div className="font-mono font-medium">{node.nodeId}</div>
-                    <div className="mt-0.5 text-xs text-gray-500">
+                    <div className="font-mono font-medium text-fg">{node.nodeId}</div>
+                    <div className="mt-0.5 text-xs text-fg-3">
                       {node.role} · {node.location ? `${node.location.displayName} (${node.location.countryCode})` : "unassigned"}
                     </div>
-                    <div className="mt-1 text-xs text-gray-500">
+                    <div className="mt-1 text-xs text-fg-3">
                       rev {node.observedRevision}/{node.desiredRevision}
-                      {node.observedRevision !== node.desiredRevision && <span className="ml-1 font-semibold text-gray-900">out of sync</span>}
+                      {node.observedRevision !== node.desiredRevision && <span className="ml-1 font-semibold text-fg">out of sync</span>}
                     </div>
-                    <div className="mt-1 break-all font-mono text-[11px] leading-4 text-gray-500">
+                    <div className="mt-1 break-all font-mono text-[11px] leading-4 text-fg-3">
                       agent {node.agentVersion ?? "—"} · vpn {node.vpnVersion ?? "—"} · sing-box {node.singboxVersion ?? "—"}
                     </div>
                   </td>
@@ -398,7 +400,7 @@ export default function AdminNodesPage() {
                     </div>
                     <select
                       aria-label={`Lifecycle transition for ${node.nodeId}`}
-                      className="mt-2 block rounded border border-gray-400 text-xs disabled:opacity-50"
+                      className={`mt-2 ${adminSelectClass}`}
                       value=""
                       disabled={pendingNodeIds.has(node.nodeId)}
                       onChange={(e) => {
@@ -416,47 +418,47 @@ export default function AdminNodesPage() {
                     </select>
                     {["READY", "DEGRADED", "FAILED"].includes(node.lifecycleState) && (
                       <div className="mt-1 flex gap-3 text-xs">
-                        <button type="button" className="min-h-6 py-1 underline" onClick={() => setPendingAction({ kind: "replace", nodeId: node.nodeId, canary: false })}>
+                        <AdminButton variant="link" onClick={() => setPendingAction({ kind: "replace", nodeId: node.nodeId, canary: false })}>
                           Replace
-                        </button>
-                        <button type="button" className="min-h-6 py-1 underline" onClick={() => setPendingAction({ kind: "replace", nodeId: node.nodeId, canary: true })}>
+                        </AdminButton>
+                        <AdminButton variant="link" onClick={() => setPendingAction({ kind: "replace", nodeId: node.nodeId, canary: true })}>
                           Canary
-                        </button>
+                        </AdminButton>
                       </div>
                     )}
                   </td>
-                  <td className="text-right tabular-nums">
+                  <td className="num">
                     <div>↓ {formatBits(node.traffic.bpsDown)}</div>
                     <div>↑ {formatBits(node.traffic.bpsUp)}</div>
-                    <div className="mt-1 text-xs text-gray-500">{node.traffic.connectionsOpen ?? "—"} conns</div>
-                    <div className="text-xs text-gray-500">{formatBytes(node.traffic.todayBytesDown + node.traffic.todayBytesUp)} today</div>
+                    <div className="mt-1 text-xs text-fg-3">{node.traffic.connectionsOpen ?? "—"} conns</div>
+                    <div className="text-xs text-fg-3">{formatBytes(node.traffic.todayBytesDown + node.traffic.todayBytesUp)} today</div>
                   </td>
                   <td className="tabular-nums">
                     <dl className="grid grid-cols-[auto_1fr] gap-x-3 text-xs">
-                      <dt className="text-gray-500">CPU</dt><dd>{percent(node.cpuPercent)}</dd>
-                      <dt className="text-gray-500">RAM</dt><dd>{percent(node.memoryPercent)}</dd>
-                      <dt className="text-gray-500">Disk</dt><dd>{percent(node.diskPercent)}</dd>
-                      <dt className="text-gray-500">Net</dt>
+                      <dt className="text-fg-3">CPU</dt><dd>{percent(node.cpuPercent)}</dd>
+                      <dt className="text-fg-3">RAM</dt><dd>{percent(node.memoryPercent)}</dd>
+                      <dt className="text-fg-3">Disk</dt><dd>{percent(node.diskPercent)}</dd>
+                      <dt className="text-fg-3">Net</dt>
                       <dd>↓ {formatBits(node.networkRxBps)} · ↑ {formatBits(node.networkTxBps)}</dd>
                     </dl>
                   </td>
-                  <td className="text-right tabular-nums">
+                  <td className="num">
                     <div>{node.configuredUsers ?? "—"}</div>
-                    {node.activeUsersRecent != null && <div className="text-xs text-gray-500">{node.activeUsersRecent} recent</div>}
+                    {node.activeUsersRecent != null && <div className="text-xs text-fg-3">{node.activeUsersRecent} recent</div>}
                   </td>
                   <td className="text-xs">
                     <div>{node.lastSeenAt ? new Date(node.lastSeenAt).toLocaleString() : "never"}</div>
-                    <div className="mt-1 text-gray-500">up {uptime(node.uptimeSeconds)}</div>
+                    <div className="mt-1 text-fg-3">up {uptime(node.uptimeSeconds)}</div>
                   </td>
                 </tr>
               ))}
             </tbody>
-          </table>
-        </div>
+          </AdminTable>
+        </AdminTableWrap>
       )}
 
       {nodes && nodes.every((node) => node.traffic.sampledAt === null) && (
-        <p className="mt-4 text-xs text-gray-500">
+        <p className="mt-4 text-xs text-fg-3">
           No VPN traffic samples yet. Traffic reporting requires sing-box&apos;s
           Clash API and is per node; the official sing-box build does not expose
           reliable per-user counters.

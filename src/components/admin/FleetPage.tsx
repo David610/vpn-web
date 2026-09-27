@@ -2,6 +2,7 @@
 
 import { AdminShell } from "@/components/admin/AdminShell";
 import { FleetTabs } from "@/components/admin/FleetTabs";
+import { AdminNotice } from "@/components/admin/AdminPrimitives";
 
 /** Shared frame for the Fleet tab pages. */
 export function FleetPage({
@@ -19,13 +20,13 @@ export function FleetPage({
 }) {
   return (
     <AdminShell>
-      <h1 className="mb-4 text-xl font-semibold">Fleet</h1>
+      <h1 className="mb-4 text-xl font-semibold text-fg">Fleet</h1>
       <FleetTabs />
       <div className="mb-4 flex flex-wrap items-baseline justify-between gap-x-4">
-        <h2 className="text-base font-semibold">{title}</h2>
-        {note && <span className="text-xs text-gray-600">{note}</span>}
+        <h2 className="text-base font-semibold text-fg">{title}</h2>
+        {note && <span className="text-xs text-fg-3">{note}</span>}
       </div>
-      {error ? <p className="text-red-600">{error}</p> : loading ? <p>Loading…</p> : children}
+      {error ? <AdminNotice tone="error">{error}</AdminNotice> : loading ? <p className="text-fg-2">Loading…</p> : children}
     </AdminShell>
   );
 }
@@ -35,5 +36,5 @@ export function when(ts: string | null | undefined): string {
 }
 
 export function Empty({ children }: { children: React.ReactNode }) {
-  return <p className="border-t border-gray-300 py-4 text-sm text-gray-600">{children}</p>;
+  return <p className="border-t border-border py-4 text-sm text-fg-2">{children}</p>;
 }

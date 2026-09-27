@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { AdminShell } from "@/components/admin/AdminShell";
-import { MetricCard } from "@/components/admin/MetricCard";
+import { AdminPage, AdminMetric, AdminMetricGrid, AdminNotice } from "@/components/admin/AdminPrimitives";
 import { useAdminSession } from "@/hooks/useAdminSession";
 import { adminFetch } from "@/lib/adminFetch";
 
@@ -66,38 +66,39 @@ export default function AdminOverviewPage() {
 
   return (
     <AdminShell>
-      <h1 className="mb-6 text-xl font-semibold">Overview</h1>
-      {error ? (
-        <p className="text-red-600">{error}</p>
-      ) : !overview ? (
-        <p>Loading…</p>
-      ) : (
-        <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-          <MetricCard label="Customer accounts" value={overview.customers.total} />
-          <MetricCard label="Active paid" value={overview.customers.active} />
-          <MetricCard label="Free trials" value={overview.customers.trialing} />
-          <MetricCard label="Past due" value={overview.customers.past_due} />
+      <AdminPage title="Overview">
+        {error ? (
+          <AdminNotice tone="error">{error}</AdminNotice>
+        ) : !overview ? (
+          <p className="text-fg-2">Loading…</p>
+        ) : (
+          <AdminMetricGrid>
+            <AdminMetric label="Customer accounts" value={overview.customers.total} />
+            <AdminMetric label="Active paid" value={overview.customers.active} />
+            <AdminMetric label="Free trials" value={overview.customers.trialing} />
+            <AdminMetric label="Past due" value={overview.customers.past_due} />
 
-          <MetricCard label="Live subscriptions" value={overview.subscriptions?.live ?? "—"} />
-          <MetricCard label="Extra device packs" value={overview.subscriptions?.extra_packs ?? "—"} />
-          <MetricCard label="Devices / capacity" value={overview.devices ? `${overview.devices.active} / ${overview.devices.capacity}` : "—"} />
-          <MetricCard label="Devices over capacity" value={overview.devices?.over_capacity ?? "—"} />
-          <MetricCard label="Support grants" value={overview.members?.admin_grants ?? "—"} />
+            <AdminMetric label="Live subscriptions" value={overview.subscriptions?.live ?? "—"} />
+            <AdminMetric label="Extra device packs" value={overview.subscriptions?.extra_packs ?? "—"} />
+            <AdminMetric label="Devices / capacity" value={overview.devices ? `${overview.devices.active} / ${overview.devices.capacity}` : "—"} />
+            <AdminMetric label="Devices over capacity" value={overview.devices?.over_capacity ?? "—"} />
+            <AdminMetric label="Support grants" value={overview.members?.admin_grants ?? "—"} />
 
-          <MetricCard label="VPN enabled" value={overview.vpn.enabled} />
-          <MetricCard label="VPN disabled" value={overview.vpn.disabled} />
-          <MetricCard label="Traffic this month" value={bytes(overview.usage.month_total_bytes)} />
-          <MetricCard label="Current ↓ / ↑" value={`${mbps(overview.usage.download_bps)} / ${mbps(overview.usage.upload_bps)}`} />
+            <AdminMetric label="VPN enabled" value={overview.vpn.enabled} />
+            <AdminMetric label="VPN disabled" value={overview.vpn.disabled} />
+            <AdminMetric label="Traffic this month" value={bytes(overview.usage.month_total_bytes)} />
+            <AdminMetric label="Current ↓ / ↑" value={`${mbps(overview.usage.download_bps)} / ${mbps(overview.usage.upload_bps)}`} />
 
-          <MetricCard label="Nodes online" value={overview.nodes.online} />
-          <MetricCard label="Nodes offline" value={overview.nodes.offline} />
-          <MetricCard label="Jobs pending" value={overview.jobs.pending} />
-          <MetricCard label="Jobs failed" value={overview.jobs.failed} />
+            <AdminMetric label="Nodes online" value={overview.nodes.online} />
+            <AdminMetric label="Nodes offline" value={overview.nodes.offline} />
+            <AdminMetric label="Jobs pending" value={overview.jobs.pending} />
+            <AdminMetric label="Jobs failed" value={overview.jobs.failed} />
 
-          <MetricCard label="Open alerts" value={overview.alerts.open} />
-          <MetricCard label="Abuse flags" value={overview.abuse.open} />
-        </div>
-      )}
+            <AdminMetric label="Open alerts" value={overview.alerts.open} />
+            <AdminMetric label="Abuse flags" value={overview.abuse.open} />
+          </AdminMetricGrid>
+        )}
+      </AdminPage>
     </AdminShell>
   );
 }
