@@ -4,7 +4,8 @@
 begin;
 
 insert into auth.users (id, email) values ('00000000-0000-4000-8000-0000000000c3', 'lease@example.com');
-insert into public.nodes (node_id, api_key_hash) values ('relay-1', 'h1'), ('exit-1', 'h2');
+insert into public.nodes (node_id, api_key_hash, lifecycle_state)
+  values ('relay-1', 'h1', 'READY'), ('exit-1', 'h2', 'READY');
 
 do $$
 declare
@@ -114,7 +115,7 @@ declare
   r2 jsonb;
   t timestamptz;
 begin
-  insert into public.nodes (node_id, api_key_hash) values ('exit-2', 'h3');
+  insert into public.nodes (node_id, api_key_hash, lifecycle_state) values ('exit-2', 'h3', 'READY');
   insert into public.devices (account_id, user_id, name)
     values (acct, '00000000-0000-4000-8000-0000000000c3', 'Tablet') returning id into dev;
   perform public.agent_sync_lease_slots('exit-2', (select jsonb_agg(jsonb_build_object(

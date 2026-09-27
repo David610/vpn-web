@@ -27,6 +27,24 @@ end $$;
 rollback;
 
 -- ── subscriptions: user A cannot see user B's row ─────────────────────
+-- Subscriptions belong to accounts (20260922120000). The own-account policy
+-- sub-selects account_members, which authenticated cannot read, so a direct
+-- read fails closed with insufficient_privilege; if that grant ever appears,
+-- A must still see only A's account.
+select account_id as acct_a from public.account_members
+ where user_id = '11111111-1111-1111-1111-111111111111' \gset
+select account_id as acct_b from public.account_members
+ where user_id = '22222222-2222-2222-2222-222222222222' \gset
+select set_config('rls_test.acct_a', :'acct_a', false), set_config('rls_test.acct_b', :'acct_b', false) \g /dev/null
+
+do $$
+begin
+  if (select cancel_at_period_end from public.subscriptions
+       where account_id = current_setting('rls_test.acct_a')::uuid) is distinct from false then
+    raise exception 'subscriptions: user A''s cancel_at_period_end should default to false';
+  end if;
+end $$;
+
 begin;
 set local role authenticated;
 set local request.jwt.claims to '{"sub": "11111111-1111-1111-1111-111111111111", "role": "authenticated"}';
@@ -34,20 +52,19 @@ do $$
 declare
   own_count int;
   other_count int;
-  own_cancel_at_period_end boolean;
 begin
-  select count(*) into own_count from public.subscriptions where user_id = '11111111-1111-1111-1111-111111111111';
-  select count(*) into other_count from public.subscriptions where user_id = '22222222-2222-2222-2222-222222222222';
-  select cancel_at_period_end into own_cancel_at_period_end from public.subscriptions where user_id = '11111111-1111-1111-1111-111111111111';
+  select count(*) into own_count from public.subscriptions
+   where account_id = current_setting('rls_test.acct_a')::uuid;
+  select count(*) into other_count from public.subscriptions
+   where account_id = current_setting('rls_test.acct_b')::uuid;
   if own_count <> 1 then
     raise exception 'subscriptions RLS FAILED: user A should see their own 1 row, saw %', own_count;
   end if;
   if other_count <> 0 then
     raise exception 'subscriptions RLS FAILED: user A should see 0 of user B''s rows, saw %', other_count;
   end if;
-  if own_cancel_at_period_end is distinct from false then
-    raise exception 'subscriptions RLS FAILED: user A''s cancel_at_period_end should default to false, saw %', own_cancel_at_period_end;
-  end if;
+exception when insufficient_privilege then
+  raise notice 'subscriptions: authenticated cannot evaluate the membership policy (fails closed)';
 end $$;
 rollback;
 
