@@ -126,7 +126,7 @@ Several report IDs that describe one system failure are merged into one row.
 | ID | Finding | Sources | Repo owner | Cross-repo deps | Blocker | Sev | Blast radius | Detectability | Impl | Test | Acceptance criterion |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | E-01 | Exits let every tunnel user reach node loopback, cloud metadata, private ranges and the node's own public IPs (1-hop, 2-hop exit, lease users) | SVPN-F01 | singbox-vpn | C-16 | YES | P0 | every node; metadata = bootstrap env + enrollment; loopback = subscription backend, sshd, future admin APIs | silent | NODE-DP | SECQA | **Protocol tier, real sing-box 1.14.1, IPv4 + IPv6 (mocks not acceptable).** For every user class (customer, `lease-*`, legacy, hairpin, probe), on REALITY and Hy2, over 1-hop and 2-hop: every C-16 deny destination **and a DNS name resolving to each** → refused; public Internet works. Wave-2 host nft layer passes the same suite with the renderer rule removed. VPS tier: real Hetzner metadata endpoint refused |
-| E-02 | Relay loopback self-test exception covers all REALITY users | NEW-01 | singbox-vpn | C-16 | YES | P1 | every relay | silent | NODE-DP | SECQA | Exception scoped to the probe user (`auth_user`); customer → relay `127.0.0.1:<sub port>` refused (protocol test) |
+| E-02 | Relay loopback self-test exception covers all REALITY users | NEW-01 | singbox-vpn | C-16 | YES | P1 | every relay | silent | NODE-DP | SECQA | Exception scoped to the reserved principals `arcana-probe` / `arcana-selftest` (`auth_user`); customer → relay `127.0.0.1:<sub port>` refused (protocol test); install/update `doctor --protocol --require-protocol` still passes on exits and relays |
 | E-03 | Subscription backend has one global rate bucket; any tunnel user (via E-01/E-02) or IPv6 /64 rotation denies delivery node-wide | SVPN-F06 | singbox-vpn | E-01 | NO | P2 | new imports/refreshes on the node | customer-reported | NODE-DP | SECQA | Backend on a Unix socket readable only by nginx; nginx `limit_req` keyed on /64 for v6 + a global zone; the audit flood script fails to starve a legitimate client |
 | E-04 | No egress abuse policy (TCP/25 etc.) | SVPN-F15 | singbox-vpn | — | NO | P2 | fleet IP reputation, provider suspension | provider complaint | NODE-DP | SECQA | TCP/25 rejected for all users; abuse runbook |
 | E-05 | Google egress hairpin changes users' egress and sniffs all flows; must never apply to customers or leases | SVPN-F26 | singbox-vpn | — | NO | P3 | privacy of users on hairpin nodes | silent | NODE-DP | SECQA | Hairpin restricted to its dedicated user (test); documented |
@@ -439,7 +439,18 @@ Agent on 401: stop claiming and syncing, keep enforcing local lease expiry, back
 - Reject the node's own public v4 and v6 addresses on every port.
 - Reject TCP/25.
 
-**Exceptions.** Only the probe user may reach its declared probe targets and the relay self-test. No exception exists for customers or `lease-*` users.
+**Exceptions.** Amended 2026-09-27 after NODE-DP found that the `vpn-admin` REALITY self-test (install, update, rotate gates) needs a loopback principal on every exit and relay.
+
+- Only two reserved, node-local principals get an exception: `arcana-probe` (fleet nodes) and `arcana-selftest`.
+  - The exception is `127.0.0.1/32`, TCP, subscription listen port only, on exits and relays alike.
+  - The probe user may additionally reach its declared probe targets.
+  - Everything else is rejected for both, including public egress.
+- `arcana-selftest` is created by `vpn-admin` with a random credential.
+  - It is never published in any subscription or provisioning document.
+  - It is never reported to the control plane and is excluded from heartbeat counts.
+  - Whole-store replaces preserve it.
+- The self-test uses `arcana-probe` if present, else `arcana-selftest`, never a customer.
+- No exception exists for customers, `lease-*`, legacy or hairpin users.
 
 **Host layer (defence in depth).**
 
@@ -447,6 +458,11 @@ Agent on 401: stop claiming and syncing, keep enforcing local lease expiry, back
 - Allowed are only the configured resolvers on :53 (and :853 if DoT) plus established inbound replies.
 
 **Self-host single VPS.** The same default applies. The only opt-out is `allow_private_egress = true`: explicit, documented, and off by default.
+
+- It lifts only RFC1918, ULA and CGNAT (plus documentation/benchmark ranges for labs).
+- It never lifts loopback, link-local/metadata, own-IP, multicast or TCP/25.
+- A fleet/managed deployment refuses to load with it set.
+- New isolation tests run with production defaults.
 
 ### C-17 Client fail-closed recovery (invariant 6) — client
 
