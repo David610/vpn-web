@@ -487,6 +487,42 @@ body {
   .dm-nav__cta { margin-left: 0; margin-top: var(--space-3); }
 }
 
+/* ── Auth ── */
+/* Narrow open form for login/signup/reset flows: a brand label, one strong
+   heading, a single rule beneath it, then restrained fields — no
+   self-contained card, no shadow, no oversized radius. */
+.auth-frame {
+  max-width: 24rem;
+  width: 100%;
+  margin: 0 auto;
+}
+.auth-brand {
+  display: block;
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+  margin: 0 0 var(--space-3);
+}
+.auth-head {
+  padding-bottom: var(--space-6);
+  margin-bottom: var(--space-6);
+  border-bottom: 1px solid var(--border);
+}
+.auth-head .section-h2 { margin-bottom: 0; }
+.auth-head .section-sub { margin-top: var(--space-3); max-width: none; }
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.auth-foot {
+  margin-top: var(--space-6);
+}
+.auth-foot + .auth-foot { margin-top: var(--space-2); }
+
 /* Bordered rounded card */
 .dm-card {
   background: var(--bg);

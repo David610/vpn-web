@@ -71,41 +71,41 @@ export default function ResetPasswordPage() {
     <>
       <Nav />
       <main className="dm-section" style={{ borderBottom: "none" }}>
-        <div className="section-head">
-          <p className="section-eyebrow">Password reset</p>
-          {phase === "exchanging" && (
-            <h1 className="section-h2">Verifying your reset link…</h1>
-          )}
-          {phase === "exchange-failed" && (
-            <>
-              <h1 className="section-h2">Link expired or already used</h1>
-              <p className="section-sub">
-                This reset link didn&apos;t work — it may have already been
-                used or expired. You can{" "}
-                <Link href="/forgot-password" className="text-link">
-                  request a new reset link
-                </Link>
-                .
-              </p>
-            </>
-          )}
-          {(phase === "set-password" || phase === "error") && (
-            <h1 className="section-h2">Set a new password</h1>
-          )}
-          {phase === "success" && (
-            <>
-              <h1 className="section-h2">Password updated</h1>
-              <p className="section-sub">
-                Your password has been changed. Redirecting you to your
-                dashboard…
-              </p>
-            </>
-          )}
-        </div>
+        <div className="auth-frame">
+          <p className="auth-brand">Arcana</p>
+          <div className="auth-head">
+            {phase === "exchanging" && (
+              <h1 className="section-h2">Verifying your reset link…</h1>
+            )}
+            {phase === "exchange-failed" && (
+              <>
+                <h1 className="section-h2">Link expired or already used</h1>
+                <p className="section-sub">
+                  This reset link didn&apos;t work — it may have already been
+                  used or expired. You can{" "}
+                  <Link href="/forgot-password" className="text-link">
+                    request a new reset link
+                  </Link>
+                  .
+                </p>
+              </>
+            )}
+            {(phase === "set-password" || phase === "error") && (
+              <h1 className="section-h2">Set a new password</h1>
+            )}
+            {phase === "success" && (
+              <>
+                <h1 className="section-h2">Password updated</h1>
+                <p className="section-sub">
+                  Your password has been changed. Redirecting you to your
+                  dashboard…
+                </p>
+              </>
+            )}
+          </div>
 
-        {phase === "set-password" || phase === "error" ? (
-          <div className="dm-card" style={{ maxWidth: "26rem" }}>
-            <div style={{ padding: "var(--space-6)" }}>
+          {phase === "set-password" || phase === "error" ? (
+            <>
               {phase === "error" && (
                 <p
                   className="field-error"
@@ -119,14 +119,7 @@ export default function ResetPasswordPage() {
                   .
                 </p>
               )}
-              <form
-                onSubmit={handleSubmit}
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: "var(--space-4)",
-                }}
-              >
+              <form onSubmit={handleSubmit} className="auth-form">
                 <div>
                   <label className="field-label" htmlFor="password">
                     New password
@@ -170,9 +163,9 @@ export default function ResetPasswordPage() {
                   {submitting ? "Updating…" : "Update password"}
                 </button>
               </form>
-            </div>
-          </div>
-        ) : null}
+            </>
+          ) : null}
+        </div>
       </main>
       <Footer />
     </>
