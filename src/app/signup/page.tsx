@@ -61,32 +61,25 @@ export default function SignupPage() {
     <>
       <Nav />
       <main className="dm-section" style={{ borderBottom: "none" }}>
-        <div className="section-head">
-          <p className="section-eyebrow">Sign up</p>
-          <h1 className="section-h2">Create your account</h1>
-        </div>
-        <div className="dm-card" style={{ maxWidth: "26rem" }}>
-          <div style={{ padding: "var(--space-6)" }}>
-            {submitted ? (
-              <p className="section-sub">
-                Check your email for a confirmation link, then{" "}
-                <Link
-                  href={`/login/${typeof window !== "undefined" ? window.location.search : ""}`}
-                  className="text-link"
-                >
-                  log in
-                </Link>
-                .
-              </p>
-            ) : (
-              <form
-                onSubmit={handleSubmit}
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: "var(--space-4)",
-                }}
+        <div className="auth-frame">
+          <p className="auth-brand">Arcana</p>
+          <div className="auth-head">
+            <h1 className="section-h2">Create account</h1>
+          </div>
+          {submitted ? (
+            <p className="section-sub">
+              Check your email for a confirmation link, then{" "}
+              <Link
+                href={`/login/${typeof window !== "undefined" ? window.location.search : ""}`}
+                className="text-link"
               >
+                log in
+              </Link>
+              .
+            </p>
+          ) : (
+            <>
+              <form onSubmit={handleSubmit} className="auth-form">
                 <div>
                   <label className="field-label" htmlFor="email">
                     Email
@@ -126,15 +119,15 @@ export default function SignupPage() {
                 >
                   {submitting ? "Creating account…" : "Create account"}
                 </button>
-                <p className="text-tiny">
-                  Already have an account?{" "}
-                  <Link href="/login" className="text-link">
-                    Log in
-                  </Link>
-                </p>
               </form>
-            )}
-          </div>
+              <p className="text-tiny auth-foot">
+                Already have an account?{" "}
+                <Link href="/login" className="text-link">
+                  Log in
+                </Link>
+              </p>
+            </>
+          )}
         </div>
       </main>
       <Footer />

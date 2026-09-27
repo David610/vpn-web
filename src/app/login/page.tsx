@@ -43,71 +43,62 @@ export default function LoginPage() {
     <>
       <Nav />
       <main className="dm-section" style={{ borderBottom: "none" }}>
-        <div className="section-head">
-          <p className="section-eyebrow">Log in</p>
-          <h1 className="section-h2">Welcome back</h1>
-        </div>
-        <div className="dm-card" style={{ maxWidth: "26rem" }}>
-          <div style={{ padding: "var(--space-6)" }}>
-            <form
-              onSubmit={handleSubmit}
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                gap: "var(--space-4)",
-              }}
-            >
-              <div>
-                <label className="field-label" htmlFor="email">
-                  Email
-                </label>
-                <input
-                  id="email"
-                  type="email"
-                  required
-                  autoComplete="email"
-                  className="field"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                />
-              </div>
-              <div>
-                <label className="field-label" htmlFor="password">
-                  Password
-                </label>
-                <input
-                  id="password"
-                  type="password"
-                  required
-                  autoComplete="current-password"
-                  className="field"
-                  aria-invalid={error ? "true" : undefined}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                />
-                {error && <span className="field-error">{error}</span>}
-              </div>
-              <button
-                type="submit"
-                className="btn btn-primary"
-                disabled={submitting}
-                style={{ width: "100%" }}
-              >
-                {submitting ? "Logging in…" : "Log in"}
-              </button>
-              <p className="text-tiny">
-                <Link href="/forgot-password" className="text-link">
-                  Forgot your password?
-                </Link>
-              </p>
-              <p className="text-tiny">
-                No account yet?{" "}
-                <Link href="/signup" className="text-link">
-                  Sign up
-                </Link>
-              </p>
-            </form>
+        <div className="auth-frame">
+          <p className="auth-brand">Arcana</p>
+          <div className="auth-head">
+            <h1 className="section-h2">Log in</h1>
           </div>
+          <form onSubmit={handleSubmit} className="auth-form">
+            <div>
+              <label className="field-label" htmlFor="email">
+                Email
+              </label>
+              <input
+                id="email"
+                type="email"
+                required
+                autoComplete="email"
+                className="field"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+              />
+            </div>
+            <div>
+              <label className="field-label" htmlFor="password">
+                Password
+              </label>
+              <input
+                id="password"
+                type="password"
+                required
+                autoComplete="current-password"
+                className="field"
+                aria-invalid={error ? "true" : undefined}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
+              {error && <span className="field-error">{error}</span>}
+            </div>
+            <button
+              type="submit"
+              className="btn btn-primary"
+              disabled={submitting}
+              style={{ width: "100%" }}
+            >
+              {submitting ? "Logging in…" : "Log in"}
+            </button>
+          </form>
+          <p className="text-tiny auth-foot">
+            <Link href="/forgot-password" className="text-link">
+              Forgot your password?
+            </Link>
+          </p>
+          <p className="text-tiny auth-foot">
+            No account yet?{" "}
+            <Link href="/signup" className="text-link">
+              Sign up
+            </Link>
+          </p>
         </div>
       </main>
       <Footer />
