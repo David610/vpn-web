@@ -20,7 +20,7 @@ export function FleetTabs() {
       aria-label="Fleet sections"
       className="mb-6"
     >
-      <div className="flex flex-wrap gap-x-5 border-b border-gray-300 text-sm">
+      <div className="flex flex-wrap gap-x-5 border-b border-border text-sm">
         {FLEET_TABS.map((tab) => {
           const active = pathname === tab.href;
           return (
@@ -28,7 +28,7 @@ export function FleetTabs() {
               key={tab.href}
               href={tab.href}
               aria-current={active ? "page" : undefined}
-              className={`inline-block whitespace-nowrap border-b-2 py-2 ${active ? "border-black font-semibold text-black" : "border-transparent text-gray-600 hover:text-black"}`}
+              className={`inline-block whitespace-nowrap border-b-2 py-2 ${active ? "border-[color:var(--border-strong)] font-semibold text-fg" : "border-transparent text-fg-2 hover:text-fg"}`}
             >
               {tab.label}
             </Link>

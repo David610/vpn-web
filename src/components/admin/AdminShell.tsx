@@ -21,14 +21,14 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
     if (access === "mfa-required") router.replace("/admin/login");
   }, [loading, session, access, router]);
 
-  if (loading) return <div className="p-8">Loading…</div>;
+  if (loading) return <div className="p-8 text-fg-2">Loading…</div>;
   if (!session || access === "mfa-required") return null;
   if (access === "denied") {
-    return <div className="p-8 text-red-600">You do not have admin access.</div>;
+    return <div className="p-8 text-danger">You do not have admin access.</div>;
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-bg-alt">
       <AdminNav />
       <main className="mx-auto max-w-6xl p-6">{children}</main>
     </div>
