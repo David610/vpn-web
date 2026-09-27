@@ -50,7 +50,7 @@
   --text-h3:      1.125rem;
   --text-h2-sub:  1.75rem;
   --text-h2:      2.25rem;
-  --text-h1:      clamp(2rem, 1.6rem + 1.6vw, 3.5rem);
+  --text-h1:      clamp(4.25rem, 3rem + 4vw, 7rem);
 
   --track-h1:   -0.03em;
   --track-h2:   -0.02em;
@@ -370,43 +370,84 @@ body {
 
 /* Hero */
 .hero {
-  padding: var(--space-16) var(--container-pad) var(--space-24);
-  border-bottom: 1px solid var(--border);
+  padding: var(--space-6) var(--container-pad) var(--space-12);
 }
 .hero__inner {
   max-width: var(--container-max);
   margin: 0 auto;
 }
+.hero__frame {
+  max-width: 88rem;
+  margin: 0 auto;
+  border: 1px solid var(--border);
+  padding: var(--space-16) var(--space-12) 0;
+}
+.hero__grid {
+  display: grid;
+  grid-template-columns: 5fr 7fr;
+  gap: var(--space-12);
+  align-items: center;
+  padding-bottom: var(--space-16);
+}
+.hero__copy { max-width: 34rem; }
 .hero__title {
   font-family: var(--font-display);
-  font-weight: 600;
+  font-weight: 700;
   font-size: var(--text-h1);
-  line-height: 1.05;
-  letter-spacing: var(--track-h1);
+  line-height: 0.94;
+  letter-spacing: -0.04em;
   color: var(--fg);
-  margin: 0 0 var(--space-6);
-  max-width: 18ch;
+  margin: var(--space-3) 0 var(--space-6);
 }
 .hero__lede {
   font-family: var(--font-body);
-  font-size: var(--text-base);
-  line-height: 1.65;
+  font-size: 1.25rem;
+  line-height: 1.5;
   color: var(--fg-2);
-  max-width: 52ch;
+  max-width: 30ch;
   margin: 0 0 var(--space-8);
 }
 .hero__actions {
   display: flex;
-  gap: var(--space-3);
+  align-items: center;
+  gap: var(--space-6);
   flex-wrap: wrap;
   margin-bottom: var(--space-8);
 }
+.hero__signup { font-size: var(--text-sm); }
 .hero__tags { display: flex; gap: var(--space-2); flex-wrap: wrap; }
-@media (max-width: 1024px) {
-  .hero { padding: var(--space-12) var(--container-pad) var(--space-16); }
+.hero__visual { display: flex; align-items: center; justify-content: center; }
+.world-map { width: 100%; height: auto; max-width: 34rem; }
+.world-map__dot { fill: var(--fg-3); opacity: 0.4; }
+.world-map__marker { fill: var(--fg); }
+.hero__strip {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  border-top: 1px solid var(--border);
 }
-@media (max-width: 768px) {
-  .hero { padding: var(--space-8) var(--container-pad) var(--space-12); }
+.hero__strip-cell {
+  padding: var(--space-4) var(--space-6) var(--space-4) 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--fg-2);
+}
+.hero__strip-cell + .hero__strip-cell { padding-left: var(--space-6); border-left: 1px solid var(--border); }
+@media (max-width: 1024px) {
+  .hero__frame { padding: var(--space-12) var(--space-8) 0; }
+  .hero__grid { padding-bottom: var(--space-12); }
+}
+@media (max-width: 860px) {
+  .hero__grid { grid-template-columns: 1fr; gap: var(--space-8); }
+  .hero__copy { max-width: none; }
+  .world-map { max-width: 26rem; margin: 0 auto; }
+}
+@media (max-width: 640px) {
+  :root { --text-h1: clamp(3.25rem, 15vw, 4rem); }
+  .hero { padding: var(--space-4) var(--container-pad) var(--space-8); }
+  .hero__frame { padding: var(--space-8) var(--space-4) 0; }
+  .hero__grid { padding-bottom: var(--space-8); }
+  .hero__lede { font-size: 1.0625rem; max-width: none; }
+  .hero__actions { gap: var(--space-3); }
 }
 
 /* Navigation */
@@ -871,6 +912,10 @@ body {
 .stepper span { text-align: center; font-size: var(--text-sm); font-weight: 500; }
 
 .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: var(--space-4); align-items: end; }
+.radio-group { border: none; margin: var(--space-4) 0 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.radio-group > legend { padding: 0; margin: 0 0 var(--space-2); }
+.radio-option { display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-sm); color: var(--fg); cursor: pointer; }
+.radio-option input[type="radio"] { width: 1rem; height: 1rem; accent-color: var(--fg); margin: 0; }
 .notice { padding: var(--space-4); background: var(--bg-panel); border-radius: var(--radius-sm); font-size: var(--text-sm); color: var(--fg-2); margin: 0 0 var(--space-6); }
 .notice--error { color: var(--danger); }
 .notice strong { color: var(--fg); display: block; margin-bottom: var(--space-1); }

@@ -128,7 +128,7 @@ function ConnectionsBody() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
-  const [mode, setMode] = useState<Profile["routingMode"]>("AUTO");
+  const [servers, setServers] = useState<"1" | "2">("1");
   const [exitLocationId, setExitLocationId] = useState("");
 
   async function load() {
@@ -158,16 +158,18 @@ function ConnectionsBody() {
     setCreating(true);
     setCreateError(null);
     try {
+      const routingMode: Profile["routingMode"] =
+        servers === "2" ? "DOUBLE_HOP" : exitLocationId ? "DIRECT" : "AUTO";
       await api(session, "/api/account/connection-profiles", {
         body: {
           name,
-          routingMode: mode,
+          routingMode,
           entryLocationId: null,
-          exitLocationId: mode === "AUTO" ? null : exitLocationId || null,
+          exitLocationId: exitLocationId || null,
         },
       });
       (e.target as HTMLFormElement).reset();
-      setMode("AUTO");
+      setServers("1");
       setExitLocationId("");
       await load();
     } catch (err) {
@@ -200,51 +202,65 @@ function ConnectionsBody() {
 
       <div className="block">
         <div className="block__head"><h2 className="block__title">Add a configuration</h2></div>
-        <form onSubmit={create} className="form-grid" style={{ marginTop: "var(--space-4)" }}>
-          <div>
-            <label className="field-label" htmlFor="conn-name">Name</label>
-            <input id="conn-name" name="name" className="field" required maxLength={40} placeholder="e.g. Germany" />
-          </div>
-          <div>
-            <label className="field-label" htmlFor="conn-mode">Servers</label>
-            <select
-              id="conn-mode"
-              className="field select"
-              value={mode}
-              onChange={(e) => setMode(e.target.value as Profile["routingMode"])}
-            >
-              <option value="AUTO">Automatic</option>
-              <option value="DIRECT">1 server</option>
-              <option value="DOUBLE_HOP">2 servers</option>
-            </select>
-          </div>
-          {mode === "DOUBLE_HOP" && (
+        <form onSubmit={create} style={{ marginTop: "var(--space-4)" }}>
+          <div className="form-grid">
             <div>
-              <label className="field-label">Entry</label>
-              <p className="field" style={{ display: "flex", alignItems: "center", color: "var(--fg-2)" }}>Automatic</p>
+              <label className="field-label" htmlFor="conn-name">Name</label>
+              <input id="conn-name" name="name" className="field" required maxLength={40} placeholder="e.g. Germany" />
             </div>
-          )}
-          {mode !== "AUTO" && (
+          </div>
+
+          <fieldset className="radio-group">
+            <legend className="field-label">Connection</legend>
+            <label className="radio-option">
+              <input
+                type="radio"
+                name="servers"
+                value="1"
+                checked={servers === "1"}
+                onChange={() => setServers("1")}
+              />
+              1 server
+            </label>
+            <label className="radio-option">
+              <input
+                type="radio"
+                name="servers"
+                value="2"
+                checked={servers === "2"}
+                onChange={() => setServers("2")}
+              />
+              2 servers
+            </label>
+          </fieldset>
+
+          <div className="form-grid" style={{ marginTop: "var(--space-4)" }}>
+            {servers === "2" && (
+              <div>
+                <label className="field-label">Entry</label>
+                <p className="field" style={{ display: "flex", alignItems: "center", color: "var(--fg-2)" }}>Automatic</p>
+              </div>
+            )}
             <div>
               <label className="field-label" htmlFor="conn-exit">
-                {mode === "DOUBLE_HOP" ? "Exit" : "Location"}
+                {servers === "2" ? "Exit" : "Location"}
               </label>
               <select
                 id="conn-exit"
                 className="field select"
-                required
                 value={exitLocationId}
                 onChange={(e) => setExitLocationId(e.target.value)}
               >
-                <option value="" disabled>Choose {mode === "DOUBLE_HOP" ? "exit " : ""}location</option>
+                <option value="">Automatic</option>
                 {locations.map((l) => (
                   <option key={l.id} value={l.id}>{l.name}</option>
                 ))}
               </select>
             </div>
-          )}
-          <button type="submit" className="btn btn-primary" disabled={creating}>
-            {creating ? "Creating…" : "Create connection"}
+          </div>
+
+          <button type="submit" className="btn btn-primary" disabled={creating} style={{ marginTop: "var(--space-4)" }}>
+            {creating ? "Creating…" : "Create configuration"}
           </button>
         </form>
         <Feedback error={createError} />

@@ -328,6 +328,13 @@ async function checkPage(browser, viewport, pageDef) {
     findings.push({ page: pageDef.label, viewport: viewport.name, issue: `console errors`, detail: consoleErrors.slice(0, 5) });
   }
 
+  // Screenshot the page in its resting state — before the keyboard-focus
+  // check below, which deliberately focuses an element and would otherwise
+  // freeze a focus ring into every capture (this bit us: a prior review
+  // mistook the ring around the nav brand link for a permanent boxed logo).
+  const screenshotPath = path.join(OUT_DIR, `${pageDef.label}--${viewport.name}.png`);
+  await page.screenshot({ path: screenshotPath, fullPage: true }).catch(() => {});
+
   // Keyboard focus reachability: Tab a few times, confirm something gets focus
   await page.keyboard.press("Tab");
   await page.keyboard.press("Tab");
@@ -335,9 +342,6 @@ async function checkPage(browser, viewport, pageDef) {
   if (!hasFocus) {
     findings.push({ page: pageDef.label, viewport: viewport.name, issue: "no element receives keyboard focus after 2 Tab presses" });
   }
-
-  const screenshotPath = path.join(OUT_DIR, `${pageDef.label}--${viewport.name}.png`);
-  await page.screenshot({ path: screenshotPath, fullPage: true }).catch(() => {});
 
   await context.close();
 }

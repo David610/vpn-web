@@ -106,34 +106,38 @@ function SubscriptionRow({ sub }: { sub: Subscription }) {
           </div>
         </div>
 
-        <div className="row__actions" style={{ justifyContent: "flex-start" }}>
-          <button type="button" className="btn btn-secondary btn-sm" disabled={busy !== null} onClick={() => setPacks(sub.extraPacks + 1)}>
-            Add 3 devices
-          </button>
-          {sub.extraPacks > 0 && (
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
-              disabled={busy !== null || !canRemovePack}
-              onClick={() => setPacks(sub.extraPacks - 1)}
-              title={canRemovePack ? undefined : "Remove or move devices out of this pack first"}
-            >
-              Remove pack
+        <div className="row__actions" style={{ justifyContent: "space-between" }}>
+          <div style={{ display: "flex", gap: "var(--space-2)", flexWrap: "wrap", alignItems: "center" }}>
+            <button type="button" className="btn btn-primary btn-sm" disabled={busy !== null} onClick={() => setPacks(sub.extraPacks + 1)}>
+              Add 3 devices
             </button>
-          )}
-          <button type="button" className="btn-link" disabled={busy !== null} onClick={() => setRenaming(true)}>
-            Rename
-          </button>
-          {LIVE.has(sub.status) && !sub.cancelAtPeriodEnd && (
-            <button type="button" className="btn-link text-danger" disabled={busy !== null} onClick={() => setCancelling(true)}>
-              Cancel
+            {sub.extraPacks > 0 && (
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                disabled={busy !== null || !canRemovePack}
+                onClick={() => setPacks(sub.extraPacks - 1)}
+                title={canRemovePack ? undefined : "Remove or move devices out of this pack first"}
+              >
+                Remove pack
+              </button>
+            )}
+            <button type="button" className="btn-link" disabled={busy !== null} onClick={() => setRenaming(true)}>
+              Rename
             </button>
-          )}
-          {sub.cancelAtPeriodEnd && (
-            <button type="button" className="btn-link" disabled={busy !== null} onClick={resume}>
-              Resume
-            </button>
-          )}
+          </div>
+          <div>
+            {LIVE.has(sub.status) && !sub.cancelAtPeriodEnd && (
+              <button type="button" className="btn-link text-danger" disabled={busy !== null} onClick={() => setCancelling(true)}>
+                Cancel subscription
+              </button>
+            )}
+            {sub.cancelAtPeriodEnd && (
+              <button type="button" className="btn-link" disabled={busy !== null} onClick={resume}>
+                Resume
+              </button>
+            )}
+          </div>
         </div>
         {error && <p className="field-error" style={{ marginTop: "var(--space-2)" }}>{error}</p>}
       </div>
