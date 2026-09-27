@@ -30,7 +30,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="area">
+    <div className="area area--wide">
       <aside className="area__side">
         <Link href="/admin" className="admin-wordmark">
           {SITE_NAME}

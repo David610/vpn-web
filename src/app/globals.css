@@ -418,7 +418,7 @@ body {
 .hero__tags { display: flex; gap: var(--space-2); flex-wrap: wrap; }
 .hero__visual { display: flex; align-items: center; justify-content: center; }
 .world-map { width: 100%; height: auto; max-width: 34rem; }
-.world-map__dot { fill: var(--fg-3); opacity: 0.4; }
+.world-map__dot { fill: var(--fg-3); opacity: 0.28; }
 .world-map__marker { fill: var(--fg); }
 .hero__strip {
   display: grid;
@@ -427,8 +427,9 @@ body {
 }
 .hero__strip-cell {
   padding: var(--space-4) var(--space-6) var(--space-4) 0;
-  font-family: var(--font-mono);
-  font-size: var(--text-sm);
+  font-family: var(--font-body);
+  font-size: 1rem;
+  font-weight: 500;
   color: var(--fg-2);
 }
 .hero__strip-cell + .hero__strip-cell { padding-left: var(--space-6); border-left: 1px solid var(--border); }
@@ -445,9 +446,10 @@ body {
   :root { --text-h1: clamp(3.25rem, 15vw, 4rem); }
   .hero { padding: var(--space-4) var(--container-pad) var(--space-8); }
   .hero__frame { padding: var(--space-8) var(--space-4) 0; }
-  .hero__grid { padding-bottom: var(--space-8); }
-  .hero__lede { font-size: 1.0625rem; max-width: none; }
+  .hero__grid { padding-bottom: var(--space-6); }
+  .hero__lede { font-size: 1.0625rem; max-width: none; margin-bottom: var(--space-8); }
   .hero__actions { gap: var(--space-3); }
+  .world-map { margin-bottom: var(--space-2); }
 }
 
 /* Navigation */
@@ -497,10 +499,20 @@ body {
 }
 .dm-nav__toggle {
   display: none;
-  min-height: 2.25rem;
-  padding: 0.5rem 0.75rem;
-  font-size: var(--text-xs);
+  align-items: center;
+  min-height: 2.75rem;
+  min-width: 2.75rem;
+  padding: 0 var(--space-2);
+  margin-right: calc(var(--space-2) * -1);
+  background: none;
+  border: none;
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--fg);
+  cursor: pointer;
 }
+.dm-nav__toggle:hover { color: var(--fg-2); }
 
 /* Below this width the link row no longer fits without wrapping/
    overflowing the viewport (confirmed via browser check at 360-390px) —
@@ -613,7 +625,7 @@ body {
 
 /* Footer */
 .dm-footer {
-  padding: var(--space-8) var(--container-pad) var(--space-6);
+  padding: var(--space-6) var(--container-pad);
   border-top: 1px solid var(--border);
   background: var(--bg);
 }
@@ -628,10 +640,9 @@ body {
   gap: var(--space-3);
 }
 .dm-footer__top {
-  padding-bottom: var(--space-4);
-  border-bottom: 1px solid var(--border-soft);
+  padding-bottom: var(--space-3);
 }
-.dm-footer__bottom { margin-top: var(--space-4); }
+.dm-footer__bottom { margin-top: var(--space-1); }
 .dm-footer__brand {
   font-family: var(--font-display);
   font-weight: 600;
@@ -646,7 +657,7 @@ body {
   letter-spacing: var(--track-xs);
   color: var(--fg-2);
   text-decoration: none;
-  padding: var(--space-3) var(--space-2);
+  padding: var(--space-2);
   transition: color var(--t-base);
 }
 .dm-footer__link:hover { color: var(--fg); }
@@ -768,12 +779,15 @@ body {
 }
 .area__side { position: sticky; top: calc(var(--header-h) + var(--space-8)); align-self: start; }
 .area__label {
-  font-family: var(--font-mono);
+  font-family: var(--font-body);
+  font-weight: 600;
   font-size: var(--text-xs);
+  letter-spacing: var(--track-xs);
+  text-transform: uppercase;
   color: var(--fg-3);
   margin: 0 0 var(--space-3);
 }
-.area__nav { display: flex; flex-direction: column; border-top: 1px solid var(--fg); }
+.area__nav { display: flex; flex-direction: column; border-top: 1px solid var(--border); }
 .area__nav a {
   display: flex;
   justify-content: space-between;
@@ -782,6 +796,7 @@ body {
   font-size: var(--text-sm);
   color: var(--fg-2);
   text-decoration: none;
+  transition: color var(--t-fast);
 }
 .area__nav a:hover { color: var(--fg); }
 .area__nav a[aria-current="page"] { color: var(--fg); font-weight: 600; }
@@ -790,8 +805,11 @@ body {
 .area__main { min-width: 0; }
 .area__head { margin-bottom: var(--space-8); }
 .area__eyebrow {
-  font-family: var(--font-mono);
+  font-family: var(--font-body);
+  font-weight: 600;
   font-size: var(--text-xs);
+  letter-spacing: var(--track-xs);
+  text-transform: uppercase;
   color: var(--fg-3);
   margin: 0 0 var(--space-2);
 }
@@ -807,11 +825,15 @@ body {
   .area { grid-template-columns: minmax(0, 1fr); gap: var(--space-6); padding-top: var(--space-6); }
   .area__side { position: static; }
   .area__label { display: none; }
+  /* The "Account / Section ▾" disclosure above already states the section
+     name, so the eyebrow directly above the H1 would repeat it a third
+     time on a narrow screen. */
+  .area__eyebrow { display: none; }
   .area__nav { display: none; }
   .area__nav-mobile {
     display: block;
-    border-top: 1px solid var(--fg);
-    border-bottom: 1px solid var(--fg);
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
   }
   .area__nav-mobile summary {
     display: flex;
@@ -853,12 +875,12 @@ body {
   align-items: baseline;
   justify-content: space-between;
   gap: var(--space-4);
-  border-bottom: 1px solid var(--fg);
+  border-bottom: 1px solid var(--border);
   padding-bottom: var(--space-2);
   margin-bottom: 0;
 }
 .block__title { font-size: var(--text-base); font-weight: 600; margin: 0; }
-.block__meta { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--fg-3); }
+.block__meta { font-family: var(--font-body); font-size: var(--text-xs); color: var(--fg-3); }
 
 .stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-top: 1px solid var(--fg); margin-bottom: var(--space-12); }
 .stats--4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
@@ -866,7 +888,7 @@ body {
 .stats__cell + .stats__cell { padding-left: var(--space-4); }
 .stats__cell:last-child { border-right: none; }
 .stats__value { font-size: 1.75rem; font-weight: 600; letter-spacing: var(--track-h2); line-height: 1.1; margin: 0; }
-.stats__label { font-size: var(--text-xs); color: var(--fg-3); margin: var(--space-1) 0 0; font-family: var(--font-mono); }
+.stats__label { font-size: var(--text-xs); color: var(--fg-3); margin: var(--space-1) 0 0; font-family: var(--font-body); }
 @media (max-width: 700px) {
   .stats, .stats--4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .stats__cell:nth-child(2n) { border-right: none; }
@@ -944,6 +966,20 @@ body {
 .dialog__title { font-size: var(--text-lg); font-weight: 600; margin: 0; letter-spacing: var(--track-h3); }
 .dialog__desc { font-size: var(--text-sm); color: var(--fg-2); margin: 0; }
 .dialog__actions { display: flex; justify-content: flex-end; gap: var(--space-3); margin-top: var(--space-2); }
+.dialog__menu { display: flex; flex-direction: column; }
+.dialog__menu-item {
+  text-align: left;
+  background: none;
+  border: none;
+  padding: var(--space-3) 0;
+  font-size: var(--text-sm);
+  color: var(--fg);
+  cursor: pointer;
+  min-height: 2.75rem;
+  transition: color var(--t-fast);
+}
+.dialog__menu-item:disabled { color: var(--fg-3); cursor: not-allowed; }
+.dialog__menu-item:not(:disabled):hover { color: var(--fg-2); }
 @media (max-width: 480px) {
   .dialog__actions { flex-direction: column-reverse; }
   .dialog__actions .btn { width: 100%; }
@@ -1024,3 +1060,29 @@ body {
   .admin-metric { border-bottom: 1px solid var(--border); }
   .admin-metric:nth-child(2n) { border-right: none; }
 }
+
+/* Secondary counts: a two-column list of "label ... value" rows, not one
+   more card in a grid. Admin can stay dense here without competing with
+   the headline metric row above. */
+.admin-stat-rows {
+  columns: 2;
+  column-gap: var(--space-8);
+}
+.admin-stat-row {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border-soft);
+  break-inside: avoid;
+  font-size: var(--text-sm);
+}
+.admin-stat-row__label { color: var(--fg-2); }
+.admin-stat-row__value { font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--fg); }
+@media (max-width: 560px) {
+  .admin-stat-rows { columns: 1; }
+}
+
+/* Admin needs more working width than the narrow customer account column;
+   the sidebar stays the same size, only the max total width grows. */
+.area--wide { max-width: 92rem; }

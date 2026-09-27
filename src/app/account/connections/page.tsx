@@ -18,7 +18,7 @@ type Profile = {
 type Location = { id: string; name: string; countryCode: string };
 
 const MODE_LABEL: Record<Profile["routingMode"], string> = {
-  AUTO: "1 server · Automatic",
+  AUTO: "1 server",
   DIRECT: "1 server",
   DOUBLE_HOP: "2 servers",
 };
@@ -274,7 +274,7 @@ export default function ConnectionsPage() {
     <AccountShell
       eyebrow="Account"
       title="Configurations"
-      sub="1 server is faster. 2 servers routes through an extra hop for more privacy, with entry chosen automatically. A 2-server configuration never silently becomes 1."
+      sub="Choose one server for speed, or two for an additional privacy hop."
     >
       <ConnectionsBody />
     </AccountShell>

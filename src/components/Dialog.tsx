@@ -193,3 +193,58 @@ export function InputDialog({
     </DialogShell>
   );
 }
+
+export type DialogAction = {
+  label: string;
+  onSelect: () => void;
+  danger?: boolean;
+  disabled?: boolean;
+  /** Visually separated from the actions above it (e.g. a destructive one). */
+  separated?: boolean;
+};
+
+/**
+ * A short list of actions for a row that has more choices than fit
+ * comfortably inline (e.g. a subscription's Rename/Remove pack/Cancel).
+ * Replaces a reflowing row of buttons with one small, consistent "Manage"
+ * entry point.
+ */
+export function ActionsDialog({
+  open,
+  title,
+  actions,
+  onCancel,
+}: {
+  open: boolean;
+  title: string;
+  actions: DialogAction[];
+  onCancel: () => void;
+}) {
+  const titleId = useId();
+  return (
+    <DialogShell open={open} titleId={titleId} onCancel={onCancel}>
+      <div className="dialog__body">
+        <h2 id={titleId} className="dialog__title">{title}</h2>
+        <div className="dialog__menu">
+          {actions.map((action, i) => (
+            <button
+              key={action.label}
+              type="button"
+              className={`dialog__menu-item ${action.danger ? "text-danger" : ""}`.trim()}
+              disabled={action.disabled}
+              onClick={action.onSelect}
+              style={action.separated && i > 0 ? { marginTop: "var(--space-2)", borderTop: "1px solid var(--border)", paddingTop: "var(--space-4)" } : undefined}
+            >
+              {action.label}
+            </button>
+          ))}
+        </div>
+        <div className="dialog__actions">
+          <button type="button" className="btn btn-secondary" onClick={onCancel}>
+            Close
+          </button>
+        </div>
+      </div>
+    </DialogShell>
+  );
+}

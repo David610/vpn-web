@@ -5,10 +5,10 @@ import { AdminShell } from "@/components/admin/AdminShell";
 import {
   AdminPage,
   AdminSection,
-  AdminMetric,
-  AdminMetricGrid,
   AdminMetricLarge,
   AdminMetricRow,
+  AdminStatRow,
+  AdminStatRows,
   AdminNotice,
 } from "@/components/admin/AdminPrimitives";
 import { useAdminSession } from "@/hooks/useAdminSession";
@@ -81,7 +81,7 @@ export default function AdminOverviewPage() {
           <p className="text-fg-2">Loading…</p>
         ) : (
           <>
-            <AdminMetricRow count={5}>
+            <AdminMetricRow>
               <AdminMetricLarge label="Customer accounts" value={overview.customers.total} />
               <AdminMetricLarge label="Live subscriptions" value={overview.subscriptions?.live ?? "—"} />
               <AdminMetricLarge
@@ -89,50 +89,47 @@ export default function AdminOverviewPage() {
                 value={overview.devices ? `${overview.devices.active} / ${overview.devices.capacity}` : "—"}
               />
               <AdminMetricLarge label="Nodes online" value={overview.nodes.online} />
-              <AdminMetricLarge label="Jobs pending" value={overview.jobs.pending} />
             </AdminMetricRow>
 
             <AdminSection label="Customer status">
-              <AdminMetricGrid>
-                <AdminMetric label="Active paid" value={overview.customers.active} />
-                <AdminMetric label="Free trials" value={overview.customers.trialing} />
-                <AdminMetric label="Past due" value={overview.customers.past_due} />
-                <AdminMetric label="Cancelled" value={overview.customers.canceled} />
-                <AdminMetric label="Cancelling" value={overview.subscriptions?.cancelling ?? "—"} />
-                <AdminMetric label="Accounts with several subs" value={overview.subscriptions?.accounts_with_several ?? "—"} />
-                <AdminMetric label="Extra device packs" value={overview.subscriptions?.extra_packs ?? "—"} />
-                <AdminMetric label="Support grants" value={overview.members?.admin_grants ?? "—"} />
-              </AdminMetricGrid>
+              <AdminStatRows>
+                <AdminStatRow label="Active paid" value={overview.customers.active} />
+                <AdminStatRow label="Free trials" value={overview.customers.trialing} />
+                <AdminStatRow label="Past due" value={overview.customers.past_due} />
+                <AdminStatRow label="Cancelled" value={overview.customers.canceled} />
+                <AdminStatRow label="Cancelling" value={overview.subscriptions?.cancelling ?? "—"} />
+                <AdminStatRow label="Several subscriptions" value={overview.subscriptions?.accounts_with_several ?? "—"} />
+                <AdminStatRow label="Extra device packs" value={overview.subscriptions?.extra_packs ?? "—"} />
+                <AdminStatRow label="Support grants" value={overview.members?.admin_grants ?? "—"} />
+              </AdminStatRows>
             </AdminSection>
 
-            <AdminSection label="Fleet">
-              <AdminMetricGrid>
-                <AdminMetric label="Nodes offline" value={overview.nodes.offline} />
-                <AdminMetric label="Devices over capacity" value={overview.devices?.over_capacity ?? "—"} />
-                <AdminMetric label="Devices without subscription" value={overview.devices?.without_subscription ?? "—"} />
-                <AdminMetric label="Devices unschedulable" value={overview.devices?.unschedulable ?? "—"} />
-              </AdminMetricGrid>
+            <AdminSection label="Fleet status" action={overview.nodes.offline === 0 ? <span className="text-fg-2">Healthy</span> : <span className="text-danger">Degraded</span>}>
+              <AdminStatRows>
+                <AdminStatRow label="Nodes offline" value={overview.nodes.offline} />
+                <AdminStatRow label="Devices over capacity" value={overview.devices?.over_capacity ?? "—"} />
+                <AdminStatRow label="Devices without subscription" value={overview.devices?.without_subscription ?? "—"} />
+                <AdminStatRow label="Unschedulable devices" value={overview.devices?.unschedulable ?? "—"} />
+              </AdminStatRows>
             </AdminSection>
 
-            <AdminSection label="Jobs & operational health">
-              <AdminMetricGrid>
-                <AdminMetric label="Jobs claimed" value={overview.jobs.claimed} />
-                <AdminMetric label="Jobs failed" value={overview.jobs.failed} />
-                <AdminMetric label="Open alerts" value={overview.alerts.open} />
-                <AdminMetric label="Abuse flags" value={overview.abuse.open} />
-              </AdminMetricGrid>
+            <AdminSection label="Operations">
+              <AdminStatRows>
+                <AdminStatRow label="Jobs pending" value={overview.jobs.pending} />
+                <AdminStatRow label="Jobs claimed" value={overview.jobs.claimed} />
+                <AdminStatRow label="Jobs failed" value={overview.jobs.failed} />
+                <AdminStatRow label="Open alerts" value={overview.alerts.open} />
+                <AdminStatRow label="Abuse flags" value={overview.abuse.open} />
+              </AdminStatRows>
             </AdminSection>
 
-            <AdminSection
-              label="Traffic this month"
-              action={<span className="font-mono text-xs text-fg-3">{`${mbps(overview.usage.download_bps)} ↓ / ${mbps(overview.usage.upload_bps)} ↑ now`}</span>}
-            >
-              <AdminMetricGrid>
-                <AdminMetric label="Total" value={bytes(overview.usage.month_total_bytes)} />
-                <AdminMetric label="Down" value={bytes(overview.usage.month_download_bytes)} />
-                <AdminMetric label="Up" value={bytes(overview.usage.month_upload_bytes)} />
-                <AdminMetric label="VPN enabled / disabled" value={`${overview.vpn.enabled} / ${overview.vpn.disabled}`} />
-              </AdminMetricGrid>
+            <AdminSection label="Traffic this month">
+              <AdminStatRows>
+                <AdminStatRow label="Total" value={bytes(overview.usage.month_total_bytes)} />
+                <AdminStatRow label="Down / up" value={`${bytes(overview.usage.month_download_bytes)} / ${bytes(overview.usage.month_upload_bytes)}`} />
+                <AdminStatRow label="Current ↓ / ↑" value={`${mbps(overview.usage.download_bps)} / ${mbps(overview.usage.upload_bps)}`} />
+                <AdminStatRow label="VPN enabled / disabled" value={`${overview.vpn.enabled} / ${overview.vpn.disabled}`} />
+              </AdminStatRows>
             </AdminSection>
           </>
         )}

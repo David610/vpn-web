@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { AccountShell, Feedback, useAccount } from "@/components/account/AccountShell";
-import { ConfirmDialog, InputDialog } from "@/components/Dialog";
+import { ActionsDialog, ConfirmDialog, InputDialog, type DialogAction } from "@/components/Dialog";
 import { api, euro } from "@/lib/api";
 import { LIVE, monthlyCents, statusLabel, type Subscription } from "@/components/account/types";
 
@@ -11,6 +11,7 @@ function SubscriptionRow({ sub }: { sub: Subscription }) {
   const plan = overview!.plan;
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [managing, setManaging] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const canRemovePack = sub.extraPacks > 0 && sub.capacity - plan.devicesPerPack >= sub.used;
@@ -107,40 +108,44 @@ function SubscriptionRow({ sub }: { sub: Subscription }) {
         </div>
 
         <div className="row__actions" style={{ justifyContent: "space-between" }}>
-          <div style={{ display: "flex", gap: "var(--space-2)", flexWrap: "wrap", alignItems: "center" }}>
-            <button type="button" className="btn btn-primary btn-sm" disabled={busy !== null} onClick={() => setPacks(sub.extraPacks + 1)}>
-              Add 3 devices
+          <button type="button" className="btn btn-primary btn-sm" disabled={busy !== null} onClick={() => setPacks(sub.extraPacks + 1)}>
+            Add 3 devices
+          </button>
+          {sub.cancelAtPeriodEnd ? (
+            <button type="button" className="btn-link" disabled={busy !== null} onClick={resume}>
+              Resume
             </button>
-            {sub.extraPacks > 0 && (
-              <button
-                type="button"
-                className="btn btn-secondary btn-sm"
-                disabled={busy !== null || !canRemovePack}
-                onClick={() => setPacks(sub.extraPacks - 1)}
-                title={canRemovePack ? undefined : "Remove or move devices out of this pack first"}
-              >
-                Remove pack
-              </button>
-            )}
-            <button type="button" className="btn-link" disabled={busy !== null} onClick={() => setRenaming(true)}>
-              Rename
+          ) : (
+            <button type="button" className="btn-link" disabled={busy !== null} onClick={() => setManaging(true)}>
+              Manage
             </button>
-          </div>
-          <div>
-            {LIVE.has(sub.status) && !sub.cancelAtPeriodEnd && (
-              <button type="button" className="btn-link text-danger" disabled={busy !== null} onClick={() => setCancelling(true)}>
-                Cancel subscription
-              </button>
-            )}
-            {sub.cancelAtPeriodEnd && (
-              <button type="button" className="btn-link" disabled={busy !== null} onClick={resume}>
-                Resume
-              </button>
-            )}
-          </div>
+          )}
         </div>
         {error && <p className="field-error" style={{ marginTop: "var(--space-2)" }}>{error}</p>}
       </div>
+      <ActionsDialog
+        open={managing}
+        title="Manage subscription"
+        onCancel={() => setManaging(false)}
+        actions={([
+          { label: "Rename", onSelect: () => { setManaging(false); setRenaming(true); } },
+          sub.extraPacks > 0
+            ? {
+                label: "Remove device pack",
+                disabled: !canRemovePack,
+                onSelect: () => { setManaging(false); void setPacks(sub.extraPacks - 1); },
+              }
+            : null,
+          LIVE.has(sub.status) && !sub.cancelAtPeriodEnd
+            ? {
+                label: "Cancel subscription",
+                danger: true,
+                separated: true,
+                onSelect: () => { setManaging(false); setCancelling(true); },
+              }
+            : null,
+        ] as Array<DialogAction | null>).filter((a): a is DialogAction => a !== null)}
+      />
       <InputDialog
         open={renaming}
         title="Rename subscription"

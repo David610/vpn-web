@@ -10,12 +10,12 @@
 // this resolution anyway). Each row lists inclusive [startCol, endCol]
 // land ranges.
 const LAND_RANGES: Array<Array<[number, number]>> = [
-  [[2, 4], [14, 17], [20, 23], [24, 39]], // ~78N: Alaska, Greenland, N Scandinavia, N Siberia
-  [[3, 14], [15, 17], [19, 23], [23, 39]], // ~69N: Canada, Greenland, N Europe, Siberia
-  [[4, 14], [17, 17], [19, 23], [23, 39]], // ~60N: Canada, Iceland, Europe, Russia
-  [[6, 14], [19, 23], [23, 35]], // ~51N: US/Canada border, W Europe, Russia/Mongolia
-  [[6, 12], [19, 23], [23, 25], [28, 36]], // ~42N: USA, S Europe, Turkey/Caspian, China/Japan
-  [[7, 9], [19, 23], [24, 26], [28, 29], [30, 33]], // ~33N: Mexico N, N Africa, Middle East, India N, China S
+  [[2, 4], [14, 17], [20, 22], [25, 39]], // ~78N: Alaska, Greenland, N Scandinavia, N Siberia
+  [[3, 14], [15, 17], [19, 22], [25, 39]], // ~69N: Canada, Greenland, N Europe, Siberia
+  [[4, 14], [17, 17], [19, 22], [25, 39]], // ~60N: Canada, Iceland, Europe, Russia
+  [[6, 14], [19, 22], [25, 35]], // ~51N: US/Canada border, W Europe, Russia/Mongolia
+  [[6, 12], [19, 22], [24, 25], [28, 36]], // ~42N: USA, S Europe, Turkey/Caspian, China/Japan
+  [[7, 9], [19, 22], [24, 26], [28, 29], [30, 33]], // ~33N: Mexico N, N Africa, Middle East, India N, China S
   [[8, 10], [18, 24], [24, 26], [28, 30], [30, 34]], // ~24N: Mexico, Sahara, Arabia, India, SE Asia/Taiwan
   [[9, 13], [18, 24], [28, 29], [30, 35]], // ~15N: C America/N S.America, Sahel, S India, Indonesia/Philippines
   [[11, 12], [21, 24], [30, 35], [35, 37]], // ~6N: Colombia, Congo, Indonesia, PNG
@@ -34,7 +34,12 @@ const VIEW_W = 400;
 const VIEW_H = 176;
 const DX = VIEW_W / COLS;
 const DY = VIEW_H / ROWS;
-const DOT_R = 1.15;
+const DOT_R = 1.0;
+/** Interior thinning: a wide contiguous landmass (Russia/Siberia, the
+ * Sahara) reads as one dense gray slab at full density; skipping every
+ * other column past the edges keeps the silhouette but softens it into
+ * dots rather than a fill. */
+const THIN_ABOVE_WIDTH = 6;
 
 // Arcana's currently live locations (kept in sync by hand with the two
 // locations LocationsList/GET /api/locations report today — decorative
@@ -56,7 +61,10 @@ function landDots() {
   for (let r = 0; r < ROWS; r++) {
     const ranges = LAND_RANGES[r];
     for (const [start, end] of ranges) {
+      const wide = end - start + 1 > THIN_ABOVE_WIDTH;
       for (let c = start; c <= end; c++) {
+        const interior = c > start + 1 && c < end - 1;
+        if (wide && interior && (c + r) % 2 === 0) continue;
         dots.push({ x: c * DX + DX / 2, y: r * DY + DY / 2 });
       }
     }
@@ -78,7 +86,7 @@ export default function WorldMap() {
       ))}
       {MARKERS.map((m) => {
         const p = project(m.lat, m.lon);
-        return <circle key={m.name} cx={p.x} cy={p.y} r={2.75} className="world-map__marker" />;
+        return <circle key={m.name} cx={p.x} cy={p.y} r={2.1} className="world-map__marker" />;
       })}
     </svg>
   );

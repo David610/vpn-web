@@ -24,7 +24,7 @@ export default function Nav() {
       </Link>
       <button
         type="button"
-        className="btn btn-secondary dm-nav__toggle"
+        className="dm-nav__toggle"
         aria-expanded={open}
         aria-controls="dm-nav-menu"
         onClick={() => setOpen((v) => !v)}

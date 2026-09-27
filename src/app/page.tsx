@@ -1,7 +1,8 @@
-import Link from "next/link";
 import Nav from "@/components/Nav";
 import Footer from "@/components/Footer";
 import WorldMap from "@/components/WorldMap";
+import HeroActions from "@/components/HeroActions";
+import HomeFootnote from "@/components/HomeFootnote";
 import { SITE_URL } from "@/lib/site-config";
 
 export const metadata = {
@@ -28,14 +29,7 @@ export default function Home() {
                 <p className="hero__lede">
                   Private VPN access, without the clutter.
                 </p>
-                <div className="hero__actions">
-                  <Link href="/locations" className="btn btn-secondary">
-                    View locations
-                  </Link>
-                  <Link href="/signup" className="text-link hero__signup">
-                    Create account
-                  </Link>
-                </div>
+                <HeroActions />
                 <p className="hero__meta">
                   <span>€6.99 / month</span>
                   <span>3 devices</span>
@@ -52,9 +46,7 @@ export default function Home() {
           </div>
         </section>
 
-        <p className="muted" style={{ maxWidth: "var(--container-max)", margin: "0 auto", padding: "var(--space-6) var(--container-pad) var(--space-12)" }}>
-          Already have an account? <Link href="/login" className="text-link">Log in</Link>
-        </p>
+        <HomeFootnote />
       </main>
       <Footer />
     </>

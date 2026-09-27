@@ -58,7 +58,7 @@ export function AdminSection({
     <section className={`mb-8 ${className ?? ""}`}>
       {label || action ? (
         <div className="mb-2 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 border-b border-border pb-1">
-          {label ? <h2 className="font-mono text-xs uppercase tracking-wide text-fg-3">{label}</h2> : <span />}
+          {label ? <h2 className="text-xs font-semibold uppercase tracking-wide text-fg-3">{label}</h2> : <span />}
           {action}
         </div>
       ) : null}
@@ -102,6 +102,22 @@ export function AdminMetricLarge({ label, value }: { label: string; value: numbe
  */
 export function AdminMetricRow({ children, count }: { children: ReactNode; count?: 4 | 5 }) {
   return <div className={`admin-metrics ${count === 5 ? "admin-metrics--5" : ""}`.trim()}>{children}</div>;
+}
+
+// ── Compact stat rows ───────────────────────────────────────────────────
+
+/** "Label ........ value" line — for secondary counts that don't need card weight. */
+export function AdminStatRow({ label, value }: { label: ReactNode; value: ReactNode }) {
+  return (
+    <div className="admin-stat-row">
+      <span className="admin-stat-row__label">{label}</span>
+      <span className="admin-stat-row__value">{value}</span>
+    </div>
+  );
+}
+
+export function AdminStatRows({ children, className }: { children: ReactNode; className?: string }) {
+  return <div className={`admin-stat-rows ${className ?? ""}`.trim()}>{children}</div>;
 }
 
 // ── Form controls ────────────────────────────────────────────────────────
