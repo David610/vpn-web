@@ -3,15 +3,21 @@
 import { useState } from "react";
 import Link from "next/link";
 import { SITE_NAME } from "@/lib/site-config";
-import { useSession } from "@/hooks/useSession";
-import { supabase } from "@/lib/supabase";
+import { useLocalSessionFlag } from "@/hooks/useLocalSessionFlag";
 
 export default function Nav() {
-  const { session, loading } = useSession();
+  // Reads localStorage directly instead of useSession()/the Supabase client
+  // (F-44/K-04) — this component renders on every public page, and the only
+  // thing it needs auth state for is which nav link to show.
+  const { hasSession: session, loading } = useLocalSessionFlag();
   const [open, setOpen] = useState(false);
 
   async function handleLogout() {
-    await supabase.auth.signOut().catch((err) => {
+    // Dynamically imported so the Supabase SDK chunk still isn't part of
+    // this component's own bundle — it only loads if someone who is signed
+    // in actually clicks "Log out".
+    const { supabase } = await import("@/lib/supabase");
+    await supabase.auth.signOut().catch((err: { message: string }) => {
       console.error("Sign out failed:", err.message);
     });
     window.location.href = "/";

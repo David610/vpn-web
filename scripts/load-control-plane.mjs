@@ -14,6 +14,48 @@
  *
  * Uses one real authenticated account, so it measures Worker/Auth/PostgREST
  * request handling rather than signup or Stripe side effects.
+ *
+ * --- Reconcile / K-02 hand-off note ---
+ *
+ * K-02 (audit F-30/F-43/F-50, cross-repo plan K-02) asks specifically for a
+ * measurement of `reconcileAccountProvisioning` (functions/lib/device-provisioning.js),
+ * which is exclusive CP-BILL territory under the cross-repo remediation
+ * plan's file-ownership table (§6) — this script does not and should not
+ * import or call into it directly.
+ *
+ * What this script CAN do, unmodified, to produce the K-02 measurement:
+ * point ENDPOINT at whichever `/v1` or `/api` route triggers
+ * reconcileAccountProvisioning on the request path — at the time of the
+ * audit that's a device add/remove or pack-change endpoint — and read the
+ * wall-clock p50/p95/p99 this script already reports. That end-to-end
+ * latency is a proxy for the reconcile cost (plus everything else the route
+ * does), which is exactly what's needed to see whether the N+1 query
+ * pattern (3-8 sequential queries per device, up to the 60-device cap) shows
+ * up as a latency cliff under load. It cannot report a *query count* per
+ * call — that needs either a Supabase log export or CP-BILL adding a
+ * counter inside reconcileAccountProvisioning itself.
+ *
+ * Example: ENDPOINT=/api/vpn/devices CONCURRENCY=60 DURATION_SECONDS=30 \
+ *   ARCANA_BASE_URL=... ARCANA_ACCESS_TOKEN=... node scripts/load-control-plane.mjs
+ *
+ * This was NOT run against production for this remediation pass: it needs a
+ * real ARCANA_ACCESS_TOKEN and a disposable test account/device set (running
+ * it against a real account repeatedly adds/removes devices), neither of
+ * which this task has access to. Handing off to CP-BILL/RELQA with the
+ * concrete recommendation below instead of fabricating numbers.
+ *
+ * Recommendation for CP-BILL (from reading device-provisioning.js): the
+ * `for (const device of devices) { await reconcileDeviceProvisioning(...) }`
+ * loop in reconcileAccountProvisioning is sequential and awaits each device
+ * fully before starting the next. The straightforward fix is not adding
+ * concurrency to that loop (that would multiply concurrent writes to the
+ * same node's lease pool) but collapsing the *reads* out of the loop: batch
+ * the per-device entitlement/identity/lease lookups into one `.in("device_id", deviceIds)`
+ * query each (loadDeviceEntitlements already does this for entitlements;
+ * the same pattern should extend to whatever per-device lookups
+ * reconcileDeviceProvisioning still does per iteration), so the query count
+ * for N devices goes from O(N) round trips to O(1) per query type,
+ * independent of the 60-device cap.
  */
 
 const baseUrl = process.env.ARCANA_BASE_URL?.replace(/\/$/, "");
