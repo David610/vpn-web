@@ -130,7 +130,11 @@ beforeEach(() => {
     }),
     destroyInstance: vi.fn().mockResolvedValue(undefined),
   };
-  dnsAdapter = { upsertAddressRecord: vi.fn().mockResolvedValue({ recordId: "rec-1" }) };
+  dnsAdapter = {
+    upsertAddressRecord: vi.fn().mockResolvedValue({ recordId: "rec-1" }),
+    deleteRecord: vi.fn().mockResolvedValue(undefined),
+    recordExists: vi.fn().mockResolvedValue(false),
+  };
   probe = vi.fn().mockResolvedValue({ ok: true, checks: { subscription_tls: { ok: true }, reality_tcp: { ok: true } } });
   ctx = {
     supabase: db,
@@ -322,6 +326,45 @@ describe("REPLACE_NODE operation", () => {
     expect(oldFinal.lifecycle_state).toBe("RETIRED");
     expect(oldFinal.retired_at).toBeTruthy();
     expect(oldFinal.lifecycle_state_changed_at).toBeTruthy();
+    expect(provider.destroyInstance).toHaveBeenCalledWith({ providerInstanceId: "old-instance-1" });
+
+    // F-06: the DNS record must be deleted (and its removal verified)
+    // before the instance is destroyed, and dns_removed_at recorded.
+    expect(dnsAdapter.deleteRecord).toHaveBeenCalled();
+    expect(dnsAdapter.recordExists).toHaveBeenCalled();
+    expect(oldFinal.dns_removed_at).toBeTruthy();
+    const deleteOrder = dnsAdapter.deleteRecord.mock.invocationCallOrder[0];
+    const destroyOrder = provider.destroyInstance.mock.invocationCallOrder[0];
+    expect(deleteOrder).toBeLessThan(destroyOrder);
+  });
+
+  // F-06 regression: before this fix, RETIRE_OLD_NODE destroyed the Hetzner
+  // instance without ever touching DNS -- the hostname kept resolving to
+  // an IP Hetzner could hand to a different customer.
+  it("does not destroy the instance until the DNS record is confirmed removed", async () => {
+    db = makeFakeSupabase(replaceSeed());
+    ctx.supabase = db;
+    // Cloudflare's delete "succeeded" but the record is still resolvable
+    // (eventual consistency) -- RETIRE_OLD_NODE must not proceed past this
+    // no matter which tick reaches it.
+    dnsAdapter.recordExists.mockResolvedValue(true);
+    await driveNewNodeToReady();
+
+    expect(provider.destroyInstance).not.toHaveBeenCalled();
+    let oldNode = (await rows("nodes")).find((n) => n.node_id === OLD_NODE_ID);
+    expect(oldNode.dns_removed_at).toBeFalsy();
+    expect(oldNode.lifecycle_state).not.toBe("RETIRED");
+
+    // Now it verifies gone -> proceeds to RETIRED and destroys the instance.
+    dnsAdapter.recordExists.mockResolvedValue(false);
+    let result;
+    for (let i = 0; i < 5 && oldNode.lifecycle_state !== "RETIRED"; i++) {
+      result = await advance();
+      oldNode = (await rows("nodes")).find((n) => n.node_id === OLD_NODE_ID);
+    }
+    expect(result).toEqual({ status: "COMPLETED" });
+    expect(oldNode.dns_removed_at).toBeTruthy();
+    expect(oldNode.lifecycle_state).toBe("RETIRED");
     expect(provider.destroyInstance).toHaveBeenCalledWith({ providerInstanceId: "old-instance-1" });
   });
 

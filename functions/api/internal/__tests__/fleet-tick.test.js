@@ -1,13 +1,31 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const rpc = vi.fn();
-vi.mock("@supabase/supabase-js", () => ({ createClient: vi.fn(() => ({ rpc })) }));
+const nodesSelectIn = vi.fn();
+vi.mock("@supabase/supabase-js", () => ({
+  createClient: vi.fn(() => ({
+    rpc,
+    from: vi.fn((table) => {
+      if (table === "nodes") return { select: vi.fn().mockReturnValue({ in: nodesSelectIn }) };
+      // account-service.js's finalizeAccountDeletions queries other tables;
+      // an empty-result stub is enough since its outcome isn't under test here.
+      return {
+        select: vi.fn().mockReturnThis(),
+        not: vi.fn().mockReturnThis(),
+        eq: vi.fn().mockReturnThis(),
+        limit: vi.fn().mockResolvedValue({ data: [], error: null }),
+      };
+    }),
+  })),
+}));
 const advanceOperation = vi.fn();
 vi.mock("../../../lib/fleet-operations.js", () => ({ advanceOperation }));
 const autoReplaceFailedNodes = vi.fn();
 vi.mock("../../../lib/node-auto-replace.js", () => ({ autoReplaceFailedNodes }));
 const autoScaleFullLocations = vi.fn();
 vi.mock("../../../lib/node-auto-scale.js", () => ({ autoScaleFullLocations }));
+const failSilentNodes = vi.fn();
+vi.mock("../../../lib/node-silence-failover.js", () => ({ failSilentNodes }));
 
 const { onRequestPost } = await import("../fleet-tick.js");
 const env = { SUPABASE_URL: "https://s.test", SUPABASE_SERVICE_ROLE_KEY: "k", FLEET_TICK_SECRET: "s3cret" };
@@ -24,6 +42,8 @@ beforeEach(() => {
   advanceOperation.mockReset().mockResolvedValue({ status: "RUNNING", step: "AWAIT_ENROLLMENT" });
   autoReplaceFailedNodes.mockReset().mockResolvedValue([]);
   autoScaleFullLocations.mockReset().mockResolvedValue([]);
+  nodesSelectIn.mockReset().mockResolvedValue({ data: [{ node_id: "n1", lifecycle_state: "READY", last_seen_at: null }], error: null });
+  failSilentNodes.mockReset().mockResolvedValue([]);
 });
 
 describe("POST /api/internal/fleet-tick", () => {
@@ -98,6 +118,30 @@ describe("POST /api/internal/fleet-tick", () => {
     autoScaleFullLocations.mockRejectedValue(new Error("boom"));
     vi.spyOn(console, "error").mockImplementation(() => {});
     const res = await onRequestPost({ env: { ...env, FEATURE_AUTO_NODE_SCALE: "true" }, request: req("s3cret") });
+    expect(res.status).toBe(200);
+  });
+
+  // F-20/C-12: silence detection must run from fleet-tick itself every
+  // minute, not only as a side effect of some other node's heartbeat or an
+  // admin viewing the fleet page -- a single-node or fully-down fleet has
+  // neither of those triggers.
+  it("runs the silence-detection sweep every tick when FEATURE_AUTO_NODE_HEALTH is true", async () => {
+    failSilentNodes.mockResolvedValue(["n1"]);
+    const res = await onRequestPost({ env: { ...env, FEATURE_AUTO_NODE_HEALTH: "true" }, request: req("s3cret") });
+    const body = await res.json();
+    expect(failSilentNodes).toHaveBeenCalled();
+    expect(body.silenceFailed).toEqual(["n1"]);
+  });
+
+  it("does not run the silence sweep when the flag is unset", async () => {
+    await onRequestPost({ env, request: req("s3cret") });
+    expect(failSilentNodes).not.toHaveBeenCalled();
+  });
+
+  it("does not fail the tick if the silence sweep throws", async () => {
+    failSilentNodes.mockRejectedValue(new Error("boom"));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const res = await onRequestPost({ env: { ...env, FEATURE_AUTO_NODE_HEALTH: "true" }, request: req("s3cret") });
     expect(res.status).toBe(200);
   });
 });

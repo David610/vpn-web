@@ -48,9 +48,68 @@ export async function onRequestPatch({ env, request, params }) {
       );
     }
 
-    // RETIRED is terminal (see node-lifecycle.js) so retired_at, once set,
-    // is a reliable "this node stopped serving traffic at" timestamp —
-    // never overwritten by a later transition, since none is possible.
+    // F-05/C-09: QUARANTINED/RETIRED must revoke the node's key, cancel its
+    // in-flight jobs, drop its lease slots, and bump the route-directory
+    // version all in the SAME transaction as the lifecycle write -- a node
+    // suspected of compromise cannot be left able to keep authenticating,
+    // holding a claimed job, or being handed lease slots for even one
+    // request after an admin decides to quarantine/retire it. This goes
+    // through a single RPC (supabase-js has no cross-table transaction) and
+    // returns before any of the plain-UPDATE path below runs.
+    if (body.state === "QUARANTINED" || body.state === "RETIRED") {
+      // F-06: RETIRED normally requires dns_removed_at to already be set
+      // (set by fleet-operations.js's RETIRE_OLD_NODE before it ever
+      // requests RETIRED). A manual admin retirement of a node whose DNS
+      // was never programmatically published can legitimately need to
+      // bypass that — only with an explicit, audited flag, never silently.
+      const overrideDnsCheck = body.state === "RETIRED" && body.overrideDnsCheck === true;
+
+      const { data: rpcResult, error: rpcError } = await supabaseAdmin.rpc("revoke_node_key_and_transition", {
+        p_node_id: nodeId,
+        p_to_state: body.state,
+        p_expected_from_state: node.lifecycle_state,
+        p_override_dns_check: overrideDnsCheck,
+      });
+      if (rpcError) throw new Error(`revoke_node_key_and_transition failed: ${rpcError.message}`);
+      if (rpcResult?.status === "not_found") return jsonResponse({ error: "Node not found" }, 404);
+      if (rpcResult?.status === "stale") {
+        return jsonResponse(
+          { error: "Node lifecycle_state changed concurrently — reload and retry" },
+          409
+        );
+      }
+      if (rpcResult?.status === "dns_not_removed") {
+        return jsonResponse(
+          {
+            error:
+              "Node's DNS record has not been confirmed removed. Retry after RETIRE_OLD_NODE completes, or pass overrideDnsCheck: true to retire anyway (audited).",
+          },
+          409
+        );
+      }
+
+      await writeAdminAudit(supabaseAdmin, {
+        adminUserId: admin.userId,
+        action: "admin.node_lifecycle_transition",
+        targetType: "node",
+        targetId: nodeId,
+        metadata: {
+          from: node.lifecycle_state,
+          to: body.state,
+          reissued_enrollment_token: false,
+          key_revoked: true,
+          jobs_cancelled: rpcResult?.jobs_cancelled ?? 0,
+          lease_slots_deleted: rpcResult?.lease_slots_deleted ?? 0,
+          ...(overrideDnsCheck ? { dns_check_overridden: true } : {}),
+        },
+      });
+
+      return jsonResponse({ ok: true, lifecycleState: body.state });
+    }
+
+    // Every path reaching here is neither QUARANTINED nor RETIRED (both
+    // returned above via the RPC), so retired_at never needs to be set on
+    // this plain-UPDATE path.
     const update = {
       lifecycle_state: body.state,
       lifecycle_state_changed_at: new Date().toISOString(),
@@ -60,7 +119,6 @@ export async function onRequestPatch({ env, request, params }) {
       // Any other transition clears a stale value from a prior FAILED spell.
       failed_reason: body.state === "FAILED" ? "ADMIN" : null,
     };
-    if (body.state === "RETIRED") update.retired_at = new Date().toISOString();
 
     // A node can re-enter PROVISIONING (e.g. FAILED -> PROVISIONING, a
     // retry). If it still has an unexpired enrollment token from a
@@ -102,13 +160,6 @@ export async function onRequestPatch({ env, request, params }) {
         { error: "Node lifecycle_state changed concurrently — reload and retry" },
         409
       );
-    }
-
-    // Retiring or quarantining a node revokes its probe credential so
-    // peers are never handed it again.
-    if (body.state === "RETIRED" || body.state === "QUARANTINED") {
-      const { error: credError } = await supabaseAdmin.from("node_probe_credentials").delete().eq("node_id", nodeId);
-      if (credError) console.error("admin/nodes/:id/lifecycle: probe credential revoke failed:", credError.message);
     }
 
     await writeAdminAudit(supabaseAdmin, {

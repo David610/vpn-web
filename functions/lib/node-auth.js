@@ -20,7 +20,7 @@ export async function authenticateNode(request, supabaseAdmin) {
   const keyHash = await sha256Hex(rawKey);
   const { data, error } = await supabaseAdmin
     .from("nodes")
-    .select("node_id, revoked_at")
+    .select("node_id, revoked_at, lifecycle_state")
     .eq("api_key_hash", keyHash)
     .maybeSingle();
   if (error) {
@@ -28,5 +28,13 @@ export async function authenticateNode(request, supabaseAdmin) {
     return null;
   }
   if (!data || data.revoked_at) return null;
+  // F-05: QUARANTINED/RETIRED must reject even in the (should-be-impossible,
+  // but defense in depth) case api_key_hash/revoked_at were not cleared —
+  // e.g. a row created before this fix, or a future code path that
+  // transitions lifecycle without going through revokeNodeKeyAndTransition.
+  // Every /api/agent/* handler funnels through this function, so this one
+  // check is what the enumerated-route regression test in
+  // node-auth.test.js exercises against each of them.
+  if (data.lifecycle_state === "QUARANTINED" || data.lifecycle_state === "RETIRED") return null;
   return data.node_id;
 }
