@@ -1,7 +1,7 @@
 /**
  * A faithful JS mirror of public.device_entitlement() (migrations
  * supabase/migrations/20261001000000_device_entitlement.sql and
- * 20261002000000_device_entitlement_assignment_order.sql), used by
+ * 20261002000050_device_entitlement_assignment_order.sql), used by
  * fake-supabase.js so unit tests exercise the same capacity/suspension
  * rules the SQL RPC enforces in production, without a real Postgres.
  *

@@ -9,7 +9,7 @@
 -- accounts.js's getLiveSubscription() and subscriptions.js's isLive().
 --
 -- Not edited in place: 20261001000000_device_entitlement.sql and
--- 20261002000000_device_entitlement_assignment_order.sql (which most
+-- 20261002000050_device_entitlement_assignment_order.sql (which most
 -- recently redefined this function, switching capacity ranking to the
 -- sequence-backed subscription_assignment_seq), per the repo's rule
 -- against editing already-merged migrations. This CREATE OR REPLACE layers
@@ -47,7 +47,7 @@ update public.subscriptions
    and past_due_since is null;
 
 -- Re-create device_entitlement exactly as
--- 20261002000000_device_entitlement_assignment_order.sql left it (same
+-- 20261002000050_device_entitlement_assignment_order.sql left it (same
 -- signature, same subscription_assignment_seq-based ranking), adding only
 -- the past_due bound to both places that matched
 -- `status in ('active', 'trialing', 'past_due')`.
