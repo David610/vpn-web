@@ -350,48 +350,22 @@ describe("POST /api/agent/heartbeat — Phase 8 health transitions", () => {
     expect(resolvedDedupKeys()).toContain("node:node-1:node_degraded");
   });
 
-  it("transitions a different, silent node to FAILED (compare-and-set) and raises node_failed for it", async () => {
-    // node-1 (the heartbeating node) is healthy; node-2 is silent.
+  // Perf (Phase 16): heartbeat.js no longer re-scans every other candidate
+  // node for silence on each request -- that's O(N) work per heartbeat times
+  // O(N) heartbeats/interval = O(N^2) reads+scans per interval, and
+  // fleet-tick.js's own unconditional per-minute sweep (F-20/C-12, covered
+  // by functions/api/internal/__tests__/fleet-tick.test.js) already
+  // guarantees the same detection runs regardless of any node's heartbeats.
+  it("never queries or writes other nodes' silence state from a heartbeat", async () => {
     mockNode({});
     nodesListSelect.mockResolvedValue({
       data: [{ node_id: "node-2", lifecycle_state: "READY", last_seen_at: stale() }],
       error: null,
     });
     await onRequestPost({ env: autoEnv, request: makeRequest({ probe_ok: true }) });
-    expect(lifecycleWrites()).toEqual([casWrite("node-2", "READY", "FAILED", "SILENCE")]);
-    expect(alertsInsert).toHaveBeenCalledWith(
-      expect.objectContaining({
-        alert_type: "node_failed",
-        severity: "critical",
-        dedup_key: "node:node-2:node_failed",
-        node_id: "node-2",
-      })
-    );
+    expect(nodesListSelect).not.toHaveBeenCalled();
+    expect(lifecycleWrites()).toEqual([]);
   });
-
-  it("raises no node_failed alert when the silence compare-and-set loses the race", async () => {
-    mockNode({});
-    casMatches = false;
-    nodesListSelect.mockResolvedValue({
-      data: [{ node_id: "node-2", lifecycle_state: "READY", last_seen_at: stale() }],
-      error: null,
-    });
-    await onRequestPost({ env: autoEnv, request: makeRequest({ probe_ok: true }) });
-    expect(insertedDedupKeys()).not.toContain("node:node-2:node_failed");
-  });
-
-  it.each(["PROVISIONING", "WARMING_UP", "MAINTENANCE", "DRAINING"])(
-    "never silence-fails a stale %s node, even if the candidate query returned it",
-    async (lifecycleState) => {
-      mockNode({});
-      nodesListSelect.mockResolvedValue({
-        data: [{ node_id: "node-2", lifecycle_state: lifecycleState, last_seen_at: stale() }],
-        error: null,
-      });
-      await onRequestPost({ env: autoEnv, request: makeRequest({ probe_ok: true }) });
-      expect(lifecycleWrites()).toEqual([]);
-    }
-  );
 });
 
 describe("POST /api/agent/heartbeat enrollment token cleanup", () => {

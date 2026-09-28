@@ -1,8 +1,7 @@
 import { createClient } from "@supabase/supabase-js";
 import { authenticateNode } from "../../lib/node-auth.js";
 import { canTransitionLifecycle } from "../../lib/node-lifecycle.js";
-import { evaluateProbeResult, SILENCE_ELIGIBLE_STATES } from "../../lib/node-health-transition.js";
-import { failSilentNodes } from "../../lib/node-silence-failover.js";
+import { evaluateProbeResult } from "../../lib/node-health-transition.js";
 import { protocolAllowsRecovery, sanitizeProtocolReport } from "../../lib/protocol-health.js";
 import { applyProtocolReport } from "../../lib/protocol-health-store.js";
 import { logger, requestIdFrom } from "../../lib/logging.js";
@@ -201,24 +200,24 @@ export async function onRequestPost({ env, request }) {
     });
   }
 
-  if (autoHealth) {
-    // The .in() filter is only a query-size optimization derived from the
-    // same shared constant; isNodeSilent (inside failSilentNodes) is the
-    // actual eligibility rule, identical to admin/nodes.js's.
-    const { data: candidateNodes } = await supabaseAdmin
-      .from("nodes")
-      .select("node_id, lifecycle_state, last_seen_at")
-      .in("lifecycle_state", [...SILENCE_ELIGIBLE_STATES])
-      .neq("node_id", nodeId);
-    await failSilentNodes(supabaseAdmin, candidateNodes ?? [], Date.now());
-  }
+  // Perf (Phase 16 / audit "heartbeat scanning all nodes for silence"):
+  // this used to re-scan every OTHER candidate node's silence on every
+  // single heartbeat request, here, in addition to fleet-tick.js's own
+  // unconditional per-minute sweep (F-20/C-12) -- O(N) work per heartbeat
+  // times O(N) heartbeats/interval = O(N^2) reads+scans per interval for
+  // no correctness benefit, since fleet-tick already guarantees the same
+  // sweep runs every minute regardless of whether any node heartbeats at
+  // all. Silence detection still happens (via fleet-tick, worst case ~60s
+  // slower than "immediately on some other node's next heartbeat"); it is
+  // no longer duplicated here.
 
   // Health alerts track the node's resulting state, not whether a
   // transition happened on this particular request: node_degraded stays
   // open for as long as the node is DEGRADED and resolves once it leaves.
-  // node_failed is raised by failSilentNodes (silence is the only way into
-  // FAILED) and resolved here on the node's first heartbeat out of FAILED.
-  // Skipped entirely when the resulting state is unknown (lost race).
+  // node_failed is raised by fleet-tick's silence sweep (silence is the
+  // only way into FAILED) and resolved here on the node's first heartbeat
+  // out of FAILED. Skipped entirely when the resulting state is unknown
+  // (lost race).
   const healthAlerts =
     resultingState === undefined
       ? []
