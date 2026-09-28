@@ -47,3 +47,32 @@ export const supabase = createClient(
     },
   }
 );
+
+// F-15 (admin-origin isolation, code-only half): admin and customer pages
+// currently share one origin, so they cannot get the full separate-domain
+// isolation a real "admin origin" implies -- that needs its own
+// DNS/Cloudflare Pages project and is a production/infra decision, not
+// something this module can do. What *is* achievable here: a distinct
+// localStorage key for the admin session, so an XSS payload that specifically
+// targets the known customer key (`arcana-auth-v1`) does not also hand over
+// an aal2 admin session sitting under the same key. This is a second
+// browser-client instance against the same Supabase project, differing only
+// in storageKey -- same PKCE/detectSessionInUrl/persist/refresh config as
+// `supabase` above, so admin/login and admin/mfa/enroll behave identically
+// to the customer flow, just against their own storage slot. Only
+// src/app/admin/login/page.tsx and src/app/admin/mfa/enroll/page.tsx (via
+// useAdminSession -> useSession) should ever import this; every other admin
+// page reads the session through useAdminSession, not this client directly.
+export const supabaseAdmin = createClient(
+  supabaseUrl || "https://placeholder.supabase.co",
+  supabaseAnonKey || "placeholder-anon-key",
+  {
+    auth: {
+      flowType: "pkce",
+      detectSessionInUrl: false,
+      persistSession: true,
+      autoRefreshToken: true,
+      storageKey: "arcana-admin-auth-v1",
+    },
+  }
+);

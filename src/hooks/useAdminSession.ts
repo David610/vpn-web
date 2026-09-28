@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useSession } from "@/hooks/useSession";
+import { supabaseAdmin } from "@/lib/supabase";
 
 /**
  * Admin access has three distinct outcomes, not two, and the dashboard
@@ -20,7 +21,7 @@ import { useSession } from "@/hooks/useSession";
 export type AdminAccess = "ok" | "mfa-required" | "denied";
 
 export function useAdminSession() {
-  const { session, loading: sessionLoading } = useSession();
+  const { session, loading: sessionLoading } = useSession(supabaseAdmin);
   const [access, setAccess] = useState<AdminAccess | null>(null);
 
   useEffect(() => {

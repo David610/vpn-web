@@ -4,7 +4,55 @@
   Referrer-Policy: strict-origin-when-cross-origin
   Permissions-Policy: camera=(), microphone=(), geolocation=(), browsing-topics=()
   X-Permitted-Cross-Domain-Policies: none
-  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' https://*.supabase.co; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' https://*.supabase.co; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; require-trusted-types-for 'script'; trusted-types default
+
+# F-15 (Trusted Types): require-trusted-types-for 'script' forces every
+# DOM-XSS-sink assignment (innerHTML/outerHTML writes, script.src/text,
+# document.write, eval/Function-string, Range.createContextualFragment) in
+# this origin to go through a Trusted Types policy or be rejected by the
+# browser. `trusted-types default` is the only policy name this app is
+# allowed to create; public/trusted-types-policy.js registers it as a
+# pass-through (see that file's own comment for why pass-through, not a
+# sanitizer, is the correct shape here) and is loaded next/script
+# strategy="beforeInteractive" from the root layout so it runs before
+# anything else, including the Telegram Mini App's third-party bootstrap
+# script. A re-audit of src/ and functions/ for this round found no
+# innerHTML/outerHTML/document.write/eval call sites, so the policy has
+# nothing of this app's own to sanitize -- it exists to keep Next.js's own
+# script-loading machinery (next/script's <script>.src writes) and that one
+# third-party script working under enforcement rather than throwing.
+# scripts/trusted-types-check.mjs runs a real Chromium instance via
+# Playwright against a `wrangler pages dev` server serving the built static
+# export with this exact _headers file, so CSP is actually enforced by a
+# real browser rather than merely present in source. Run it after `next
+# build` with `wrangler pages dev out` serving on :8788.
+#
+# IMPORTANT / KNOWN ISSUE (found running that check while adding Trusted
+# Types, pre-existing and NOT introduced by require-trusted-types-for/
+# trusted-types above): under this CSP's script-src 'self' with no
+# 'unsafe-inline'/hash/nonce, the browser blocks the inline
+# `<script>self.__next_f.push(...)</script>` tags Next.js's App Router
+# emits on every page to carry the React Server Components hydration
+# payload. That is real script-src enforcement working as designed --
+# script-src 'self' has no carve-out for inline script, by design -- but it
+# means React never hydrates client components under this CSP as actually
+# served by Cloudflare Pages: forms, buttons and any client-side
+# interactivity do not work. Confirmed both ways: the same page hydrates
+# fine with the CSP header stripped, and fails to hydrate with it present,
+# on every page tested (/, /login, /account, /admin, /telegram). This
+# contradicts this file's own round-1 comment above ("Next's static export
+# only emits external script chunks ... neither of which needs
+# 'unsafe-inline'"), which appears to have been written without running a
+# real enforced-CSP browser check and does not hold for this codebase's App
+# Router usage (src/app/**). This predates this remediation pass -- fixing
+# it needs either a build-time step that hashes each page's inline
+# __next_f payload into script-src (many hashes, regenerated every build)
+# or a different CSP strategy, and is out of this pass's scope (Trusted
+# Types + admin-origin isolation only). Flagged in the round-3 remediation
+# report as a P0 for follow-up: until it's fixed, this CSP -- and by
+# extension the Trusted Types enforcement added in this pass, which cannot
+# make a non-hydrating page any more broken -- should be treated as
+# unverified in real deployment despite being "correct" as written.
 
 # F-15: session tokens live in localStorage (see src/lib/supabase.ts), not
 # HttpOnly cookies -- a full cookie migration is out of scope for a Next.js
@@ -41,9 +89,32 @@
 /telegram
   ! X-Frame-Options
   ! Content-Security-Policy
-  Content-Security-Policy: default-src 'self'; script-src 'self' https://telegram.org; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://*.supabase.co; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self' https://web.telegram.org https://*.telegram.org
+  Content-Security-Policy: default-src 'self'; script-src 'self' https://telegram.org; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://*.supabase.co; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self' https://web.telegram.org https://*.telegram.org; require-trusted-types-for 'script'; trusted-types default
 
 /telegram/*
   ! X-Frame-Options
   ! Content-Security-Policy
-  Content-Security-Policy: default-src 'self'; script-src 'self' https://telegram.org; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://*.supabase.co; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self' https://web.telegram.org https://*.telegram.org
+  Content-Security-Policy: default-src 'self'; script-src 'self' https://telegram.org; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://*.supabase.co; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self' https://web.telegram.org https://*.telegram.org; require-trusted-types-for 'script'; trusted-types default
+
+# F-15 (admin origin isolation, code-only half): a true separate origin for
+# /admin (e.g. admin.arcana.example on its own Cloudflare Pages project)
+# would need new DNS/infrastructure that is a production decision outside
+# this pass's authority -- this is the code-only compensating control: an
+# admin-specific CSP that is at least as strict as the site-wide one above
+# and does not inherit any future site-wide relaxation (e.g. if the
+# customer/public site ever needs a new third-party script origin, it will
+# not silently apply to /admin too, since this block is independent).
+# Concretely this is tighter than the site-wide policy in one respect: it is
+# pinned with no third-party script/connect origins at all (the site-wide
+# policy already has none today outside of /telegram, but that is
+# incidental; this block makes "admin never needs third-party origins" an
+# explicit, enforced fact). Paired with public/lib/supabase.ts's
+# `supabaseAdmin` client, which stores the admin session under its own
+# localStorage key (`arcana-admin-auth-v1`, not the customer session's
+# `arcana-auth-v1`), so a payload that specifically targets the known
+# customer storage key does not also exfiltrate an aal2 admin session.
+/admin
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' https://*.supabase.co; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; require-trusted-types-for 'script'; trusted-types default
+
+/admin/*
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' https://*.supabase.co; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; require-trusted-types-for 'script'; trusted-types default
