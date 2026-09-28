@@ -4,11 +4,8 @@ import {
   scheduleDoubleHopForDevice,
   scheduleAutoForDevice,
 } from "./scheduler.js";
-import {
-  listAccountSubscriptions,
-  loadDeviceEntitlements,
-  pickSubscriptionWithRoom,
-} from "./subscriptions.js";
+import { listAccountSubscriptions, pickSubscriptionWithRoom } from "./subscriptions.js";
+import { resolveDeviceEntitlement } from "./device-entitlement.js";
 
 /**
  * Device-canonical VPN provisioning: the ONE place that turns "this device,
@@ -334,12 +331,14 @@ export async function ensureMemberDevices(supabaseAdmin, accountId, members, dev
  * Account-level entry point used by billing, device changes and admin
  * grants: reconciles every device of the account.
  *
- * Entitlement is decided per device from the database, not from the caller:
- * a device is served while ITS subscription is live and it is within that
- * subscription's capacity (see subscriptions.js). So one subscription
- * lapsing disables only its own devices, and a device past capacity is
- * never served. `entitlement` only says whether the account has any access
- * at all, which decides whether a first device is created for it.
+ * Entitlement is decided per device by public.device_entitlement() (see
+ * resolveDeviceEntitlement in device-entitlement.js), not computed here: a
+ * device is served while ITS subscription is live and it is within that
+ * subscription's capacity, ranked by the database, not re-derived in JS.
+ * So one subscription lapsing disables only its own devices, and a device
+ * past capacity is never served. `entitlement` only says whether the
+ * account has any access at all, which decides whether a first device is
+ * created for it.
  */
 export async function reconcileAccountProvisioning(
   supabaseAdmin,
@@ -351,13 +350,12 @@ export async function reconcileAccountProvisioning(
     devices = devices.concat(await ensureMemberDevices(supabaseAdmin, accountId, members, devices));
   }
   const memberIds = new Set(members.map((m) => m.userId));
-  const entitlements = await loadDeviceEntitlements(supabaseAdmin, accountId, devices);
   const results = [];
   for (const device of devices) {
     const isMember = memberIds.has(device.user_id);
     const result = await reconcileDeviceProvisioning(supabaseAdmin, env, {
       device,
-      entitlement: isMember ? entitlements.get(device.id) ?? null : null,
+      entitlement: isMember ? await resolveDeviceEntitlement(supabaseAdmin, device) : null,
       idempotencyPrefix,
     });
     results.push({ deviceId: device.id, ...result });
