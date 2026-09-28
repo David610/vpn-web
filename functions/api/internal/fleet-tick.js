@@ -4,6 +4,8 @@ import { fleetContext, isValidFleetTickSecret } from "../../lib/fleet-context.js
 import { finalizeAccountDeletions } from "../../lib/account-service.js";
 import { autoReplaceFailedNodes } from "../../lib/node-auto-replace.js";
 import { autoScaleFullLocations } from "../../lib/node-auto-scale.js";
+import { failSilentNodes } from "../../lib/node-silence-failover.js";
+import { SILENCE_ELIGIBLE_STATES } from "../../lib/node-health-transition.js";
 
 function json(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -63,6 +65,26 @@ export async function onRequestPost({ env, request }) {
     console.error("fleet-tick: account deletion finalize failed:", err.message);
   }
 
+  // F-20/C-12: silence detection used to be "lazy" -- it only ran as a
+  // side effect of some OTHER node's heartbeat (heartbeat.js) or an admin
+  // loading the fleet page (admin/nodes.js). A single-node fleet, or every
+  // node going dark at once, has no such trigger: nothing else's heartbeat
+  // fires, and nobody is watching the admin page. Running the same sweep
+  // from fleet-tick means it fires every minute unconditionally.
+  let silenceFailed = [];
+  if (env.FEATURE_AUTO_NODE_HEALTH === "true") {
+    try {
+      const { data: candidateNodes, error: candidatesError } = await supabaseAdmin
+        .from("nodes")
+        .select("node_id, lifecycle_state, last_seen_at")
+        .in("lifecycle_state", [...SILENCE_ELIGIBLE_STATES]);
+      if (candidatesError) throw new Error(candidatesError.message);
+      silenceFailed = await failSilentNodes(supabaseAdmin, candidateNodes ?? [], Date.now());
+    } catch (err) {
+      console.error("fleet-tick: silence sweep failed:", err.message);
+    }
+  }
+
   let autoReplaced = [];
   if (env.FEATURE_AUTO_NODE_REPLACE === "true") {
     try {
@@ -79,5 +101,5 @@ export async function onRequestPost({ env, request }) {
       console.error("fleet-tick: auto-scale failed:", err.message);
     }
   }
-  return json({ leased: results.length, results, deletedAccounts, autoReplaced, autoScaled });
+  return json({ leased: results.length, results, deletedAccounts, silenceFailed, autoReplaced, autoScaled });
 }

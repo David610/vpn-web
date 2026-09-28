@@ -59,7 +59,7 @@ async function loadNode(supabase, nodeId) {
   const { data, error } = await supabase
     .from("nodes")
     .select(
-      "node_id, role, lifecycle_state, hostname, provider, provider_instance_id, ip_address, dns_record_id, last_seen_at, bootstrap_stage, bootstrap_status, bootstrap_message, consecutive_probe_failures, lifecycle_state_changed_at"
+      "node_id, role, lifecycle_state, hostname, provider, provider_instance_id, ip_address, dns_record_id, dns_removed_at, last_seen_at, bootstrap_stage, bootstrap_status, bootstrap_message, consecutive_probe_failures, lifecycle_state_changed_at"
     )
     .eq("node_id", nodeId)
     .maybeSingle();
@@ -352,15 +352,42 @@ const REPLACE_NODE_HANDLERS = {
     return wait(DRAIN_POLL_INTERVAL_S, { drainDeadline, remaining });
   },
 
-  async RETIRE_OLD_NODE({ supabase, providers, env }, op) {
+  // F-06: dangling DNS / subdomain takeover. The DNS record for a node's
+  // hostname MUST be gone before its Hetzner instance is destroyed --
+  // otherwise the hostname keeps resolving to an IP nobody controls until
+  // Hetzner reassigns it to a different customer, who can then stand up a
+  // TLS-terminating service on our own hostname (a classic subdomain
+  // takeover). This step order (DNS delete -> verify -> RETIRED -> destroy
+  // instance) is not incidental: RETIRED itself now requires
+  // dns_removed_at to be set (see revoke_node_key_and_transition and the
+  // admin lifecycle route), so a node can never reach the terminal state
+  // with a still-published record.
+  async RETIRE_OLD_NODE({ supabase, providers, dns, env }, op) {
     const oldNodeId = op.detail.oldNodeId;
     const { data: oldNode, error } = await supabase
       .from("nodes")
-      .select("node_id, lifecycle_state, provider, provider_instance_id")
+      .select("node_id, lifecycle_state, provider, provider_instance_id, hostname, dns_record_id, dns_removed_at")
       .eq("node_id", oldNodeId)
       .maybeSingle();
     if (error) throw new Error(`nodes lookup failed: ${error.message}`);
     if (!oldNode) throw new FatalStepError(`old node ${oldNodeId} no longer exists`);
+
+    if (!["DRAINING", "RETIRED"].includes(oldNode.lifecycle_state)) {
+      throw new FatalStepError(`old node ${oldNodeId} is ${oldNode.lifecycle_state}, expected DRAINING or RETIRED`);
+    }
+
+    if (!oldNode.dns_removed_at) {
+      const adapter = dns(env);
+      await adapter.deleteRecord({ recordId: oldNode.dns_record_id, name: oldNode.hostname, type: "A" });
+      // Verify by lookup rather than trusting a 200/404 from delete alone
+      // -- Cloudflare's own eventual-consistency window means a record can
+      // still resolve for a short time after a successful delete API call.
+      const stillThere = await adapter.recordExists({ name: oldNode.hostname, type: "A" });
+      if (stillThere) {
+        return wait(DRAIN_POLL_INTERVAL_S, { retrying: "dns_delete_verification" });
+      }
+      await updateNode(supabase, oldNodeId, { dns_removed_at: new Date().toISOString() });
+    }
 
     if (oldNode.lifecycle_state === "DRAINING") {
       const moved = await updateNode(
@@ -374,8 +401,6 @@ const REPLACE_NODE_HANDLERS = {
         { lifecycle_state: "DRAINING" }
       );
       if (!moved) throw new Error(`old node ${oldNodeId} lifecycle changed concurrently`);
-    } else if (oldNode.lifecycle_state !== "RETIRED") {
-      throw new FatalStepError(`old node ${oldNodeId} is ${oldNode.lifecycle_state}, expected DRAINING or RETIRED`);
     }
 
     // Re-attempt destroy even when this node was already RETIRED by an
