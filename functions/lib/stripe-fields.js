@@ -146,10 +146,49 @@ export function getExtraSeatCount(subscription, seatPriceId) {
  * @param {object} invoice - a Stripe Invoice object
  * @returns {number | null} unix seconds of the paid service period's end,
  *   from the most specific source available
+ *
+ * F-19: this used to read only invoice.lines.data[0].period.end. Stripe does
+ * not guarantee line order, and a combined invoice (proration + renewal, the
+ * common case for a mid-cycle pack purchase or an upgrade) can put the
+ * proration line first — that line's period ends at the OLD period end, so
+ * reading position [0] could silently set node expiry to a date in the past
+ * relative to the real new period. Taking the max across every line with a
+ * numeric period.end is order-independent and always resolves to the
+ * furthest-out (i.e. correct, newest) period end on the invoice.
  */
 export function getInvoiceLinePeriodEnd(invoice) {
-  const fromLine = invoice.lines?.data?.[0]?.period?.end;
-  if (typeof fromLine === "number") return fromLine;
+  const lines = invoice.lines?.data;
+  if (Array.isArray(lines) && lines.length > 0) {
+    const ends = lines
+      .map((line) => line?.period?.end)
+      .filter((end) => typeof end === "number");
+    if (ends.length > 0) return Math.max(...ends);
+  }
   if (typeof invoice.period_end === "number") return invoice.period_end;
   return null;
+}
+
+/**
+ * F-19/C-04: legacy (pre-managed-client) node expiry is not the exact
+ * `current_period_end` — singbox-vpn enforces service as `now < expires_at`
+ * with no grace of its own, so a webhook delayed even a few minutes past the
+ * boundary (Stripe's renewal invoices finalize roughly an hour after the new
+ * period starts) drops the customer's connection until the next successful
+ * sync. This grace absorbs that normal webhook-processing lag; it is added
+ * only to the node-facing expiry (entitlement.serviceExpiresAt), never to
+ * the raw Stripe period end shown to the customer or stored for billing
+ * logic (entitlement.currentPeriodEnd / subscriptions.current_period_end).
+ */
+export const LEGACY_NODE_EXPIRY_GRACE_MS = 72 * 60 * 60 * 1000;
+
+/**
+ * @param {string | null} iso
+ * @returns {string | null} `iso` plus the legacy grace window, or `iso`
+ *   unchanged (including null) if it isn't a valid timestamp to extend
+ */
+export function applyLegacyExpiryGrace(iso) {
+  if (!iso) return iso;
+  const ms = new Date(iso).getTime();
+  if (!Number.isFinite(ms)) return iso;
+  return new Date(ms + LEGACY_NODE_EXPIRY_GRACE_MS).toISOString();
 }

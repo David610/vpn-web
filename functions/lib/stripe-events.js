@@ -28,6 +28,7 @@ import {
   getEffectiveEntitlement,
 } from "./accounts.js";
 import { syncAccountProvisioningToEntitlement } from "./provision-entitlement.js";
+import { raiseAlert } from "./alerts.js";
 
 function subscriptionNameFrom(session) {
   const raw = session.metadata?.subscription_name;
@@ -68,7 +69,7 @@ function isStaleSubscriptionWrite(current, eventCreatedAt, nextStatus) {
 async function readSubscriptionSyncState(supabaseAdmin, subscriptionId) {
   const { data, error } = await supabaseAdmin
     .from("subscriptions")
-    .select("status, stripe_synced_at, account_id")
+    .select("status, stripe_synced_at, account_id, current_period_end")
     .eq("stripe_subscription_id", subscriptionId)
     .maybeSingle();
   if (error) {
@@ -78,10 +79,32 @@ async function readSubscriptionSyncState(supabaseAdmin, subscriptionId) {
 }
 
 /**
+ * F-31/C-04: the default checkout.session.completed payload carries no
+ * line-item price data, so this is the one live Stripe call this codebase
+ * makes from a webhook handler (round 2 explicitly declined to thread a
+ * retrieve through every handler for F-02 — this is narrower: one call, in
+ * the one handler that runs exactly once per checkout, not on every event).
+ *
+ * @returns {Promise<string | null>} the base (non-pack) item's price id, or
+ *   null if it can't be determined from the line items Stripe returns
+ */
+async function resolveCheckoutBasePriceId(stripe, session, seatPriceId) {
+  const lineItems = await stripe.checkout.sessions.listLineItems(session.id, {
+    expand: ["data.price"],
+  });
+  return getBaseSubscriptionPriceId({ items: { data: lineItems?.data ?? [] } }, seatPriceId);
+}
+
+/**
  * @param {import('@supabase/supabase-js').SupabaseClient} supabaseAdmin
  * @param {object} session - a Stripe Checkout Session object
+ * @param {import('stripe').Stripe | null} stripe - a live Stripe client, used
+ *   only to verify the checkout's base price (F-31). Optional so existing
+ *   unit tests that don't exercise price validation keep working unchanged;
+ *   the real webhook handler always passes one.
+ * @param {object} env
  */
-export async function handleCheckoutSessionCompleted(supabaseAdmin, session) {
+export async function handleCheckoutSessionCompleted(supabaseAdmin, session, stripe = null, env = {}) {
   if (session.mode !== "subscription") return;
 
   const userId = session.client_reference_id;
@@ -107,13 +130,38 @@ export async function handleCheckoutSessionCompleted(supabaseAdmin, session) {
 
   // The Stripe customer belongs to the account, not to any one subscription:
   // the billing portal needs it even for an account whose subscription has
-  // lapsed, which no subscriptions row can supply.
+  // lapsed, which no subscriptions row can supply. This is safe to do
+  // regardless of the price check below — portal access is not entitlement.
   const { error: customerError } = await supabaseAdmin
     .from("customer_accounts")
     .update({ stripe_customer_id: session.customer })
     .eq("id", account.accountId);
   if (customerError) {
     throw new Error(`customer_accounts update failed: ${customerError.message}`);
+  }
+
+  // F-31/C-04: verify the base item Checkout actually sold is one this
+  // deployment recognizes, same allowlist handleSubscriptionUpdated already
+  // enforces. If it isn't, never map this subscription id to the account —
+  // with no subscriptions row, invoice.paid/customer.subscription.updated
+  // can never find one to flip to "active", so device_entitlement() can
+  // never grant capacity from it. This is deliberately a hard refusal, not a
+  // "sync anyway" fallback: unlike handleSubscriptionUpdated (which tolerates
+  // a payload with no item data, since Stripe doesn't always expand items),
+  // this handler always has its own live-fetched line items to check.
+  if (stripe && env.STRIPE_PRICE_ID) {
+    const basePriceId = await resolveCheckoutBasePriceId(stripe, session, env.STRIPE_SEAT_PRICE_ID);
+    if (basePriceId && !isAllowedBasePrice(basePriceId, env)) {
+      const message = `checkout.session.completed for session ${session.id} (stripe_subscription_id=${session.subscription}) reports base price ${basePriceId}, which is not in the configured allowlist — refusing to map/provision this subscription`;
+      console.error(`ALERT: ${message}`);
+      await raiseAlert(supabaseAdmin, {
+        kind: "checkout_unapproved_base_price",
+        severity: "critical",
+        dedupKey: `checkout:${session.id}:unapproved_price`,
+        message,
+      });
+      return;
+    }
   }
 
   // Only the FIRST delivery for a given subscription id sets status. Once
@@ -495,6 +543,11 @@ export async function handleSubscriptionUpdated(
     );
     return;
   }
+  // Captured now, before the update below — some test doubles (and possibly
+  // a real client's row cache) return the same object reference that the
+  // update mutates in place, so reading this field lazily after the update
+  // would see the NEW value and never detect a renewal.
+  const previousPeriodEnd = current?.current_period_end ?? null;
 
   // F-31/C-04: only trust a base price this deployment actually sells. If
   // the payload names a base item at all AND an allowlist is configured
@@ -547,7 +600,10 @@ export async function handleSubscriptionUpdated(
   // unpaid/canceled here (as opposed to the customer.subscription.deleted
   // event) is Stripe's normal dunning outcome for a subscription that
   // simply stops being paid, without ever being explicitly deleted — spec
-  // §6 requires revoking on either.
+  // §6 requires revoking on either. This is the terminal cut (C-04): it
+  // enqueues DISABLE_USER unconditionally and immediately, with no grace —
+  // grace only ever applies to extending a live subscription's expiry below,
+  // never to this branch.
   if (subscription.status === "canceled" || subscription.status === "unpaid") {
     await enqueueDisableForAccount(
       supabaseAdmin,
@@ -556,6 +612,39 @@ export async function handleSubscriptionUpdated(
       `customer.subscription.updated (${subscription.status})`,
       env
     );
+    return;
+  }
+
+  // F-19/C-04: push the new (grace-extended) expiry to devices on this event
+  // too, not only on invoice.paid — Stripe finalizes a renewal invoice (and
+  // therefore invoice.paid) roughly an hour after the new period already
+  // started, and a legacy node enforces `now < expires_at` with no grace of
+  // its own. customer.subscription.updated carries the new period end well
+  // before that invoice fires.
+  //
+  // Only push when the period end genuinely moved forward from what this row
+  // already had — a same-period event (e.g. a seat-pack quantity change from
+  // the dashboard, or cancel_at_period_end being toggled) must not re-push
+  // an unchanged expiry as if it were a renewal. If this is the first time
+  // the row has ever seen a period end (current?.current_period_end is
+  // null — e.g. checkout.session.completed just inserted the row and no
+  // invoice.paid has landed yet), invoice.paid remains the authoritative
+  // first push; skip here rather than guess.
+  const periodAdvanced =
+    previousPeriodEnd &&
+    currentPeriodEnd &&
+    new Date(currentPeriodEnd).getTime() > new Date(previousPeriodEnd).getTime();
+  if (periodAdvanced) {
+    const entitlement = await getEffectiveEntitlement(supabaseAdmin, updated.account_id);
+    if (entitlement) {
+      await syncAccountProvisioningToEntitlement(
+        supabaseAdmin,
+        updated.account_id,
+        entitlement,
+        `subscription-updated:${subscription.id}`,
+        env
+      );
+    }
   }
 }
 
