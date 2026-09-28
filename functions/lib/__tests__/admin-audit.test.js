@@ -29,7 +29,23 @@ describe("writeAdminAudit", () => {
     });
   });
 
-  it("defaults metadata to {} and does not throw when the insert fails", async () => {
+  it("defaults metadata to {}", async () => {
+    insert.mockResolvedValue({ error: null });
+    await writeAdminAudit(supabaseAdmin, {
+      adminUserId: "admin-1",
+      action: "admin.enable_user",
+      targetType: "vpn_account",
+      targetId: 1,
+    });
+    expect(insert).toHaveBeenCalledWith(expect.objectContaining({ metadata: {} }));
+  });
+
+  // F-39: an audit write is the only record a privileged action happened.
+  // Silently swallowing an insert failure (old behavior: log to console,
+  // return success) would let an admin mutation succeed with no audit
+  // trail at all. Callers await this and propagate the failure to the
+  // request instead.
+  it("throws when the insert fails, instead of silently logging and continuing", async () => {
     insert.mockResolvedValue({ error: { message: "db down" } });
     await expect(
       writeAdminAudit(supabaseAdmin, {
@@ -38,6 +54,6 @@ describe("writeAdminAudit", () => {
         targetType: "vpn_account",
         targetId: 1,
       })
-    ).resolves.toBeUndefined();
+    ).rejects.toThrow(/db down/);
   });
 });
