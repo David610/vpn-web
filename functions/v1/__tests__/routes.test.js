@@ -10,7 +10,7 @@ vi.mock("../../lib/account-http.js", () => ({ adminClient: vi.fn(() => db) }));
 const signRouteDirectory = vi.fn();
 vi.mock("../../lib/route-signing.js", () => ({ signRouteDirectory }));
 
-const { onRequestGet } = await import("../routes.js");
+const { onRequestGet, resetRouteCacheForTests } = await import("../routes.js");
 
 const env = { SUPABASE_URL: "https://supabase.test", SUPABASE_SERVICE_ROLE_KEY: "key" };
 
@@ -34,6 +34,23 @@ beforeEach(() => {
   requireUser.mockReset().mockResolvedValue({ user: { id: "user-1" }, claims: { session_id: "sess-1" }, response: null });
   signRouteDirectory.mockReset().mockResolvedValue(ENVELOPE);
   db = makeFakeSupabase({ nodes: [], locations: [], allowed_paths: [] });
+  resetRouteCacheForTests();
+});
+
+describe("GET /v1/routes caching", () => {
+  it("serves a second request within the TTL from cache, without re-querying or re-signing", async () => {
+    await onRequestGet({ env, request: makeRequest() });
+    expect(signRouteDirectory).toHaveBeenCalledTimes(1);
+    await onRequestGet({ env, request: makeRequest() });
+    expect(signRouteDirectory).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-queries and re-signs once the cache is reset (simulating TTL expiry / a new isolate)", async () => {
+    await onRequestGet({ env, request: makeRequest() });
+    resetRouteCacheForTests();
+    await onRequestGet({ env, request: makeRequest() });
+    expect(signRouteDirectory).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("GET /v1/routes", () => {
