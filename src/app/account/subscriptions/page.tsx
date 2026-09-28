@@ -14,6 +14,7 @@ function SubscriptionRow({ sub }: { sub: Subscription }) {
   const [managing, setManaging] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  const [addingPack, setAddingPack] = useState(false);
   const canRemovePack = sub.extraPacks > 0 && sub.capacity - plan.devicesPerPack >= sub.used;
 
   async function setPacks(packs: number) {
@@ -108,7 +109,7 @@ function SubscriptionRow({ sub }: { sub: Subscription }) {
         </div>
 
         <div className="row__actions" style={{ justifyContent: "space-between" }}>
-          <button type="button" className="btn btn-primary btn-sm" disabled={busy !== null} onClick={() => setPacks(sub.extraPacks + 1)}>
+          <button type="button" className="btn btn-primary btn-sm" disabled={busy !== null} onClick={() => setAddingPack(true)}>
             Add 3 devices
           </button>
           {sub.cancelAtPeriodEnd ? (
@@ -165,6 +166,18 @@ function SubscriptionRow({ sub }: { sub: Subscription }) {
         busy={busy === "cancel"}
         onConfirm={cancel}
         onCancel={() => setCancelling(false)}
+      />
+      <ConfirmDialog
+        open={addingPack}
+        title="Add 3 devices?"
+        description={`This adds a device pack to “${sub.name}”. Your monthly total goes from ${euro(monthlyCents(plan, sub.extraPacks))} to ${euro(monthlyCents(plan, sub.extraPacks + 1))}, charged immediately (prorated).`}
+        confirmLabel="Add 3 devices"
+        busy={busy === "packs"}
+        onConfirm={() => {
+          setAddingPack(false);
+          void setPacks(sub.extraPacks + 1);
+        }}
+        onCancel={() => setAddingPack(false)}
       />
     </li>
   );
