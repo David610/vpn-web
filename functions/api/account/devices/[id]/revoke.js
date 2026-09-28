@@ -1,7 +1,9 @@
 import { createClient } from "@supabase/supabase-js";
 import { requireRecentUser, jsonResponse } from "../../../../lib/user-auth.js";
 import { getAccountForUser } from "../../../../lib/accounts.js";
-import { revokeDevice } from "../../../../lib/device-provisioning.js";
+import { revokeDevice, listDeviceIdentities } from "../../../../lib/device-provisioning.js";
+import { checkNodeMutationBudget } from "../../../../lib/node-mutation-budget.js";
+import { rateLimitedResponse } from "../../../../lib/rate-limit.js";
 
 /**
  * Revokes a device: sets status = 'REVOKED' (+ revoked_at) and enqueues
@@ -44,6 +46,21 @@ export async function onRequestPost({ env, request, params }) {
 
     if (device.status === "REVOKED") {
       return jsonResponse({ error: "This device has already been revoked." }, 409);
+    }
+
+    // F-10 (P1): revoking disables every enabled identity on the node it
+    // lives on, which restarts sing-box there and drops every open
+    // connection on that node -- not just this account's. Budget it per
+    // account/node before enqueueing DISABLE_USER
+    // (functions/lib/node-mutation-budget.js), same pattern as
+    // rotate-credentials.js.
+    const identities = await listDeviceIdentities(supabaseAdmin, deviceId);
+    const affectedNodeIds = [...new Set(identities.filter((i) => i.enabled).map((i) => i.node_id))];
+    for (const nodeId of affectedNodeIds) {
+      const withinBudget = await checkNodeMutationBudget(supabaseAdmin, account.accountId, nodeId);
+      if (!withinBudget) {
+        return rateLimitedResponse("Too many device changes for this account recently. Please try again later.");
+      }
     }
 
     // Real revocation: every VPN identity of this device is disabled on the
