@@ -16,10 +16,19 @@ export class AuthRejected extends Error {
 }
 
 async function call(env, path, { body, accessToken } = {}) {
+  // These calls hit GoTrue's public-facing endpoints (password/refresh
+  // grants, signup, logout) on behalf of arbitrary unauthenticated callers.
+  // SUPABASE_ANON_KEY must be present and used here -- it must never fall
+  // back to SUPABASE_SERVICE_ROLE_KEY, which would hand a privileged key to
+  // whatever GoTrue does with the `apikey` header on a public route. Fail
+  // closed instead of silently using the wrong key.
+  if (!env.SUPABASE_ANON_KEY) {
+    throw new Error("gotrue: SUPABASE_ANON_KEY is not configured");
+  }
   const res = await fetch(`${env.SUPABASE_URL}/auth/v1${path}`, {
     method: "POST",
     headers: {
-      apikey: env.SUPABASE_ANON_KEY ?? env.SUPABASE_SERVICE_ROLE_KEY,
+      apikey: env.SUPABASE_ANON_KEY,
       "Content-Type": "application/json",
       ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
     },

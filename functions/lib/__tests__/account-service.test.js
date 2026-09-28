@@ -28,7 +28,12 @@ const { makeFakeSupabase } = await import("./fake-supabase.js");
 
 const END = "2030-01-01T00:00:00.000Z";
 const user = { id: "user-1", email: "me@example.com" };
-const env = { STRIPE_SEAT_PRICE_ID: "price_pack", SUPABASE_URL: "https://sb.test", SUPABASE_SERVICE_ROLE_KEY: "k" };
+const env = {
+  STRIPE_SEAT_PRICE_ID: "price_pack",
+  SUPABASE_URL: "https://sb.test",
+  SUPABASE_SERVICE_ROLE_KEY: "k",
+  SUPABASE_ANON_KEY: "anon-k",
+};
 const uuid = (n) => `00000000-0000-4000-8000-00000000000${n}`;
 
 function db({ devices = [], subscriptions } = {}) {
