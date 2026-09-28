@@ -25,6 +25,7 @@ const {
   cancelSubscription,
   ensureSessionDevice,
   requestAccountDeletion,
+  finalizeAccountDeletions,
 } = await import("../account-service.js");
 const { makeFakeSupabase } = await import("./fake-supabase.js");
 
@@ -270,5 +271,122 @@ describe("requestAccountDeletion", () => {
     expect(res.status).toBe(403);
     expect(stripe.subscriptions.cancel).not.toHaveBeenCalled();
     expect(fake._tables.devices[0].status).toBe("ACTIVE");
+  });
+
+  // F-08/C-05: cancel billing -> revoke devices -> ban sign-in, in that
+  // order, so a banned user is never left still being charged.
+  it("cancels Stripe and revokes devices before banning sign-in", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ access_token: "t" }), { status: 200 })));
+    const fake = db({ devices: [dev(1, 1)] });
+    const order = [];
+    stripe.subscriptions.cancel.mockImplementation(async () => {
+      order.push("cancel");
+      return {};
+    });
+    const originalUpdate = fake.auth.admin.updateUserById;
+    fake.auth.admin.updateUserById = vi.fn(async (...args) => {
+      order.push("ban");
+      return originalUpdate(...args);
+    });
+
+    await requestAccountDeletion(fake, env, user, "secret-password");
+
+    expect(order.indexOf("ban")).toBeGreaterThan(order.lastIndexOf("cancel"));
+  });
+
+  it("is idempotent under repeated calls: does not re-cancel an already-canceled subscription or reset the timestamp", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ access_token: "t" }), { status: 200 })));
+    const fake = db({ devices: [dev(1, 1)] });
+
+    await requestAccountDeletion(fake, env, user, "secret-password");
+    const firstTimestamp = fake._tables.customer_accounts[0].deletion_requested_at;
+    stripe.subscriptions.cancel.mockClear();
+
+    const res = await requestAccountDeletion(fake, env, user, "secret-password");
+
+    expect(res.status).toBe(202);
+    // Both subscriptions were already canceled on the first pass, so the
+    // second pass calls Stripe zero times, not two more.
+    expect(stripe.subscriptions.cancel).not.toHaveBeenCalled();
+    expect(fake._tables.customer_accounts[0].deletion_requested_at).toBe(firstTimestamp);
+  });
+
+  it("converges when a prior attempt died right after canceling Stripe but before revoking devices", async () => {
+    // Simulates a crash mid-saga: billing is already canceled, but the
+    // device is still ACTIVE and the user isn't banned yet.
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ access_token: "t" }), { status: 200 })));
+    const fake = db({ devices: [dev(1, 1)] });
+    fake._tables.customer_accounts[0].deletion_requested_at = "2026-01-01T00:00:00Z";
+    fake._tables.subscriptions.forEach((s) => (s.status = "canceled"));
+
+    const res = await requestAccountDeletion(fake, env, user, "secret-password");
+
+    expect(res.status).toBe(202);
+    expect(stripe.subscriptions.cancel).not.toHaveBeenCalled();
+    expect(fake._tables.devices[0].status).toBe("REVOKED");
+    expect(fake.auth.admin.updateUserById).toHaveBeenCalledWith("user-1", { ban_duration: "876000h" });
+  });
+
+  it("treats Stripe's 'already canceled' error as success rather than getting stuck", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ access_token: "t" }), { status: 200 })));
+    const fake = db({ devices: [dev(1, 1)] });
+    stripe.subscriptions.cancel.mockRejectedValueOnce(new Error("This subscription is already canceled."));
+    stripe.subscriptions.cancel.mockResolvedValueOnce({});
+
+    const res = await requestAccountDeletion(fake, env, user, "secret-password");
+
+    expect(res.status).toBe(202);
+    expect(fake._tables.subscriptions.every((s) => s.status === "canceled")).toBe(true);
+    expect(fake.auth.admin.updateUserById).toHaveBeenCalled();
+  });
+});
+
+describe("finalizeAccountDeletions resume path (F-08/C-05)", () => {
+  function pendingDb({ deviceStatus = "ACTIVE", subStatus = "active", enabledVpn = false } = {}) {
+    const fake = makeFakeSupabase({
+      customer_accounts: [{ id: "acct-1", deletion_requested_at: "2026-01-01T00:00:00Z" }],
+      account_members: [{ account_id: "acct-1", user_id: "user-1", role: "owner" }],
+      subscriptions: [
+        { id: 1, account_id: "acct-1", name: "Personal", stripe_subscription_id: "sub_p", status: subStatus, current_period_end: END, extra_seats: 0, created_at: "2026-01-01" },
+      ],
+      devices: [dev(1, 1, { status: deviceStatus })],
+      vpn_accounts: enabledVpn ? [{ id: 1, user_id: "user-1", vpn_user_id: "vpn-1", node_id: "node-1", enabled: true }] : [],
+      provisioning_jobs: [],
+      admin_entitlements: [],
+    });
+    fake.auth = { admin: { updateUserById: vi.fn(async () => ({ error: null })), deleteUser: vi.fn(async () => ({ error: null })) } };
+    return fake;
+  }
+
+  it("without env: behaves exactly as before (finalize-check only, no saga resume)", async () => {
+    const fake = pendingDb();
+    await finalizeAccountDeletions(fake, { limit: 10 });
+    // Billing/device state untouched — no env means no resume attempt.
+    expect(fake._tables.subscriptions[0].status).toBe("active");
+    expect(fake._tables.devices[0].status).toBe("ACTIVE");
+  });
+
+  it("with env: resumes an interrupted saga (cancels billing, revokes the device) before checking readiness", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ access_token: "t" }), { status: 200 })));
+    const fake = pendingDb();
+    await finalizeAccountDeletions(fake, { limit: 10, env });
+    expect(fake._tables.subscriptions[0].status).toBe("canceled");
+    expect(fake._tables.devices[0].status).toBe("REVOKED");
+    expect(fake.auth.admin.updateUserById).toHaveBeenCalledWith("user-1", { ban_duration: "876000h" });
+  });
+
+  it("with env: does not finalize (delete the auth user) while a VPN identity is still enabled", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ access_token: "t" }), { status: 200 })));
+    const fake = pendingDb({ enabledVpn: true });
+    const finished = await finalizeAccountDeletions(fake, { limit: 10, env });
+    expect(finished).toEqual([]);
+    expect(fake.auth.admin.deleteUser).not.toHaveBeenCalled();
+  });
+
+  it("with env: a fully-converged saga (nothing left to resume) still finalizes normally", async () => {
+    const fake = pendingDb({ deviceStatus: "REVOKED", subStatus: "canceled" });
+    const finished = await finalizeAccountDeletions(fake, { limit: 10, env });
+    expect(finished).toEqual(["acct-1"]);
+    expect(fake.auth.admin.deleteUser).toHaveBeenCalledWith("user-1");
   });
 });
