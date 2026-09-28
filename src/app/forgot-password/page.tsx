@@ -4,7 +4,6 @@ import { useState, type FormEvent } from "react";
 import Link from "next/link";
 import Nav from "@/components/Nav";
 import Footer from "@/components/Footer";
-import { supabase } from "@/lib/supabase";
 
 export default function ForgotPasswordPage() {
   const [email, setEmail] = useState("");
@@ -14,18 +13,27 @@ export default function ForgotPasswordPage() {
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setSubmitting(true);
-    // Anti-enumerate: always show the same generic success message regardless
-    // of whether this email exists in the system. Do not surface the error.
-    await supabase.auth
-      .resetPasswordForEmail(email, {
-        redirectTo:
-          typeof window !== "undefined"
-            ? `${window.location.origin}/auth/reset-password/`
-            : undefined,
-      })
-      .catch((err) => {
-        console.error("resetPasswordForEmail failed:", err.message);
+    // F-13: goes through our own rate-limited server-side proxy
+    // (functions/api/account/password-reset.js) rather than calling
+    // supabase.auth.resetPasswordForEmail() directly from the browser, so
+    // this is throttled per-email (with an IP backstop) instead of relying
+    // only on GoTrue's own coarse per-IP limits. The route always returns
+    // the same generic shape, so there is nothing to branch on here either.
+    try {
+      await fetch("/api/account/password-reset", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email,
+          redirectTo:
+            typeof window !== "undefined"
+              ? `${window.location.origin}/auth/reset-password/`
+              : undefined,
+        }),
       });
+    } catch (err) {
+      console.error("password reset request failed:", err);
+    }
     setSubmitting(false);
     setSubmitted(true);
   }
