@@ -1,7 +1,7 @@
 import { createClient } from "@supabase/supabase-js";
 import { requireUser, requireRecentUser, jsonResponse } from "../../lib/user-auth.js";
 import { getAccountForUser, getEffectiveEntitlement } from "../../lib/accounts.js";
-import { MAX_ACTIVE_DEVICES_PER_ACCOUNT } from "../../lib/device-provisioning.js";
+import { MAX_ACTIVE_DEVICES_PER_ACCOUNT, placeDevice } from "../../lib/device-provisioning.js";
 import { syncAccountProvisioningToEntitlement } from "../../lib/provision-entitlement.js";
 import {
   isLive,
@@ -9,6 +9,8 @@ import {
   pickSubscriptionWithRoom,
 } from "../../lib/subscriptions.js";
 import { deviceCapacity } from "../../lib/seat-constants.js";
+import { checkNodeMutationBudget } from "../../lib/node-mutation-budget.js";
+import { rateLimitedResponse } from "../../lib/rate-limit.js";
 
 /**
  * Lists the caller's account's devices, each annotated with its current
@@ -230,6 +232,29 @@ export async function onRequestPost({ env, request }) {
         .from("device_profile_assignments")
         .insert({ device_id: device.id, profile_id: profileId });
       if (assignError) throw new Error(`device_profile_assignments insert failed: ${assignError.message}`);
+    }
+
+    // F-10 (P1): placing this device enqueues CREATE_USER on whichever node
+    // it lands on, which restarts sing-box there and drops every open
+    // connection on that node -- not just this account's. Budget it the
+    // same way rotate-credentials.js does, per account/node
+    // (functions/lib/node-mutation-budget.js). placeDevice() only decides +
+    // persists sticky placement, it never enqueues a job, so this is safe
+    // to call again (idempotently) from reconcileDeviceProvisioning below.
+    const placement = await placeDevice(supabaseAdmin, env, device);
+    if (placement.ok) {
+      const affectedNodeIds = [...new Set([placement.entryNodeId, placement.exitNodeId].filter(Boolean))];
+      for (const nodeId of affectedNodeIds) {
+        const withinBudget = await checkNodeMutationBudget(supabaseAdmin, account.accountId, nodeId);
+        if (!withinBudget) {
+          // Reject the add outright rather than leaving an unprovisioned
+          // device row behind -- nothing else periodically retries a single
+          // stuck device's placement.
+          await supabaseAdmin.from("device_profile_assignments").delete().eq("device_id", device.id);
+          await supabaseAdmin.from("devices").delete().eq("id", device.id);
+          return rateLimitedResponse("Too many device changes for this account recently. Please try again later.");
+        }
+      }
     }
 
     let provisioning = null;
