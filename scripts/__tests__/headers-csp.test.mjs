@@ -51,7 +51,7 @@ describe("public/_headers CSP (F-15)", () => {
 
   it("site-wide CSP enforces Trusted Types with no unsafe script-src", () => {
     expect(siteWide["require-trusted-types-for"]).toEqual(["'script'"]);
-    expect(siteWide["trusted-types"]).toEqual(["default"]);
+    expect(siteWide["trusted-types"]).toEqual(["default", "nextjs#bundler"]);
     expect(siteWide["script-src"]).not.toContain("'unsafe-inline'");
     expect(siteWide["script-src"]).not.toContain("'unsafe-eval'");
   });
@@ -59,7 +59,7 @@ describe("public/_headers CSP (F-15)", () => {
   it("admin CSP also enforces Trusted Types", () => {
     for (const block of [admin, adminWildcard]) {
       expect(block["require-trusted-types-for"]).toEqual(["'script'"]);
-      expect(block["trusted-types"]).toEqual(["default"]);
+      expect(block["trusted-types"]).toEqual(["default", "nextjs#bundler"]);
     }
   });
 
@@ -75,7 +75,11 @@ describe("public/_headers CSP (F-15)", () => {
       const scriptSrc = block["script-src"] ?? [];
       const connectSrc = block["connect-src"] ?? [];
       for (const token of [...scriptSrc, ...connectSrc]) {
-        expect(token === "'self'" || token.includes("supabase.co")).toBe(true);
+        // 'nonce-...' is the build-time hydration nonce every route needs
+        // (scripts/apply-csp-nonce.mjs) -- it authorizes this build's own
+        // Next.js inline scripts, not a third-party origin.
+        const isNonce = token.startsWith("'nonce-");
+        expect(token === "'self'" || isNonce || token.includes("supabase.co")).toBe(true);
       }
     }
   });

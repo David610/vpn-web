@@ -4,16 +4,22 @@
   Referrer-Policy: strict-origin-when-cross-origin
   Permissions-Policy: camera=(), microphone=(), geolocation=(), browsing-topics=()
   X-Permitted-Cross-Domain-Policies: none
-  Content-Security-Policy: default-src 'self'; script-src 'self' 'nonce-__CSP_NONCE__'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' https://*.supabase.co; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; require-trusted-types-for 'script'; trusted-types default
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'nonce-__CSP_NONCE__'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' https://*.supabase.co; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; require-trusted-types-for 'script'; trusted-types default nextjs#bundler
 
 # F-15 (Trusted Types): require-trusted-types-for 'script' forces every
 # DOM-XSS-sink assignment (innerHTML/outerHTML writes, script.src/text,
 # document.write, eval/Function-string, Range.createContextualFragment) in
 # this origin to go through a Trusted Types policy or be rejected by the
-# browser. `trusted-types default` is the only policy name this app is
-# allowed to create; public/trusted-types-policy.js registers it as a
-# pass-through (see that file's own comment for why pass-through, not a
-# sanitizer, is the correct shape here) and is loaded next/script
+# browser. `trusted-types` allows exactly two policy names: `default`
+# (registered by public/trusted-types-policy.js as a pass-through -- see
+# that file's own comment for why pass-through, not a sanitizer, is the
+# correct shape here) and `nextjs#bundler`, which Next.js's own webpack
+# runtime creates itself at page load to satisfy Trusted Types for its own
+# module loading -- merging Trusted Types enforcement with the CSP-nonce
+# fix (round 3) surfaced this: without allowing `nextjs#bundler` by name,
+# the browser blocks Next's own bundler from registering its policy and the
+# page never hydrates, exactly the same failure mode as the original
+# script-src bug this pass already fixed once. `default` is loaded next/script
 # strategy="beforeInteractive" from the root layout so it runs before
 # anything else, including the Telegram Mini App's third-party bootstrap
 # script. A re-audit of src/ and functions/ for this round found no
@@ -149,12 +155,12 @@
 /telegram
   ! X-Frame-Options
   ! Content-Security-Policy
-  Content-Security-Policy: default-src 'self'; script-src 'self' 'nonce-__CSP_NONCE__' https://telegram.org; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://*.supabase.co; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self' https://web.telegram.org https://*.telegram.org; require-trusted-types-for 'script'; trusted-types default
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'nonce-__CSP_NONCE__' https://telegram.org; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://*.supabase.co; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self' https://web.telegram.org https://*.telegram.org; require-trusted-types-for 'script'; trusted-types default nextjs#bundler
 
 /telegram/*
   ! X-Frame-Options
   ! Content-Security-Policy
-  Content-Security-Policy: default-src 'self'; script-src 'self' 'nonce-__CSP_NONCE__' https://telegram.org; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://*.supabase.co; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self' https://web.telegram.org https://*.telegram.org; require-trusted-types-for 'script'; trusted-types default
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'nonce-__CSP_NONCE__' https://telegram.org; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://*.supabase.co; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self' https://web.telegram.org https://*.telegram.org; require-trusted-types-for 'script'; trusted-types default nextjs#bundler
 
 # F-15 (admin origin isolation, code-only half): a true separate origin for
 # /admin (e.g. admin.arcana.example on its own Cloudflare Pages project)
@@ -178,7 +184,7 @@
 # build-time nonce as the site-wide rule -- omitting it here would
 # reintroduce this pass's own P0 hydration bug scoped to /admin only.
 /admin
-  Content-Security-Policy: default-src 'self'; script-src 'self' 'nonce-__CSP_NONCE__'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' https://*.supabase.co; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; require-trusted-types-for 'script'; trusted-types default
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'nonce-__CSP_NONCE__'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' https://*.supabase.co; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; require-trusted-types-for 'script'; trusted-types default nextjs#bundler
 
 /admin/*
-  Content-Security-Policy: default-src 'self'; script-src 'self' 'nonce-__CSP_NONCE__'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' https://*.supabase.co; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; require-trusted-types-for 'script'; trusted-types default
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'nonce-__CSP_NONCE__'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' https://*.supabase.co; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; require-trusted-types-for 'script'; trusted-types default nextjs#bundler
