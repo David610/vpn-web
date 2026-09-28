@@ -70,3 +70,52 @@ insert into public.abuse_signals (vpn_account_id, distinct_ip_count, window_star
 values
   (1, 2, now() - interval '1 day', now(), false),
   (2, 9, now() - interval '1 day', now(), true);
+
+-- locations / devices / connection_profiles / device_profile_assignments /
+-- telegram_links: one row each for user A and user B so rls_test.sql has
+-- real cross-account data to prove isolation against for the fleet-platform
+-- tables (20260924000000_fleet_foundations.sql, 20260924060000_telegram_
+-- linking.sql), same rationale as every other table in this file.
+insert into public.locations (id, country_code, city, display_name, enabled)
+values ('10000000-0000-4000-8000-000000000001', 'DE', 'Berlin', 'Berlin (test)', true);
+
+insert into public.devices (id, account_id, user_id, name, status)
+select
+  case m.user_id
+    when '11111111-1111-1111-1111-111111111111'::uuid then '20000000-0000-4000-8000-00000000000a'::uuid
+    when '22222222-2222-2222-2222-222222222222'::uuid then '20000000-0000-4000-8000-00000000000b'::uuid
+  end,
+  m.account_id,
+  m.user_id,
+  'Seed device',
+  'ACTIVE'
+from public.account_members m
+where m.user_id in (
+  '11111111-1111-1111-1111-111111111111',
+  '22222222-2222-2222-2222-222222222222'
+);
+
+insert into public.connection_profiles (id, account_id, name, routing_mode)
+select
+  case m.user_id
+    when '11111111-1111-1111-1111-111111111111'::uuid then '30000000-0000-4000-8000-00000000000a'::uuid
+    when '22222222-2222-2222-2222-222222222222'::uuid then '30000000-0000-4000-8000-00000000000b'::uuid
+  end,
+  m.account_id,
+  'Seed profile',
+  'AUTO'
+from public.account_members m
+where m.user_id in (
+  '11111111-1111-1111-1111-111111111111',
+  '22222222-2222-2222-2222-222222222222'
+);
+
+insert into public.device_profile_assignments (device_id, profile_id)
+values
+  ('20000000-0000-4000-8000-00000000000a', '30000000-0000-4000-8000-00000000000a'),
+  ('20000000-0000-4000-8000-00000000000b', '30000000-0000-4000-8000-00000000000b');
+
+insert into public.telegram_links (user_id, telegram_user_id, telegram_username)
+values
+  ('11111111-1111-1111-1111-111111111111', 1001, 'user_a_tg'),
+  ('22222222-2222-2222-2222-222222222222', 1002, 'user_b_tg');
