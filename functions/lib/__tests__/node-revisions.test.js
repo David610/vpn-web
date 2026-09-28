@@ -66,8 +66,17 @@ describe("createNodeRevision", () => {
     expect(supabase.jobsInsert).toHaveBeenCalledWith({
       node_id: "de-fra-1",
       job_type: "APPLY_NODE_REVISION",
+      idempotency_key: "apply-revision:de-fra-1:2",
       payload: { revision: 2 },
     });
+  });
+
+  it("F-17 regression: always sets a deterministic idempotency_key so the NOT NULL constraint never fails the enqueue", async () => {
+    const supabase = makeSupabase({ latestRevision: 0 });
+    await createNodeRevision(supabase, { nodeId: "us-nyc-2", config: {} });
+    expect(supabase.jobsInsert).toHaveBeenCalledWith(
+      expect.objectContaining({ idempotency_key: "apply-revision:us-nyc-2:1" })
+    );
   });
 
   it("propagates a node_revisions insert error instead of silently advancing desired_revision", async () => {

@@ -1,8 +1,19 @@
 /**
  * Writes one row to admin_audit_log. Every /api/admin/* mutation route
  * calls this after its provisioning_jobs insert succeeds (never before —
- * an audit-log write failure must not block a real mutation, and a
- * mutation failure must not produce a misleading audit row).
+ * a mutation failure must not produce a misleading audit row).
+ *
+ * F-39: this is still a separate write after the mutation, not the same
+ * transaction/RPC (the mutation and the audit insert can still diverge if
+ * the process dies between the two). Short of moving every admin mutation
+ * into a single RPC — tracked as follow-up work, and for routes whose
+ * mutation logic is owned by CP-BILL/CP-FLEET, only they can make that
+ * change — this function is hardened to fail closed instead of
+ * best-effort: an audit-log write failure now throws, so the caller's
+ * response reflects that the operation is not fully recorded rather than
+ * silently logging to the console and returning success. Callers that
+ * want the mutation itself to still succeed even if audit logging fails
+ * must decide that explicitly, not get it as a hidden default.
  *
  * NEVER put a subscription URL, VPN token, node API key, or private key
  * into metadata. metadata is for identifiers only (node_id, job_id,
@@ -22,5 +33,6 @@ export async function writeAdminAudit(
   });
   if (error) {
     console.error("writeAdminAudit: insert failed:", error.message);
+    throw new Error(`writeAdminAudit: insert failed: ${error.message}`);
   }
 }

@@ -12,6 +12,32 @@
  */
 
 import { CANARY_SESSION_CAP } from "./fleet-operations.js";
+import { reconcileAlert } from "./alerts.js";
+
+/**
+ * F-36: placement failing closed (no eligible node) is routine in isolation
+ * -- a burst of signups can legitimately outrun capacity for a few seconds
+ * -- but a *sustained* fail-closed for the same location/mode is real
+ * capacity trouble worth paging on. reconcileAlert's raise/resolve-by-dedup
+ * pattern gives us that for free: the alert opens on the first fail-closed
+ * for a key and stays open (raise is a no-op while already open) until a
+ * later call for the same key succeeds and resolves it, so the operational
+ * signal is "still failing", not "failed once".
+ */
+async function reportPlacementOutcome(supabaseAdmin, { dedupKey, active, message }) {
+  try {
+    await reconcileAlert(supabaseAdmin, {
+      kind: "placement_fail_closed",
+      severity: "warning",
+      dedupKey,
+      active,
+      message,
+    });
+  } catch {
+    // Never let alerting itself break placement -- reconcileAlert already
+    // logs its own failures via logging.js.
+  }
+}
 
 /**
  * Pure placement logic: no I/O, no Supabase client. `candidates` is
@@ -110,7 +136,16 @@ export async function scheduleNodeForDevice(supabaseAdmin, { deviceId, exitLocat
     .filter(isUnderCapacity);
 
   const nodeId = selectNodeForDevice({ candidates, stickyNodeId: sticky?.node_id ?? null });
-  if (!nodeId) return null;
+  const dedupKey = `placement:direct:${exitLocationId}`;
+  if (!nodeId) {
+    await reportPlacementOutcome(supabaseAdmin, {
+      dedupKey,
+      active: true,
+      message: `Direct placement in location ${exitLocationId} failed closed: no eligible READY/CANARY EXIT node under capacity`,
+    });
+    return null;
+  }
+  await reportPlacementOutcome(supabaseAdmin, { dedupKey, active: false });
 
   if (nodeId !== sticky?.node_id) {
     const { error: upsertError } = await supabaseAdmin
@@ -212,7 +247,16 @@ export async function scheduleDoubleHopForDevice(
   });
   // Fail closed on a partial placement too: a double-hop device must never
   // end up with only one hop scheduled.
-  if (!relayNodeId || !exitNodeId) return null;
+  const dedupKey = `placement:double-hop:${entryLocationId}:${exitLocationId}`;
+  if (!relayNodeId || !exitNodeId) {
+    await reportPlacementOutcome(supabaseAdmin, {
+      dedupKey,
+      active: true,
+      message: `Double-hop placement ${entryLocationId}->${exitLocationId} failed closed: missing ${!relayNodeId ? "RELAY" : "EXIT"} candidate under capacity`,
+    });
+    return null;
+  }
+  await reportPlacementOutcome(supabaseAdmin, { dedupKey, active: false });
 
   const writes = [];
   if (relayNodeId !== relaySticky?.node_id) {
@@ -279,7 +323,16 @@ export async function scheduleAutoForDevice(supabaseAdmin, { deviceId, preferred
   const stickyNodeId =
     [sticky?.node_id, preferredNodeId].find((id) => id && candidates.some((c) => c.nodeId === id)) ?? null;
   const nodeId = selectNodeForDevice({ candidates, stickyNodeId });
-  if (!nodeId) return null;
+  const dedupKey = "placement:auto";
+  if (!nodeId) {
+    await reportPlacementOutcome(supabaseAdmin, {
+      dedupKey,
+      active: true,
+      message: "AUTO placement failed closed: no eligible EXIT node under capacity in any allowed location",
+    });
+    return null;
+  }
+  await reportPlacementOutcome(supabaseAdmin, { dedupKey, active: false });
 
   if (nodeId !== sticky?.node_id) {
     const { error: upsertError } = await supabaseAdmin

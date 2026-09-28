@@ -5,6 +5,8 @@ import { evaluateProbeResult, SILENCE_ELIGIBLE_STATES } from "../../lib/node-hea
 import { failSilentNodes } from "../../lib/node-silence-failover.js";
 import { protocolAllowsRecovery, sanitizeProtocolReport } from "../../lib/protocol-health.js";
 import { applyProtocolReport } from "../../lib/protocol-health-store.js";
+import { logger, requestIdFrom } from "../../lib/logging.js";
+import { reconcileAlert as reconcileAlertShared } from "../../lib/alerts.js";
 
 const MAX_HEARTBEAT_BYTES = 64 * 1024;
 
@@ -30,6 +32,7 @@ function safeVersion(value) {
 }
 
 export async function onRequestPost({ env, request }) {
+  const log = logger(requestIdFrom(request), { fn: "agent/heartbeat" });
   const supabaseAdmin = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
     auth: { autoRefreshToken: false, persistSession: false },
   });
@@ -87,13 +90,13 @@ export async function onRequestPost({ env, request }) {
   const protocolReport = sanitizeProtocolReport(body.protocol_probe);
   if (protocolReport) {
     if (protocolReport.tlsInsecure) {
-      console.warn(`agent/heartbeat: node ${nodeId} runs protocol probes with tls_insecure_for_tests; hysteria2 results ignored`);
+      log.warn("heartbeat.protocol_probe_tls_insecure", { node_id: nodeId });
     }
     if (protocolReport.certDays !== null) update.hysteria2_cert_days = protocolReport.certDays;
     try {
       await applyProtocolReport({ supabase: supabaseAdmin, reporterNodeId: nodeId, report: protocolReport, autoHealth });
     } catch (err) {
-      console.error("agent/heartbeat: protocol report failed:", err?.message ?? err);
+      log.error("heartbeat.protocol_report_failed", { node_id: nodeId, error: err?.message ?? String(err) });
     }
   }
 
@@ -138,7 +141,7 @@ export async function onRequestPost({ env, request }) {
   // lose this heartbeat's data.
   const { error } = await supabaseAdmin.from("nodes").update(update).eq("node_id", nodeId);
   if (error) {
-    console.error("agent/heartbeat: node update failed:", error.message);
+    log.error("heartbeat.node_update_failed", { node_id: nodeId, error: error.message });
     return json({ error: "Internal error" }, 500);
   }
 
@@ -158,7 +161,7 @@ export async function onRequestPost({ env, request }) {
       .select("node_id")
       .maybeSingle();
     if (transitionError) {
-      console.error("agent/heartbeat: lifecycle transition failed:", transitionError.message);
+      log.error("heartbeat.lifecycle_transition_failed", { node_id: nodeId, error: transitionError.message });
       resultingState = undefined;
     } else {
       // Lost the race: the state is now whatever someone else set.
@@ -179,32 +182,23 @@ export async function onRequestPost({ env, request }) {
     .not("enrollment_token_hash", "is", null);
   if (tokenClearError) {
     // Non-fatal: the token still expires on its own TTL.
-    console.error("agent/heartbeat: enrollment token clear failed:", tokenClearError.message);
+    log.error("heartbeat.enrollment_token_clear_failed", { node_id: nodeId, error: tokenClearError.message });
   }
 
-  async function reconcileAlert(kind, active, severity, message) {
-    const dedupKey = `node:${nodeId}:${kind}`;
-    if (active) {
-      const { error: alertError } = await supabaseAdmin.from("operational_alerts").insert({
-        alert_type: kind,
-        severity,
-        dedup_key: dedupKey,
-        node_id: nodeId,
-        message,
-      });
-      if (alertError && alertError.code !== "23505") {
-        console.error("agent/heartbeat: alert insert failed:", alertError.message);
-      }
-    } else {
-      const { error: resolveError } = await supabaseAdmin
-        .from("operational_alerts")
-        .update({ status: "resolved", resolved_at: new Date().toISOString() })
-        .eq("dedup_key", dedupKey)
-        .eq("status", "open");
-      if (resolveError) {
-        console.error("agent/heartbeat: alert resolve failed:", resolveError.message);
-      }
-    }
+  // F-36: delegate to the shared alerts.js helper (same raise/resolve-by-
+  // dedup-key behaviour this file used to hand-roll) so this call site's
+  // failures get the same structured logging as every other alert consumer,
+  // instead of a fourth copy-pasted insert/update pair.
+  function reconcileAlert(kind, active, severity, message) {
+    return reconcileAlertShared(supabaseAdmin, {
+      kind,
+      active,
+      severity,
+      dedupKey: `node:${nodeId}:${kind}`,
+      message,
+      nodeId,
+      requestId: log.requestId,
+    });
   }
 
   if (autoHealth) {

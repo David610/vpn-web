@@ -2,6 +2,34 @@ import { createClient } from "@supabase/supabase-js";
 import { authenticateNode } from "../../../../lib/node-auth.js";
 import { encryptSecret } from "../../../../lib/crypto.js";
 import { finalizeCreatedIdentity, resolveLegacyDeviceForJob } from "../../../../lib/identity-lifecycle.js";
+import { validateJobClaim } from "../../../../lib/job-claims.js";
+
+// provisioning_jobs.result is stored in plaintext and is readable by
+// service_role/admins (see functions/lib/admin-sanitize.js's redaction,
+// which is defense-in-depth, not the primary control). The agent's
+// `result` payload can carry the plaintext subscription_url/
+// provisioning_url -- those are the secrets vpn_secrets exists to encrypt
+// (functions/lib/crypto.js, AES-GCM) and are the ONLY copies customers
+// ever read (functions/api/vpn/config.js decrypts vpn_secrets; nothing
+// reads provisioning_jobs.result for that purpose). Writing the agent's
+// result object verbatim here would put a second, unencrypted copy of the
+// same secret next to the encrypted one, defeating the point of encrypting
+// it. So only a small, non-secret allowlist is ever persisted -- anything
+// else the agent sends in `result` (including any URL/token-shaped field)
+// is dropped before this row is written.
+const RESULT_ALLOWLIST = ["vpn_user_id"];
+
+function sanitizeStoredResult(result) {
+  if (!result || typeof result !== "object") return {};
+  const clean = {};
+  for (const key of RESULT_ALLOWLIST) {
+    if (key in result) clean[key] = result[key];
+  }
+  // Record only that a credential was reported, never its value.
+  if (typeof result.subscription_url === "string") clean.subscription_url_reported = true;
+  if (typeof result.provisioning_url === "string") clean.provisioning_url_reported = true;
+  return clean;
+}
 
 // Cross-repo idempotency contract (for the provisioning agent in the
 // sibling singbox-vpn repo): on a 5xx response from this endpoint, the
@@ -40,7 +68,7 @@ export async function onRequestPost({ env, request, params }) {
   try {
     const { data: job, error: jobError } = await supabaseAdmin
       .from("provisioning_jobs")
-      .select("id, job_type, payload, vpn_account_id, node_id, status")
+      .select("id, job_type, payload, vpn_account_id, node_id, status, claim_token, lease_expires_at")
       .eq("id", jobId)
       .maybeSingle();
     if (jobError) {
@@ -50,17 +78,41 @@ export async function onRequestPost({ env, request, params }) {
         headers: { "Content-Type": "application/json" },
       });
     }
+    // F-09/C-10: a missing job (or one that belongs to a different node,
+    // which an agent should never legitimately hit) is now 410 job_gone,
+    // not 404 -- the agent's own contract treats 404/409/410 on
+    // complete/fail identically (terminal, drop and log), so this only
+    // changes what shows up in logs, not agent behavior.
     if (!job || job.node_id !== nodeId) {
-      return new Response(JSON.stringify({ error: "Job not found" }), {
-        status: 404,
+      return new Response(JSON.stringify({ error: "job_gone" }), {
+        status: 410,
         headers: { "Content-Type": "application/json" },
       });
     }
-    if (job.status === "done") {
+    const claimCheck = validateJobClaim(job, body, {
+      requireToken: env.REQUIRE_CLAIM_TOKEN === "true",
+    });
+    if (!claimCheck.ok) {
+      return new Response(JSON.stringify({ error: claimCheck.error }), {
+        status: claimCheck.status,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    if (claimCheck.terminal === "done") {
       // Duplicate report (agent retried a request whose response it
       // never saw) — idempotent no-op, not an error.
       return new Response(JSON.stringify({ ok: true, duplicate: true }), {
         status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    if (claimCheck.terminal === "failed") {
+      // The reaper already gave up on this job (attempts exhausted) before
+      // this (very late) completion report arrived. Treat as stale rather
+      // than resurrecting a failed job as done out from under any alert/
+      // re-placement that already fired for it.
+      return new Response(JSON.stringify({ error: "stale_claim" }), {
+        status: 409,
         headers: { "Content-Type": "application/json" },
       });
     }
@@ -179,8 +231,10 @@ export async function onRequestPost({ env, request, params }) {
       .update({
         status: "done",
         completed_at: new Date().toISOString(),
-        result,
+        result: sanitizeStoredResult(result),
         vpn_account_id: vpnAccountId,
+        claim_token: null,
+        lease_expires_at: null,
       })
       .eq("id", jobId);
     if (updateError) throw new Error(`provisioning_jobs update failed: ${updateError.message}`);

@@ -25,6 +25,34 @@ export async function onRequestPost({ env, request }) {
       console.error("account/password: Supabase update failed:", error.message);
       return jsonResponse({ error: "Could not update password." }, 400);
     }
+
+    // F-22: a stolen session should not survive its owner changing the
+    // password specifically to invalidate it. `scope: "others"` revokes
+    // every session for this user except the one making this request, so
+    // the caller stays signed in on this device while every other
+    // device/token is signed out. This uses admin.signOut(jwt, scope) with
+    // the caller's own access token, not a per-user-id revocation (GoTrue's
+    // admin API has no such call) — it works because "others" is scoped
+    // relative to the session behind the supplied token.
+    //
+    // This does not close the gap for symmetric-key (HS256) Supabase
+    // projects: those sessions' access tokens stay valid for their full
+    // lifetime regardless of server-side revocation, since verification
+    // never calls back to GoTrue. Closing that fully requires migrating to
+    // asymmetric (RS256/ES256) signing keys so every verification path
+    // checks live session state -- tracked separately, not done here.
+    const authHeader = request.headers.get("Authorization");
+    const currentAccessToken = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
+    if (currentAccessToken) {
+      const { error: signOutError } = await supabaseAdmin.auth.admin.signOut(
+        currentAccessToken,
+        "others"
+      );
+      if (signOutError) {
+        console.error("account/password: sign-out-others failed:", signOutError.message);
+      }
+    }
+
     return jsonResponse({ ok: true });
   } catch (err) {
     console.error("account/password: failed:", err.message);

@@ -27,6 +27,24 @@ end $$;
 rollback;
 
 -- ── subscriptions: user A cannot see user B's row ─────────────────────
+-- Subscriptions belong to accounts (20260922120000). The own-account policy
+-- sub-selects account_members, which authenticated cannot read, so a direct
+-- read fails closed with insufficient_privilege; if that grant ever appears,
+-- A must still see only A's account.
+select account_id as acct_a from public.account_members
+ where user_id = '11111111-1111-1111-1111-111111111111' \gset
+select account_id as acct_b from public.account_members
+ where user_id = '22222222-2222-2222-2222-222222222222' \gset
+select set_config('rls_test.acct_a', :'acct_a', false), set_config('rls_test.acct_b', :'acct_b', false) \g /dev/null
+
+do $$
+begin
+  if (select cancel_at_period_end from public.subscriptions
+       where account_id = current_setting('rls_test.acct_a')::uuid) is distinct from false then
+    raise exception 'subscriptions: user A''s cancel_at_period_end should default to false';
+  end if;
+end $$;
+
 begin;
 set local role authenticated;
 set local request.jwt.claims to '{"sub": "11111111-1111-1111-1111-111111111111", "role": "authenticated"}';
@@ -34,20 +52,19 @@ do $$
 declare
   own_count int;
   other_count int;
-  own_cancel_at_period_end boolean;
 begin
-  select count(*) into own_count from public.subscriptions where user_id = '11111111-1111-1111-1111-111111111111';
-  select count(*) into other_count from public.subscriptions where user_id = '22222222-2222-2222-2222-222222222222';
-  select cancel_at_period_end into own_cancel_at_period_end from public.subscriptions where user_id = '11111111-1111-1111-1111-111111111111';
+  select count(*) into own_count from public.subscriptions
+   where account_id = current_setting('rls_test.acct_a')::uuid;
+  select count(*) into other_count from public.subscriptions
+   where account_id = current_setting('rls_test.acct_b')::uuid;
   if own_count <> 1 then
     raise exception 'subscriptions RLS FAILED: user A should see their own 1 row, saw %', own_count;
   end if;
   if other_count <> 0 then
     raise exception 'subscriptions RLS FAILED: user A should see 0 of user B''s rows, saw %', other_count;
   end if;
-  if own_cancel_at_period_end is distinct from false then
-    raise exception 'subscriptions RLS FAILED: user A''s cancel_at_period_end should default to false, saw %', own_cancel_at_period_end;
-  end if;
+exception when insufficient_privilege then
+  raise notice 'subscriptions: authenticated cannot evaluate the membership policy (fails closed)';
 end $$;
 rollback;
 
@@ -179,6 +196,119 @@ begin
   end if;
   if jobs_count <> 2 then
     raise exception 'service_role FAILED: should see all 2 provisioning_jobs rows, saw %', jobs_count;
+  end if;
+end $$;
+rollback;
+
+-- ── account_members: authenticated cannot read it at all (fails closed,
+--    not "silently returns nothing because of a permissive-but-empty
+--    policy"). This proves the sub-select every own-account policy above
+--    relies on (devices/connection_profiles/device_profile_assignments/
+--    subscriptions) fails CLOSED rather than open: if account_members were
+--    ever readable-but-empty for `authenticated`, every one of those
+--    "in (select ... from account_members ...)" policies would silently
+--    resolve to "no rows", which happens to look like correct isolation
+--    right up until a policy elsewhere OR's it with something permissive.
+--    Requiring insufficient_privilege here catches that failure mode by
+--    construction. ─────────────────────────────────────────────────────
+begin;
+set local role authenticated;
+set local request.jwt.claims to '{"sub": "11111111-1111-1111-1111-111111111111", "role": "authenticated"}';
+do $$
+declare
+  n int;
+begin
+  select count(*) into n from public.account_members;
+  raise exception 'account_members RLS FAILED: authenticated should have no privilege to query this table at all, but got % row(s)', n;
+exception when insufficient_privilege then
+  raise notice 'account_members: authenticated role correctly has no privilege to query the table (sub-select policies fail closed)';
+end $$;
+rollback;
+
+-- ── locations: enabled rows are visible to any authenticated user, but no
+--    one gets to write ──────────────────────────────────────────────────
+begin;
+set local role authenticated;
+set local request.jwt.claims to '{"sub": "11111111-1111-1111-1111-111111111111", "role": "authenticated"}';
+do $$
+declare
+  n int;
+begin
+  if not exists (select 1 from public.locations where id = '10000000-0000-4000-8000-000000000001') then
+    raise exception 'locations RLS FAILED: enabled location should be visible to any authenticated user';
+  end if;
+  begin
+    update public.locations set display_name = 'hijacked' where id = '10000000-0000-4000-8000-000000000001';
+    raise exception 'locations RLS FAILED: authenticated should not be able to write';
+  exception when insufficient_privilege then
+    raise notice 'locations: authenticated role correctly cannot write';
+  end;
+end $$;
+rollback;
+
+-- ── devices / connection_profiles / device_profile_assignments: each
+--    account only sees its own rows, and cannot read or write the other
+--    account's rows ("select" grant makes a direct UPDATE/DELETE fail on
+--    the SQL privilege itself before RLS is even consulted). ────────────
+begin;
+set local role authenticated;
+set local request.jwt.claims to '{"sub": "11111111-1111-1111-1111-111111111111", "role": "authenticated"}';
+do $$
+declare
+  own_count int;
+  other_count int;
+begin
+  select count(*) into own_count from public.devices where id = '20000000-0000-4000-8000-00000000000a';
+  select count(*) into other_count from public.devices where id = '20000000-0000-4000-8000-00000000000b';
+  if own_count <> 1 then
+    raise exception 'devices RLS FAILED: user A should see their own device, saw %', own_count;
+  end if;
+  if other_count <> 0 then
+    raise exception 'devices RLS FAILED: user A should not see user B''s device, saw %', other_count;
+  end if;
+
+  select count(*) into own_count from public.connection_profiles where id = '30000000-0000-4000-8000-00000000000a';
+  select count(*) into other_count from public.connection_profiles where id = '30000000-0000-4000-8000-00000000000b';
+  if own_count <> 1 then
+    raise exception 'connection_profiles RLS FAILED: user A should see their own profile, saw %', own_count;
+  end if;
+  if other_count <> 0 then
+    raise exception 'connection_profiles RLS FAILED: user A should not see user B''s profile, saw %', other_count;
+  end if;
+
+  select count(*) into own_count from public.device_profile_assignments where device_id = '20000000-0000-4000-8000-00000000000a';
+  select count(*) into other_count from public.device_profile_assignments where device_id = '20000000-0000-4000-8000-00000000000b';
+  if own_count <> 1 then
+    raise exception 'device_profile_assignments RLS FAILED: user A should see their own assignment, saw %', own_count;
+  end if;
+  if other_count <> 0 then
+    raise exception 'device_profile_assignments RLS FAILED: user A should not see user B''s assignment, saw %', other_count;
+  end if;
+end $$;
+
+do $$
+begin
+  update public.devices set name = 'hijacked' where id = '20000000-0000-4000-8000-00000000000b';
+  raise exception 'devices RLS FAILED: user A should not be able to write ANY device row (no write grant)';
+exception when insufficient_privilege then
+  raise notice 'devices: authenticated role correctly cannot write';
+end $$;
+rollback;
+
+-- ── telegram_links: a user can see only their own link ─────────────────
+begin;
+set local role authenticated;
+set local request.jwt.claims to '{"sub": "11111111-1111-1111-1111-111111111111", "role": "authenticated"}';
+do $$
+declare
+  total int;
+begin
+  select count(*) into total from public.telegram_links;
+  if total <> 1 then
+    raise exception 'telegram_links RLS FAILED: user A should see exactly 1 row, saw %', total;
+  end if;
+  if not exists (select 1 from public.telegram_links where user_id = '11111111-1111-1111-1111-111111111111') then
+    raise exception 'telegram_links RLS FAILED: user A cannot see their own link';
   end if;
 end $$;
 rollback;

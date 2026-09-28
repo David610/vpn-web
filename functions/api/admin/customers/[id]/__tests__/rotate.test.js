@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const getClaims = vi.fn();
 const adminMaybeSingle = vi.fn();
-const vpnMaybeSingle = vi.fn();
+const vpnAccountsEq = vi.fn();
 const jobInsert = vi.fn();
 const auditInsert = vi.fn();
 
@@ -11,7 +11,9 @@ vi.mock("@supabase/supabase-js", () => ({
     auth: { getClaims },
     from: vi.fn((table) => {
       if (table === "admin_users") return { select: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(), maybeSingle: adminMaybeSingle };
-      if (table === "vpn_accounts") return { select: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(), maybeSingle: vpnMaybeSingle };
+      // getVpnAccountsForUser does select(...).eq("user_id", userId) with no
+      // .maybeSingle() — a user can have 2+ vpn_accounts rows.
+      if (table === "vpn_accounts") return { select: vi.fn().mockReturnThis(), eq: vpnAccountsEq };
       if (table === "provisioning_jobs") return { insert: jobInsert };
       if (table === "admin_audit_log") return { insert: auditInsert };
       throw new Error(`unexpected table ${table}`);
@@ -32,7 +34,7 @@ function makeRequest() {
 beforeEach(() => {
   getClaims.mockReset().mockResolvedValue({ data: { claims: { sub: "admin-1", aal: "aal2" } }, error: null });
   adminMaybeSingle.mockReset().mockResolvedValue({ data: { role: "owner" }, error: null });
-  vpnMaybeSingle.mockReset().mockResolvedValue({ data: { id: 1, node_id: "node-1", vpn_user_id: "vpn-user-test-1" }, error: null });
+  vpnAccountsEq.mockReset().mockResolvedValue({ data: [{ id: 1, node_id: "node-1", vpn_user_id: "vpn-user-test-1" }], error: null });
   jobInsert.mockReset().mockResolvedValue({ error: null });
   auditInsert.mockReset().mockResolvedValue({ error: null });
 });
@@ -45,7 +47,7 @@ describe("POST /api/admin/customers/:id/rotate", () => {
   });
 
   it("returns 404 when the user has no vpn_account", async () => {
-    vpnMaybeSingle.mockResolvedValue({ data: null, error: null });
+    vpnAccountsEq.mockResolvedValue({ data: [], error: null });
     const res = await onRequestPost({ env, request: makeRequest(), params: { id: "user-1" } });
     expect(res.status).toBe(404);
   });
@@ -64,7 +66,20 @@ describe("POST /api/admin/customers/:id/rotate", () => {
       expect.objectContaining({ job_type: "ROTATE_SUBSCRIPTION_TOKEN", node_id: "node-1", vpn_account_id: 1, payload: { vpn_user_id: "vpn-user-test-1" } })
     );
     expect(auditInsert).toHaveBeenCalledWith(
-      expect.objectContaining({ action: "admin.rotate_subscription", target_type: "vpn_account", target_id: "1" })
+      expect.objectContaining({ action: "admin.rotate_subscription", target_type: "vpn_account" })
     );
+  });
+
+  it("does not 500 when the user has 2+ provisioned devices (the repro this fix targets)", async () => {
+    vpnAccountsEq.mockResolvedValue({
+      data: [
+        { id: 1, node_id: "node-1", vpn_user_id: "vpn-user-test-1" },
+        { id: 2, node_id: "node-1", vpn_user_id: "vpn-user-test-2" },
+      ],
+      error: null,
+    });
+    const res = await onRequestPost({ env, request: makeRequest(), params: { id: "user-1" } });
+    expect(res.status).toBe(200);
+    expect(jobInsert).toHaveBeenCalledTimes(2);
   });
 });

@@ -7,9 +7,15 @@ import {
   handleSubscriptionTrialing,
 } from "../stripe-events.js";
 import { makeFakeSupabase, seedAccount } from "./fake-supabase.js";
+import { applyLegacyExpiryGrace } from "../stripe-fields.js";
 
 const PERIOD_END_UNIX = 1893456000; // 2030-01-01T00:00:00Z
 const PERIOD_END_ISO = new Date(PERIOD_END_UNIX * 1000).toISOString();
+// F-19/C-04: node-facing expiry (what CREATE_USER/SET_EXPIRY payloads and
+// entitlement.serviceExpiresAt carry) is the raw period end plus a 72h grace
+// — see stripe-fields.js. Anything asserting on the *device-facing* expiry
+// must use this, not PERIOD_END_ISO directly.
+const NODE_EXPIRY_ISO = applyLegacyExpiryGrace(PERIOD_END_ISO);
 
 function invoice({ billingReason, subscriptionId = "sub_123" }) {
   return {
@@ -90,6 +96,138 @@ describe("handleCheckoutSessionCompleted", () => {
     await handleCheckoutSessionCompleted(db, { mode: "payment" });
     expect(db.from).not.toHaveBeenCalled();
   });
+
+  describe("F-31/C-04 base price validation", () => {
+    const env = { STRIPE_PRICE_ID: "price_good" };
+
+    function fakeStripe(priceId) {
+      return {
+        checkout: {
+          sessions: {
+            listLineItems: vi.fn().mockResolvedValue({
+              data: [{ price: { id: priceId }, quantity: 1 }],
+            }),
+          },
+        },
+      };
+    }
+
+    it("refuses to map an unapproved base price: no subscriptions row, alert raised", async () => {
+      const db = makeFakeSupabase({
+        customer_accounts: [{ id: "acct-1", stripe_customer_id: null }],
+        account_members: [{ account_id: "acct-1", user_id: "user-1", role: "owner" }],
+      });
+      const stripe = fakeStripe("price_evil");
+
+      await handleCheckoutSessionCompleted(
+        db,
+        {
+          id: "cs_1",
+          mode: "subscription",
+          client_reference_id: "user-1",
+          customer: "cus_123",
+          subscription: "sub_evil",
+        },
+        stripe,
+        env
+      );
+
+      expect(stripe.checkout.sessions.listLineItems).toHaveBeenCalledWith("cs_1", {
+        expand: ["data.price"],
+      });
+      // No subscriptions row was created for this subscription id, so no
+      // later invoice.paid / customer.subscription.updated can ever find one
+      // to flip to "active" — device_entitlement() never grants capacity.
+      expect(db._tables.subscriptions).toHaveLength(0);
+      // Portal access is unaffected: the Stripe customer is still recorded.
+      expect(db._tables.customer_accounts[0].stripe_customer_id).toBe("cus_123");
+      expect(db._tables.operational_alerts).toHaveLength(1);
+      expect(db._tables.operational_alerts[0]).toMatchObject({
+        alert_type: "checkout_unapproved_base_price",
+        severity: "critical",
+      });
+    });
+
+    it("still maps normally when the base price is approved", async () => {
+      const db = makeFakeSupabase({
+        customer_accounts: [{ id: "acct-1", stripe_customer_id: null }],
+        account_members: [{ account_id: "acct-1", user_id: "user-1", role: "owner" }],
+      });
+      const stripe = fakeStripe("price_good");
+
+      await handleCheckoutSessionCompleted(
+        db,
+        {
+          id: "cs_2",
+          mode: "subscription",
+          client_reference_id: "user-1",
+          customer: "cus_123",
+          subscription: "sub_123",
+        },
+        stripe,
+        env
+      );
+
+      expect(db._tables.subscriptions).toHaveLength(1);
+      expect(db._tables.subscriptions[0]).toMatchObject({
+        stripe_subscription_id: "sub_123",
+        status: "incomplete",
+      });
+      expect(db._tables.operational_alerts).toHaveLength(0);
+    });
+
+    it("a subsequent invoice.paid for the unmapped subscription never provisions", async () => {
+      // End-to-end confirmation of the narrative: blocking the mapping at
+      // checkout means the normal provisioning trigger structurally can't
+      // find a row to work from.
+      const db = makeFakeSupabase({
+        customer_accounts: [{ id: "acct-1", stripe_customer_id: null }],
+        account_members: [{ account_id: "acct-1", user_id: "user-1", role: "owner" }],
+      });
+      const stripe = fakeStripe("price_evil");
+      await handleCheckoutSessionCompleted(
+        db,
+        {
+          id: "cs_3",
+          mode: "subscription",
+          client_reference_id: "user-1",
+          customer: "cus_123",
+          subscription: "sub_evil",
+        },
+        stripe,
+        env
+      );
+
+      await expect(
+        handleInvoicePaid(db, invoice({ billingReason: "subscription_create", subscriptionId: "sub_evil" }))
+      ).rejects.toThrow(/no subscriptions row/);
+      expect(jobsOf(db)).toHaveLength(0);
+    });
+
+    it("does not fetch line items or block anything when no allowlist is configured", async () => {
+      const db = makeFakeSupabase({
+        customer_accounts: [{ id: "acct-1", stripe_customer_id: null }],
+        account_members: [{ account_id: "acct-1", user_id: "user-1", role: "owner" }],
+      });
+      const stripe = fakeStripe("price_anything");
+
+      await handleCheckoutSessionCompleted(
+        db,
+        {
+          id: "cs_4",
+          mode: "subscription",
+          client_reference_id: "user-1",
+          customer: "cus_123",
+          subscription: "sub_123",
+        },
+        stripe,
+        {}
+      );
+
+      expect(stripe.checkout.sessions.listLineItems).not.toHaveBeenCalled();
+      expect(db._tables.subscriptions).toHaveLength(1);
+    });
+  });
 });
 
 describe("handleInvoicePaid — first invoice", () => {
@@ -109,7 +247,7 @@ describe("handleInvoicePaid — first invoice", () => {
       node_id: "node-1",
       device_id: device.id,
       idempotency_key: `create-user:sub_123:create:${device.id}:node-1`,
-      payload: { user_id: "user-1", device_id: device.id, expires_at: PERIOD_END_ISO },
+      payload: { user_id: "user-1", device_id: device.id, expires_at: NODE_EXPIRY_ISO },
     });
     expect(db._tables.subscriptions[0].status).toBe("active");
   });
@@ -157,7 +295,35 @@ describe("handleInvoicePaid — renewal", () => {
     // Keys include the vpn_account so three seats produce three jobs rather
     // than colliding on one subscription-scoped key.
     expect(new Set(jobs.map((j) => j.idempotency_key)).size).toBe(3);
-    expect(jobs.every((j) => j.payload.expires_at === PERIOD_END_ISO)).toBe(true);
+    expect(jobs.every((j) => j.payload.expires_at === NODE_EXPIRY_ISO)).toBe(true);
+  });
+
+  it("F-19: a webhook delayed hours past the period boundary still resolves to periodEnd + 72h, not less", async () => {
+    // Stripe finalizes renewal invoices roughly an hour after the new period
+    // starts, and delivery/processing can add more delay on top. The grace
+    // window is computed from the invoice's own period end, not from when
+    // this handler happens to run, so an arbitrarily late-processed
+    // invoice.paid must still resolve to exactly periodEnd + 72h.
+    const db = makeFakeSupabase(
+      seedAccount({ provisioned: [{ userId: "user-1", vpnUserId: "vpn-1" }] })
+    );
+
+    // Advance the clock 6 hours to stand in for "Stripe finalized this and
+    // delivery/retry delay pushed processing well past the period start" —
+    // the computation must not depend on wall-clock time at all, so the
+    // result has to be identical to running it "on time".
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.now() + 6 * 60 * 60 * 1000);
+    try {
+      await handleInvoicePaid(db, invoice({ billingReason: "subscription_cycle" }));
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const jobs = jobsOf(db);
+    expect(jobs[0].payload.expires_at).toBe(NODE_EXPIRY_ISO);
+    // Never merely the raw period end.
+    expect(jobs[0].payload.expires_at).not.toBe(PERIOD_END_ISO);
   });
 
   it("only extends seats on the renewing account", async () => {
@@ -434,6 +600,97 @@ describe("handleSubscriptionUpdated", () => {
 
     expect(jobsOf(db)).toHaveLength(0);
   });
+
+  describe("F-19/C-04 grace + expiry push", () => {
+    const OLD_PERIOD_END_ISO = "2029-12-01T00:00:00.000Z";
+    const NEW_PERIOD_END_UNIX = PERIOD_END_UNIX; // 2030-01-01T00:00:00Z
+    const NEW_NODE_EXPIRY_ISO = NODE_EXPIRY_ISO; // NEW_PERIOD_END + 72h
+
+    it("pushes the grace-extended expiry when the period end advances — no invoice.paid needed", async () => {
+      const db = makeFakeSupabase({
+        ...seedAccount({ provisioned: [{ userId: "user-1", vpnUserId: "vpn-1" }] }),
+        subscriptions: [
+          {
+            id: 1,
+            account_id: "acct-1",
+            stripe_subscription_id: "sub_123",
+            status: "active",
+            current_period_end: OLD_PERIOD_END_ISO,
+            extra_seats: 0,
+          },
+        ],
+      });
+
+      await handleSubscriptionUpdated(db, {
+        id: "sub_123",
+        status: "active",
+        cancel_at_period_end: false,
+        current_period_end: NEW_PERIOD_END_UNIX,
+      });
+
+      const jobs = jobsOf(db);
+      expect(jobs).toHaveLength(1);
+      expect(jobs[0]).toMatchObject({
+        job_type: "SET_EXPIRY",
+        payload: { vpn_user_id: "vpn-1", expires_at: NEW_NODE_EXPIRY_ISO },
+      });
+      // The row's own (raw, non-grace) period end is exactly what Stripe
+      // reported — grace never leaks into billing-facing fields.
+      expect(db._tables.subscriptions[0].current_period_end).toBe(PERIOD_END_ISO);
+    });
+
+    it("does not push when the period end is unchanged (e.g. a same-cycle pack purchase)", async () => {
+      const db = makeFakeSupabase({
+        ...seedAccount({ provisioned: [{ userId: "user-1", vpnUserId: "vpn-1" }] }),
+        subscriptions: [
+          {
+            id: 1,
+            account_id: "acct-1",
+            stripe_subscription_id: "sub_123",
+            status: "active",
+            current_period_end: PERIOD_END_ISO,
+            extra_seats: 0,
+          },
+        ],
+      });
+
+      await handleSubscriptionUpdated(db, {
+        id: "sub_123",
+        status: "active",
+        cancel_at_period_end: false,
+        current_period_end: PERIOD_END_UNIX, // same period end as already stored
+      });
+
+      expect(jobsOf(db)).toHaveLength(0);
+    });
+
+    it("never pushes on a terminal transition — DISABLE_USER only, immediately, no grace", async () => {
+      const db = makeFakeSupabase({
+        ...seedAccount({ provisioned: [{ userId: "user-1", vpnUserId: "vpn-1" }] }),
+        subscriptions: [
+          {
+            id: 1,
+            account_id: "acct-1",
+            stripe_subscription_id: "sub_123",
+            status: "active",
+            current_period_end: OLD_PERIOD_END_ISO,
+            extra_seats: 0,
+          },
+        ],
+      });
+
+      await handleSubscriptionUpdated(db, {
+        id: "sub_123",
+        status: "canceled",
+        cancel_at_period_end: false,
+        current_period_end: NEW_PERIOD_END_UNIX, // even though the period "advanced"
+      });
+
+      const jobs = jobsOf(db);
+      expect(jobs).toHaveLength(1);
+      expect(jobs[0].job_type).toBe("DISABLE_USER");
+    });
+  });
 });
 
 describe("handleSubscriptionDeleted", () => {
@@ -517,6 +774,11 @@ describe("handleSubscriptionDeleted", () => {
 
 const TRIAL_END_UNIX = 1893456000;
 const TRIAL_END_ISO = new Date(TRIAL_END_UNIX * 1000).toISOString();
+// F-19/C-04: device-facing expiry gets the same 72h grace during a trial as
+// any other legacy node expiry (the mitigation is for webhook/enforcement
+// lag, not specific to paid periods). TRIAL_END_ISO itself (the raw value
+// stored on subscriptions.current_period_end) is never grace-adjusted.
+const TRIAL_NODE_EXPIRY_ISO = applyLegacyExpiryGrace(TRIAL_END_ISO);
 
 describe("handleSubscriptionTrialing", () => {
   const trialing = (overrides = {}) => ({
@@ -539,7 +801,7 @@ describe("handleSubscriptionTrialing", () => {
     expect(jobs[0]).toMatchObject({
       job_type: "CREATE_USER",
       idempotency_key: `create-user:sub_123:create:${device.id}:node-1`,
-      payload: { user_id: "user-1", device_id: device.id, expires_at: TRIAL_END_ISO },
+      payload: { user_id: "user-1", device_id: device.id, expires_at: TRIAL_NODE_EXPIRY_ISO },
     });
     expect(db._tables.subscriptions[0]).toMatchObject({
       status: "trialing",
@@ -547,10 +809,10 @@ describe("handleSubscriptionTrialing", () => {
     });
   });
 
-  it("expires access at the trial end, not at some later date", async () => {
+  it("expires access at the trial end plus grace, not at some later date", async () => {
     const db = makeFakeSupabase(seedAccount({ status: "incomplete" }));
     await handleSubscriptionTrialing(db, trialing());
-    expect(jobsOf(db)[0].payload.expires_at).toBe(TRIAL_END_ISO);
+    expect(jobsOf(db)[0].payload.expires_at).toBe(TRIAL_NODE_EXPIRY_ISO);
   });
 
   it("does not double-provision when a zero-amount invoice also arrives", async () => {
@@ -621,7 +883,283 @@ describe("handleSubscriptionTrialing", () => {
     expect(jobs).toHaveLength(1);
     expect(jobs[0]).toMatchObject({
       job_type: "SET_EXPIRY",
-      payload: { vpn_user_id: "vpn-1", expires_at: PERIOD_END_ISO },
+      payload: { vpn_user_id: "vpn-1", expires_at: NODE_EXPIRY_ISO },
     });
+  });
+});
+
+// F-02/C-02/C-14: Stripe does not guarantee webhook delivery order. Each of
+// these ends at Stripe's actual final state regardless of the order the
+// events reach this handler, by comparing the delivered event's own
+// creation time (T1 < T2 < T3 below) against subscriptions.stripe_synced_at
+// and by making "canceled" sticky.
+describe("event ordering (F-02/C-02/C-14)", () => {
+  const T1 = "2026-01-01T00:00:00.000Z";
+  const T2 = "2026-01-01T00:05:00.000Z";
+  const T3 = "2026-01-01T00:10:00.000Z";
+
+  it("updated-after-deleted: a stale reactivation arriving after cancellation is rejected", async () => {
+    const db = makeFakeSupabase(seedAccount({ provisioned: [{ userId: "user-1", vpnUserId: "vpn-1" }] }));
+
+    await handleSubscriptionDeleted(db, { id: "sub_123" }, {}, T2);
+    await handleSubscriptionUpdated(
+      db,
+      { id: "sub_123", status: "active", cancel_at_period_end: false, current_period_end: PERIOD_END_UNIX },
+      undefined,
+      {},
+      T1
+    );
+
+    expect(db._tables.subscriptions[0].status).toBe("canceled");
+  });
+
+  it("duplicate deleted: a redelivered/late deleted event stays a no-op canceled row", async () => {
+    const db = makeFakeSupabase(seedAccount({ provisioned: [{ userId: "user-1", vpnUserId: "vpn-1" }] }));
+
+    await handleSubscriptionDeleted(db, { id: "sub_123" }, {}, T2);
+    await handleSubscriptionDeleted(db, { id: "sub_123" }, {}, T1);
+
+    expect(db._tables.subscriptions[0].status).toBe("canceled");
+    expect(jobsOf(db).filter((j) => j.job_type === "DISABLE_USER")).toHaveLength(1);
+  });
+
+  it("duplicate updated: a stale updated event never overwrites a newer one's fields", async () => {
+    const db = makeFakeSupabase(seedAccount({}));
+
+    await handleSubscriptionUpdated(
+      db,
+      {
+        id: "sub_123",
+        status: "past_due",
+        cancel_at_period_end: true,
+        current_period_end: PERIOD_END_UNIX,
+      },
+      undefined,
+      {},
+      T2
+    );
+    // A stale redelivery of an OLDER state (active, no cancel) arrives late.
+    await handleSubscriptionUpdated(
+      db,
+      {
+        id: "sub_123",
+        status: "active",
+        cancel_at_period_end: false,
+        current_period_end: PERIOD_END_UNIX,
+      },
+      undefined,
+      {},
+      T1
+    );
+
+    expect(db._tables.subscriptions[0]).toMatchObject({
+      status: "past_due",
+      cancel_at_period_end: true,
+    });
+  });
+
+  it("late invoice.paid: an invoice from before cancellation must not resurrect the subscription", async () => {
+    const db = makeFakeSupabase(seedAccount({ provisioned: [{ userId: "user-1", vpnUserId: "vpn-1" }] }));
+
+    await handleSubscriptionDeleted(db, { id: "sub_123" }, {}, T2);
+    await handleInvoicePaid(db, {
+      id: "in_late",
+      created: new Date(T1).getTime() / 1000,
+      billing_reason: "subscription_cycle",
+      subscription: "sub_123",
+      lines: { data: [{ period: { end: PERIOD_END_UNIX } }] },
+    });
+
+    expect(db._tables.subscriptions[0].status).toBe("canceled");
+    expect(jobsOf(db).filter((j) => j.job_type === "SET_EXPIRY")).toHaveLength(0);
+  });
+
+  it("payment failed then a late invoice.paid for the failed cycle is rejected", async () => {
+    const db = makeFakeSupabase(seedAccount({ provisioned: [{ userId: "user-1", vpnUserId: "vpn-1" }] }));
+
+    await handleSubscriptionUpdated(
+      db,
+      { id: "sub_123", status: "unpaid", cancel_at_period_end: false, current_period_end: PERIOD_END_UNIX },
+      undefined,
+      {},
+      T2
+    );
+    await handleInvoicePaid(db, {
+      id: "in_late",
+      created: new Date(T1).getTime() / 1000,
+      billing_reason: "subscription_create",
+      subscription: "sub_123",
+      lines: { data: [{ period: { end: PERIOD_END_UNIX } }] },
+    });
+
+    expect(db._tables.subscriptions[0].status).toBe("unpaid");
+  });
+
+  it("trial transitions: a stale trialing redelivery cannot revert an activated subscription", async () => {
+    const db = makeFakeSupabase(seedAccount({ status: "trialing" }));
+
+    await handleSubscriptionUpdated(
+      db,
+      { id: "sub_123", status: "active", cancel_at_period_end: false, current_period_end: PERIOD_END_UNIX },
+      undefined,
+      {},
+      T2
+    );
+    await handleSubscriptionTrialing(db, { id: "sub_123", status: "trialing", trial_end: PERIOD_END_UNIX }, {}, T1);
+
+    expect(db._tables.subscriptions[0].status).toBe("active");
+  });
+
+  it("portal mutation: a stale cached updated event cannot undo a newer cancel_at_period_end toggle", async () => {
+    const db = makeFakeSupabase(seedAccount({}));
+
+    await handleSubscriptionUpdated(
+      db,
+      { id: "sub_123", status: "active", cancel_at_period_end: true, current_period_end: PERIOD_END_UNIX },
+      undefined,
+      {},
+      T3
+    );
+    await handleSubscriptionUpdated(
+      db,
+      { id: "sub_123", status: "active", cancel_at_period_end: false, current_period_end: PERIOD_END_UNIX },
+      undefined,
+      {},
+      T2
+    );
+
+    expect(db._tables.subscriptions[0].cancel_at_period_end).toBe(true);
+  });
+
+  it("forward order still applies every write (the guard never blocks a genuinely newer event)", async () => {
+    const db = makeFakeSupabase(seedAccount({}));
+
+    await handleSubscriptionUpdated(
+      db,
+      { id: "sub_123", status: "active", cancel_at_period_end: false, current_period_end: PERIOD_END_UNIX },
+      undefined,
+      {},
+      T1
+    );
+    await handleSubscriptionUpdated(
+      db,
+      { id: "sub_123", status: "past_due", cancel_at_period_end: false, current_period_end: PERIOD_END_UNIX },
+      undefined,
+      {},
+      T2
+    );
+    await handleSubscriptionDeleted(db, { id: "sub_123" }, {}, T3);
+
+    expect(db._tables.subscriptions[0].status).toBe("canceled");
+  });
+});
+
+// F-31/C-04: a subscription reporting a base price this deployment doesn't
+// sell must not have its status/period/seats synced — no entitlement is
+// granted or extended off data this deployment cannot vouch for.
+describe("price allowlist (F-31/C-04)", () => {
+  const envWithAllowlist = { STRIPE_PRICE_ID: "price_base_v2" };
+
+  it("refuses to sync when the base item's price is not in the allowlist", async () => {
+    const db = makeFakeSupabase(seedAccount({ status: "incomplete" }));
+
+    await handleSubscriptionUpdated(
+      db,
+      {
+        id: "sub_123",
+        status: "active",
+        cancel_at_period_end: false,
+        current_period_end: PERIOD_END_UNIX,
+        items: { data: [{ id: "si_base", price: { id: "price_unknown" }, quantity: 1 }] },
+      },
+      undefined,
+      envWithAllowlist
+    );
+
+    expect(db._tables.subscriptions[0].status).toBe("incomplete");
+  });
+
+  it("syncs normally when the base item's price matches the allowlist", async () => {
+    const db = makeFakeSupabase(seedAccount({ status: "incomplete" }));
+
+    await handleSubscriptionUpdated(
+      db,
+      {
+        id: "sub_123",
+        status: "active",
+        cancel_at_period_end: false,
+        current_period_end: PERIOD_END_UNIX,
+        items: { data: [{ id: "si_base", price: { id: "price_base_v2" }, quantity: 1 }] },
+      },
+      undefined,
+      envWithAllowlist
+    );
+
+    expect(db._tables.subscriptions[0]).toMatchObject({ status: "active", stripe_price_id: "price_base_v2" });
+  });
+
+  it("accepts a price on the legacy allowlist", async () => {
+    const db = makeFakeSupabase(seedAccount({ status: "incomplete" }));
+
+    await handleSubscriptionUpdated(
+      db,
+      {
+        id: "sub_123",
+        status: "active",
+        cancel_at_period_end: false,
+        current_period_end: PERIOD_END_UNIX,
+        items: { data: [{ id: "si_base", price: { id: "price_old_v1" }, quantity: 1 }] },
+      },
+      undefined,
+      { STRIPE_PRICE_ID: "price_base_v2", STRIPE_PRICE_ID_LEGACY: "price_old_v1,price_old_v0" }
+    );
+
+    expect(db._tables.subscriptions[0].status).toBe("active");
+  });
+
+  it("does not distinguish the seat-pack item from the base item as unknown", async () => {
+    // The seat-pack item's own price id must never be mistaken for the base
+    // item and rejected.
+    const db = makeFakeSupabase(seedAccount({ status: "incomplete" }));
+
+    await handleSubscriptionUpdated(
+      db,
+      {
+        id: "sub_123",
+        status: "active",
+        cancel_at_period_end: false,
+        current_period_end: PERIOD_END_UNIX,
+        items: {
+          data: [
+            { id: "si_base", price: { id: "price_base_v2" }, quantity: 1 },
+            { id: "si_seat", price: { id: "price_seat" }, quantity: 2 },
+          ],
+        },
+      },
+      "price_seat",
+      envWithAllowlist
+    );
+
+    expect(db._tables.subscriptions[0].status).toBe("active");
+    expect(db._tables.subscriptions[0].extra_seats).toBe(6);
+  });
+
+  it("allows the write through when no allowlist is configured (fails open, not closed)", async () => {
+    const db = makeFakeSupabase(seedAccount({ status: "incomplete" }));
+
+    await handleSubscriptionUpdated(
+      db,
+      {
+        id: "sub_123",
+        status: "active",
+        cancel_at_period_end: false,
+        current_period_end: PERIOD_END_UNIX,
+        items: { data: [{ id: "si_base", price: { id: "price_anything" }, quantity: 1 }] },
+      },
+      undefined,
+      {}
+    );
+
+    expect(db._tables.subscriptions[0].status).toBe("active");
   });
 });

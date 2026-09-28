@@ -3,8 +3,9 @@
  *
  *   upsertAddressRecord({ name, type, content }) -> { recordId }
  *   deleteRecord({ recordId, name, type }) -> void
+ *   recordExists({ name, type }) -> boolean
  *
- * Both are idempotent so the fleet reconciler can re-run them after a
+ * All three are idempotent so the fleet reconciler can re-run them after a
  * timeout or a crash without creating duplicates: upsert finds the record
  * by exact name+type first and only creates when none exists; delete treats
  * "already gone" as success.
@@ -83,6 +84,15 @@ export function createCloudflareDns(env) {
       const { res, body } = await cf(`/dns_records/${encodeURIComponent(id)}`, { method: "DELETE" });
       if (res.status === 404) return;
       if (!res.ok || !body?.success) throw fail("delete", res, body);
+    },
+
+    // F-06: post-delete verification. Cloudflare's DNS API can return a
+    // successful DELETE while the record is still resolvable for a short
+    // window (eventual consistency across edge PoPs) -- RETIRE_OLD_NODE
+    // uses this to confirm the record is actually gone before destroying
+    // the underlying VPS, rather than trusting the DELETE response alone.
+    async recordExists({ name, type = "A" }) {
+      return (await findRecord(name, type)) !== null;
     },
   };
 }

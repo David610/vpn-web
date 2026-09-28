@@ -1,73 +1,13 @@
-import Stripe from "stripe";
-import { createClient } from "@supabase/supabase-js";
-import { getAccountForUser } from "../lib/accounts.js";
-import { requireRecentUser } from "../lib/user-auth.js";
-
-export async function onRequestPost({ env, request }) {
-  try {
-    const supabaseAdmin = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
-      auth: { autoRefreshToken: false, persistSession: false },
-    });
-    const { user, response } = await requireRecentUser(request, supabaseAdmin);
-    if (!user) return response;
-
-    const account = await getAccountForUser(supabaseAdmin, user.id);
-    if (!account) {
-      return new Response(JSON.stringify({ error: "No active subscription" }), {
-        status: 404,
-        headers: { "Content-Type": "application/json" },
-      });
-    }
-
-    const { data: subscription, error: subError } = await supabaseAdmin
-      .from("subscriptions")
-      .select("stripe_subscription_id")
-      .eq("account_id", account.accountId)
-      .in("status", ["trialing", "active", "past_due"])
-      .maybeSingle();
-    if (subError) {
-      console.error("resume-subscription: subscription lookup failed:", subError.message);
-      return new Response(JSON.stringify({ error: "Something went wrong" }), {
-        status: 500,
-        headers: { "Content-Type": "application/json" },
-      });
-    }
-    if (!subscription) {
-      return new Response(JSON.stringify({ error: "No active subscription" }), {
-        status: 404,
-        headers: { "Content-Type": "application/json" },
-      });
-    }
-
-    const stripe = new Stripe(env.STRIPE_API_KEY, {
-      httpClient: Stripe.createFetchHttpClient(),
-    });
-
-    try {
-      // Only clears the flag — actual status/cancel_at_period_end row update
-      // happens via the customer.subscription.updated webhook, same
-      // single-source-of-truth pattern as every other subscription write
-      // (functions/lib/stripe-events.js).
-      await stripe.subscriptions.update(subscription.stripe_subscription_id, {
-        cancel_at_period_end: false,
-      });
-    } catch (err) {
-      console.error("resume-subscription: Stripe error:", err.message);
-      return new Response(JSON.stringify({ error: "Could not resume subscription" }), {
-        status: 502,
-        headers: { "Content-Type": "application/json" },
-      });
-    }
-
-    return new Response(JSON.stringify({ ok: true }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
-  } catch (err) {
-    console.error("resume-subscription: unexpected error:", err.message);
-    return new Response(JSON.stringify({ error: "Something went wrong" }), {
-      status: 500,
-      headers: { "Content-Type": "application/json" },
-    });
-  }
+// F-12/C-03: see cancel-subscription.js — same history, same fix. This
+// legacy route let ANY member of a legacy multi-member account clear
+// cancel_at_period_end on Stripe directly, with no owner check. Confirmed
+// unused (no caller in this repo or in the sibling tamara-next app); it now
+// answers 410 Gone rather than a 404 that would look transient.
+export async function onRequestPost() {
+  return new Response(
+    JSON.stringify({
+      error: "This endpoint has been retired. Use /api/account/subscriptions/:id/resume instead.",
+    }),
+    { status: 410, headers: { "Content-Type": "application/json" } }
+  );
 }

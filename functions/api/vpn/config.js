@@ -2,6 +2,7 @@ import { createClient } from "@supabase/supabase-js";
 import { decryptSecret } from "../../lib/crypto.js";
 import { requireUser } from "../../lib/user-auth.js";
 import { loadCustomerDashboardState } from "../../lib/dashboard-state.js";
+import { checkDeviceEntitlement } from "../../lib/device-entitlement.js";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -78,6 +79,17 @@ export async function onRequestGet({ env, request }) {
           { error: "No available route for this device", code: "unschedulable", reason: device.placement_error },
           409
         );
+      }
+      // F-01/C-01: this endpoint used to serve a device's config whenever it
+      // had an *enabled* vpn_accounts row, without re-checking that the
+      // device is still within its own subscription's device capacity right
+      // now -- a device provisioned while capacity existed (or created by a
+      // race that briefly exceeded it) kept working indefinitely even after
+      // it should have lost service. device_entitlement() is the single
+      // authoritative per-device gate; it is re-checked on every fetch.
+      const gate = await checkDeviceEntitlement(supabaseAdmin, deviceId);
+      if (!gate.entitled) {
+        return noStoreJson({ error: "This device is over its subscription's device limit", code: "over_capacity" }, 403);
       }
       vpnAccount = await newestEnabledIdentity(supabaseAdmin, "device_id", deviceId);
     } else {

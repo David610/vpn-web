@@ -19,6 +19,7 @@
 // three names from "./accounts.js" working unchanged.
 import { INCLUDED_SEATS, SEAT_PACK_SIZE, packQuantityFromExtraSeats } from "./seat-constants.js";
 export { INCLUDED_SEATS, SEAT_PACK_SIZE, packQuantityFromExtraSeats };
+import { applyLegacyExpiryGrace } from "./stripe-fields.js";
 
 /**
  * The account a user belongs to. account_members.user_id is unique, so this
@@ -78,6 +79,59 @@ export async function getAccountMembers(supabaseAdmin, accountId) {
  *
  * @returns {Promise<Array<{ id: number, vpnUserId: string, userId: string }>>}
  */
+/**
+ * Every provisioned VPN identity for a single user, across every node and
+ * device — NOT narrowed with .maybeSingle(). A user with 2+ devices has 2+
+ * vpn_accounts rows (the normal case once a plan includes more than one
+ * device), and .maybeSingle() throws (-> 500) the moment that's true.
+ * F-07/C-06: admin customer actions (disable/enable/rotate/rotate-
+ * credentials/detail) must fan out over this list instead of assuming one
+ * row per user.
+ *
+ * @returns {Promise<Array<{ id: number, vpnUserId: string, nodeId: string, enabled: boolean }>>}
+ */
+export async function getVpnAccountsForUser(supabaseAdmin, userId) {
+  const { data, error } = await supabaseAdmin
+    .from("vpn_accounts")
+    .select("id, vpn_user_id, node_id, enabled")
+    .eq("user_id", userId);
+  if (error) throw new Error(`vpn_accounts lookup failed: ${error.message}`);
+  return (data ?? []).map((r) => ({
+    id: r.id,
+    vpnUserId: r.vpn_user_id,
+    nodeId: r.node_id,
+    enabled: r.enabled,
+  }));
+}
+
+/**
+ * Every provisioned VPN identity for every member of an account, across
+ * every node — the account-wide counterpart of getVpnAccountsForUser, used
+ * when an admin action (suspend/reinstate) must apply account-wide rather
+ * than to a single member.
+ *
+ * @returns {Promise<Array<{ id: number, vpnUserId: string, userId: string, nodeId: string, enabled: boolean }>>}
+ */
+export async function getAccountVpnAccounts(supabaseAdmin, accountId) {
+  const members = await getAccountMembers(supabaseAdmin, accountId);
+  if (members.length === 0) return [];
+  const { data, error } = await supabaseAdmin
+    .from("vpn_accounts")
+    .select("id, vpn_user_id, user_id, node_id, enabled")
+    .in(
+      "user_id",
+      members.map((m) => m.userId)
+    );
+  if (error) throw new Error(`vpn_accounts lookup failed: ${error.message}`);
+  return (data ?? []).map((r) => ({
+    id: r.id,
+    vpnUserId: r.vpn_user_id,
+    userId: r.user_id,
+    nodeId: r.node_id,
+    enabled: r.enabled,
+  }));
+}
+
 export async function getMemberVpnAccounts(supabaseAdmin, accountId, nodeId) {
   const members = await getAccountMembers(supabaseAdmin, accountId);
   if (members.length === 0) return [];
@@ -180,7 +234,16 @@ export function resolveEffectiveEntitlement(subscription, grants = []) {
   const seatLimit = Math.max(INCLUDED_SEATS, stripeSeatLimit, grantSeatLimit);
 
   const clearExpiry = grants.some((grant) => grant.expires_at === null);
-  let serviceExpiresAt = subscription?.current_period_end ?? null;
+  // F-19/C-04: the node-facing expiry gets a 72h grace on top of Stripe's
+  // exact period end (see applyLegacyExpiryGrace) — legacy nodes enforce
+  // `now < expires_at` with no grace of their own. This only widens
+  // serviceExpiresAt (what gets pushed to nodes/valid_until); the raw
+  // currentPeriodEnd returned below (billing display, "renews on") is never
+  // grace-adjusted. A support grant's own expires_at is authored explicitly
+  // by an admin and is never grace-extended here.
+  let serviceExpiresAt = subscription?.current_period_end
+    ? applyLegacyExpiryGrace(subscription.current_period_end)
+    : null;
   if (!clearExpiry) {
     for (const grant of grants) {
       serviceExpiresAt = laterIso(serviceExpiresAt, grant.expires_at ?? null);

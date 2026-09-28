@@ -73,6 +73,53 @@ export function getSeatSubscriptionItem(subscription, seatPriceId) {
 }
 
 /**
+ * The base (non-pack) item's price id — the item Checkout put the customer
+ * on, as opposed to the +3-device pack item matched by seatPriceId.
+ *
+ * F-31/C-04: this is the id validated against an allowlist before a
+ * subscription is trusted to grant entitlement. A subscription normally
+ * carries exactly one non-pack item; if Stripe ever reports more than one
+ * (a manual dashboard edit, a plan migration), the first is used — the same
+ * "match by price id, not position" reasoning as getSeatSubscriptionItem
+ * applies here too, just inverted (this wants the one item that ISN'T the
+ * pack).
+ *
+ * @param {object} subscription - a Stripe Subscription object
+ * @param {string | undefined} seatPriceId - env.STRIPE_SEAT_PRICE_ID
+ * @returns {string | null}
+ */
+export function getBaseSubscriptionPriceId(subscription, seatPriceId) {
+  const items = subscription.items?.data;
+  if (!Array.isArray(items) || items.length === 0) return null;
+  const base = items.find((item) => {
+    const priceId = typeof item.price === "string" ? item.price : item.price?.id;
+    return priceId !== seatPriceId;
+  });
+  if (!base) return null;
+  return typeof base.price === "string" ? base.price : base.price?.id ?? null;
+}
+
+/**
+ * F-31/C-04: is this price id one this deployment actually sells as a base
+ * subscription? STRIPE_PRICE_ID is the current price; STRIPE_PRICE_ID_LEGACY
+ * (optional, comma-separated) lets a price that was retired still be
+ * honored for customers already on it, without silently accepting an
+ * arbitrary price a compromised or fat-fingered dashboard edit switched a
+ * subscription to.
+ *
+ * @param {string | null} priceId
+ * @param {{ STRIPE_PRICE_ID?: string, STRIPE_PRICE_ID_LEGACY?: string }} env
+ * @returns {boolean}
+ */
+export function isAllowedBasePrice(priceId, env) {
+  if (!priceId) return false;
+  const allowlist = [env.STRIPE_PRICE_ID, ...(env.STRIPE_PRICE_ID_LEGACY?.split(",") ?? [])]
+    .map((id) => id?.trim())
+    .filter(Boolean);
+  return allowlist.includes(priceId);
+}
+
+/**
  * How many +3-device packs a subscription is paying for. Absent a pack
  * item — the common case — that is zero, not unknown.
  *
@@ -99,10 +146,49 @@ export function getExtraSeatCount(subscription, seatPriceId) {
  * @param {object} invoice - a Stripe Invoice object
  * @returns {number | null} unix seconds of the paid service period's end,
  *   from the most specific source available
+ *
+ * F-19: this used to read only invoice.lines.data[0].period.end. Stripe does
+ * not guarantee line order, and a combined invoice (proration + renewal, the
+ * common case for a mid-cycle pack purchase or an upgrade) can put the
+ * proration line first — that line's period ends at the OLD period end, so
+ * reading position [0] could silently set node expiry to a date in the past
+ * relative to the real new period. Taking the max across every line with a
+ * numeric period.end is order-independent and always resolves to the
+ * furthest-out (i.e. correct, newest) period end on the invoice.
  */
 export function getInvoiceLinePeriodEnd(invoice) {
-  const fromLine = invoice.lines?.data?.[0]?.period?.end;
-  if (typeof fromLine === "number") return fromLine;
+  const lines = invoice.lines?.data;
+  if (Array.isArray(lines) && lines.length > 0) {
+    const ends = lines
+      .map((line) => line?.period?.end)
+      .filter((end) => typeof end === "number");
+    if (ends.length > 0) return Math.max(...ends);
+  }
   if (typeof invoice.period_end === "number") return invoice.period_end;
   return null;
+}
+
+/**
+ * F-19/C-04: legacy (pre-managed-client) node expiry is not the exact
+ * `current_period_end` — singbox-vpn enforces service as `now < expires_at`
+ * with no grace of its own, so a webhook delayed even a few minutes past the
+ * boundary (Stripe's renewal invoices finalize roughly an hour after the new
+ * period starts) drops the customer's connection until the next successful
+ * sync. This grace absorbs that normal webhook-processing lag; it is added
+ * only to the node-facing expiry (entitlement.serviceExpiresAt), never to
+ * the raw Stripe period end shown to the customer or stored for billing
+ * logic (entitlement.currentPeriodEnd / subscriptions.current_period_end).
+ */
+export const LEGACY_NODE_EXPIRY_GRACE_MS = 72 * 60 * 60 * 1000;
+
+/**
+ * @param {string | null} iso
+ * @returns {string | null} `iso` plus the legacy grace window, or `iso`
+ *   unchanged (including null) if it isn't a valid timestamp to extend
+ */
+export function applyLegacyExpiryGrace(iso) {
+  if (!iso) return iso;
+  const ms = new Date(iso).getTime();
+  if (!Number.isFinite(ms)) return iso;
+  return new Date(ms + LEGACY_NODE_EXPIRY_GRACE_MS).toISOString();
 }

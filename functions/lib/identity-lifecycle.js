@@ -1,3 +1,5 @@
+import { checkDeviceEntitlement } from "./device-entitlement.js";
+
 /**
  * What must happen right after a node reports a new VPN identity created
  * (functions/api/agent/jobs/[id]/complete.js, CREATE_USER).
@@ -11,24 +13,13 @@
  *   disabled now that its identity on this node exists.
  */
 export async function finalizeCreatedIdentity(supabaseAdmin, { identity, nodeId, userId }) {
-  const { data: device, error: deviceError } = await supabaseAdmin
-    .from("devices")
-    .select("id, account_id, user_id, status")
-    .eq("id", identity.deviceId)
-    .maybeSingle();
-  if (deviceError) throw new Error(`devices lookup failed: ${deviceError.message}`);
-
-  let stillEntitled = !!device && device.status !== "REVOKED";
-  if (stillEntitled) {
-    const { data: membership, error: memberError } = await supabaseAdmin
-      .from("account_members")
-      .select("user_id")
-      .eq("account_id", device.account_id)
-      .eq("user_id", device.user_id)
-      .maybeSingle();
-    if (memberError) throw new Error(`account_members lookup failed: ${memberError.message}`);
-    stillEntitled = !!membership;
-  }
+  // F-01/C-01: this used to derive "still entitled" from device.status and
+  // account membership only -- never from subscription capacity -- so a
+  // CREATE_USER job that raced past its subscription's device limit (two
+  // concurrent registrations, or a pack downgrade landing mid-flight) was
+  // finalized (its identity left enabled) regardless of capacity. The
+  // device_entitlement() RPC is now the single, authoritative answer.
+  const { entitled: stillEntitled } = await checkDeviceEntitlement(supabaseAdmin, identity.deviceId);
 
   const disable = async (target, key) => {
     const { error } = await supabaseAdmin.from("provisioning_jobs").insert({

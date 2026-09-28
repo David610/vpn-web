@@ -13,10 +13,17 @@ const nodeUpdate = vi.fn(() => nodeUpdateChain);
 const auditInsert = vi.fn();
 const credDeleteEq = vi.fn(async () => ({ error: null }));
 const credDelete = vi.fn(() => ({ eq: credDeleteEq }));
+const rpc = vi.fn();
+// F-20/B-03: the RETIRED path now counts live device_node_assignments
+// before calling the revoke RPC. Defaults to zero live assignments so
+// every pre-existing test (which predates this check) keeps passing
+// unchanged; the dedicated assignments tests below override this count.
+const assignmentsCount = vi.fn(async () => ({ count: 0, error: null }));
 
 vi.mock("@supabase/supabase-js", () => ({
   createClient: vi.fn(() => ({
     auth: { getClaims },
+    rpc,
     from: vi.fn((table) => {
       if (table === "admin_users") {
         return { select: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(), maybeSingle: adminMaybeSingle };
@@ -31,6 +38,9 @@ vi.mock("@supabase/supabase-js", () => ({
       }
       if (table === "admin_audit_log") return { insert: auditInsert };
       if (table === "node_probe_credentials") return { delete: credDelete };
+      if (table === "device_node_assignments") {
+        return { select: vi.fn(() => ({ eq: assignmentsCount })) };
+      }
       throw new Error(`unexpected table ${table}`);
     }),
   })),
@@ -57,6 +67,8 @@ beforeEach(() => {
   credDeleteEq.mockClear();
   nodeUpdateChain.eq.mockClear();
   auditInsert.mockReset().mockResolvedValue({ error: null });
+  rpc.mockReset().mockResolvedValue({ data: { status: "ok", jobs_cancelled: 0, lease_slots_deleted: 0 }, error: null });
+  assignmentsCount.mockReset().mockResolvedValue({ count: 0, error: null });
 });
 
 describe("PATCH /api/admin/nodes/:id/lifecycle", () => {
@@ -110,15 +122,115 @@ describe("PATCH /api/admin/nodes/:id/lifecycle", () => {
     expect(new Date(nodeUpdate.mock.calls[0][0].lifecycle_state_changed_at).getTime()).toBeGreaterThan(before - 1);
   });
 
-  it("stamps retired_at only when transitioning to RETIRED", async () => {
+  // F-05/C-09: RETIRED (and QUARANTINED) go through the atomic
+  // revoke_node_key_and_transition RPC instead of the plain nodes UPDATE —
+  // key revocation, job cancellation, lease-slot cleanup and the route-
+  // directory version bump all happen in that one transaction, never via
+  // separate supabase-js calls that could partially fail.
+  it("transitions to RETIRED via the atomic revoke RPC, not the plain UPDATE path", async () => {
     nodeMaybeSingle.mockResolvedValue({ data: { node_id: "node-1", lifecycle_state: "DRAINING" }, error: null });
+    rpc.mockResolvedValue({ data: { status: "ok", jobs_cancelled: 2, lease_slots_deleted: 3 }, error: null });
     const res = await onRequestPatch({ env, request: makeRequest({ state: "RETIRED" }), params: { id: "node-1" } });
     expect(res.status).toBe(200);
-    expect(nodeUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({ lifecycle_state: "RETIRED", retired_at: expect.any(String) })
+    expect(await res.json()).toEqual({ ok: true, lifecycleState: "RETIRED" });
+    expect(rpc).toHaveBeenCalledWith("revoke_node_key_and_transition", {
+      p_node_id: "node-1",
+      p_to_state: "RETIRED",
+      p_expected_from_state: "DRAINING",
+      p_override_dns_check: false,
+      p_admin_user_id: "admin-1",
+      p_audit_metadata: { reissued_enrollment_token: false },
+    });
+    expect(nodeUpdate).not.toHaveBeenCalled();
+    // F-39: the audit row for QUARANTINED/RETIRED now commits inside the
+    // RPC's own transaction (see 20261008000000_admin_audit_transactional
+    // .sql) — this route no longer makes a separate admin_audit_log insert
+    // for that branch at all.
+    expect(auditInsert).not.toHaveBeenCalled();
+  });
+
+  it("transitions to QUARANTINED via the atomic revoke RPC", async () => {
+    const res = await onRequestPatch({ env, request: makeRequest({ state: "QUARANTINED" }), params: { id: "node-1" } });
+    expect(res.status).toBe(200);
+    expect(rpc).toHaveBeenCalledWith("revoke_node_key_and_transition", {
+      p_node_id: "node-1",
+      p_to_state: "QUARANTINED",
+      p_expected_from_state: "READY",
+      p_override_dns_check: false,
+      p_admin_user_id: "admin-1",
+      p_audit_metadata: { reissued_enrollment_token: false },
+    });
+    expect(auditInsert).not.toHaveBeenCalled();
+  });
+
+  it("returns 409 when the revoke RPC reports the node's DNS has not been removed", async () => {
+    rpc.mockResolvedValue({ data: { status: "dns_not_removed" }, error: null });
+    const res = await onRequestPatch({ env, request: makeRequest({ state: "RETIRED" }), params: { id: "node-1" } });
+    expect(res.status).toBe(409);
+    expect(auditInsert).not.toHaveBeenCalled();
+  });
+
+  it("passes the audited override through when overrideDnsCheck is explicitly requested", async () => {
+    nodeMaybeSingle.mockResolvedValue({ data: { node_id: "node-1", lifecycle_state: "DRAINING" }, error: null });
+    const res = await onRequestPatch({
+      env,
+      request: makeRequest({ state: "RETIRED", overrideDnsCheck: true }),
+      params: { id: "node-1" },
+    });
+    expect(res.status).toBe(200);
+    expect(rpc).toHaveBeenCalledWith(
+      "revoke_node_key_and_transition",
+      expect.objectContaining({
+        p_override_dns_check: true,
+        p_audit_metadata: expect.objectContaining({ dns_check_overridden: true }),
+      })
     );
-    // Retirement revokes the node's probe credential.
-    expect(credDeleteEq).toHaveBeenCalledWith("node_id", "node-1");
+    expect(auditInsert).not.toHaveBeenCalled();
+  });
+
+  // F-20/B-03: RETIRE must refuse while live device assignments remain,
+  // unless the admin explicitly passes the audited override.
+  it("refuses RETIRED with live assignments and never calls the revoke RPC", async () => {
+    nodeMaybeSingle.mockResolvedValue({ data: { node_id: "node-1", lifecycle_state: "DRAINING" }, error: null });
+    assignmentsCount.mockResolvedValue({ count: 3, error: null });
+    const res = await onRequestPatch({ env, request: makeRequest({ state: "RETIRED" }), params: { id: "node-1" } });
+    expect(res.status).toBe(409);
+    expect(rpc).not.toHaveBeenCalled();
+    expect(auditInsert).not.toHaveBeenCalled();
+  });
+
+  it("retires with live assignments when overrideAssignmentsCheck is explicitly requested", async () => {
+    nodeMaybeSingle.mockResolvedValue({ data: { node_id: "node-1", lifecycle_state: "DRAINING" }, error: null });
+    assignmentsCount.mockResolvedValue({ count: 3, error: null });
+    const res = await onRequestPatch({
+      env,
+      request: makeRequest({ state: "RETIRED", overrideAssignmentsCheck: true }),
+      params: { id: "node-1" },
+    });
+    expect(res.status).toBe(200);
+    expect(rpc).toHaveBeenCalledWith(
+      "revoke_node_key_and_transition",
+      expect.objectContaining({
+        p_to_state: "RETIRED",
+        p_audit_metadata: expect.objectContaining({ assignments_check_overridden: true }),
+      })
+    );
+    expect(auditInsert).not.toHaveBeenCalled();
+  });
+
+  it("returns 409 without a false ok when the revoke RPC reports a stale lifecycle_state", async () => {
+    rpc.mockResolvedValue({ data: { status: "stale", lifecycle_state: "QUARANTINED" }, error: null });
+    const res = await onRequestPatch({ env, request: makeRequest({ state: "RETIRED" }), params: { id: "node-1" } });
+    expect(res.status).toBe(409);
+    expect(auditInsert).not.toHaveBeenCalled();
+  });
+
+  it("propagates an error from the revoke RPC as a 500 instead of a false ok", async () => {
+    rpc.mockResolvedValue({ data: null, error: { message: "db down" } });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const res = await onRequestPatch({ env, request: makeRequest({ state: "QUARANTINED" }), params: { id: "node-1" } });
+    expect(res.status).toBe(500);
+    expect(auditInsert).not.toHaveBeenCalled();
   });
 
   it("reissues a fresh enrollment token and returns it when transitioning back to PROVISIONING", async () => {

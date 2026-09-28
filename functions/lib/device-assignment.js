@@ -13,7 +13,9 @@
  * client, so both sides are checked here first for a clean 400/403.
  */
 import { getAccountForUser, getEffectiveEntitlement } from "./accounts.js";
-import { reconcileDeviceProvisioning } from "./device-provisioning.js";
+import { reconcileDeviceProvisioning, listDeviceIdentities } from "./device-provisioning.js";
+import { checkDeviceEntitlement } from "./device-entitlement.js";
+import { checkNodeMutationBudget } from "./node-mutation-budget.js";
 
 const fail = (status, error) => ({ status, body: { error } });
 
@@ -100,7 +102,34 @@ export async function assignDeviceProfile(supabaseAdmin, env, user, deviceId, pr
   // route the new profile does not allow.
   let placement = null;
   const entitlement = await getEffectiveEntitlement(supabaseAdmin, account.accountId);
-  if (entitlement) {
+  // F-01/C-01: getEffectiveEntitlement is account-level (it only asks "is
+  // any subscription live"); it does not know whether THIS device is within
+  // its own subscription's device capacity. device_entitlement() is the
+  // single authoritative per-device answer, so it gates the reconcile that
+  // would otherwise place the device and enqueue CREATE_USER.
+  const gate = await checkDeviceEntitlement(supabaseAdmin, deviceId);
+  if (entitlement && gate.entitled) {
+    // F-10 (P1): a new profile can move the device's identity to a
+    // different node (make-before-break) or, at minimum, disables it on the
+    // node(s) it currently lives on -- both restart sing-box there, dropping
+    // every open connection on that node, not just this device's. Budget it
+    // per account/node against the CURRENT node(s), before reconciling
+    // (functions/lib/node-mutation-budget.js), same pattern as
+    // rotate-credentials.js.
+    const currentIdentities = await listDeviceIdentities(supabaseAdmin, deviceId);
+    const affectedNodeIds = [
+      ...new Set(currentIdentities.filter((i) => i.enabled).map((i) => i.node_id)),
+    ];
+    for (const nodeId of affectedNodeIds) {
+      const withinBudget = await checkNodeMutationBudget(supabaseAdmin, account.accountId, nodeId);
+      if (!withinBudget) {
+        // Mirrors rate-limit.js's rateLimitedResponse() message/semantics;
+        // this function returns a plain { status, body } (shared by the web
+        // and Telegram routes), not a Response, so the 429 is built inline
+        // rather than importing that helper.
+        return fail(429, "Too many connection changes for this account recently. Please try again later.");
+      }
+    }
     const result = await reconcileDeviceProvisioning(supabaseAdmin, env, {
       device: { ...device, status: deviceAfter.status },
       entitlement,

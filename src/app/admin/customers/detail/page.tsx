@@ -35,7 +35,11 @@ type CustomerDetail = {
     revokedAt: string | null;
     createdAt: string;
   }[];
-  vpnAccount: { id: number; vpnUserId: string; nodeId: string; enabled: boolean } | null;
+  // Plural (F-07/C-06): a customer can have several provisioned devices, so
+  // admin disable/enable/rotate now act account-wide instead of assuming a
+  // single vpn_accounts row per user.
+  vpnAccounts: { id: number; vpnUserId: string; nodeId: string; enabled: boolean }[];
+  suspendedAt?: string | null;
   jobs: { id: number; jobType: string; status: string; createdAt: string }[];
 };
 
@@ -222,10 +226,18 @@ function AdminCustomerDetailContent() {
 
       <section className="mb-6 rounded border bg-white p-4">
         <h2 className="mb-2 font-medium">VPN</h2>
-        {detail.vpnAccount ? (
+        {detail.suspendedAt && (
+          <p className="mb-2 text-sm text-red-700">Account suspended since {new Date(detail.suspendedAt).toLocaleString()}</p>
+        )}
+        {detail.vpnAccounts.length > 0 ? (
           <>
-            <p>Node: {detail.vpnAccount.nodeId}</p>
-            <p>Status: <StatusBadge status={detail.vpnAccount.enabled ? "active" : "canceled"} /></p>
+            <ul className="mb-3 space-y-1">
+              {detail.vpnAccounts.map((v) => (
+                <li key={v.id}>
+                  Node: {v.nodeId} — Status: <StatusBadge status={v.enabled ? "active" : "canceled"} />
+                </li>
+              ))}
+            </ul>
             <div className="mt-3 flex gap-2">
               <ConfirmButton
                 label="Disable"

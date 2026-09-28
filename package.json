@@ -6,9 +6,11 @@
     "dev": "next dev",
     "prebuild": "node scripts/check-production-config.mjs",
     "build": "next build",
+    "postbuild": "node scripts/apply-csp-nonce.mjs",
     "start": "next start",
-    "lint": "next lint",
-    "test": "vitest run"
+    "lint": "next lint && eslint functions scripts --ext .js,.mjs",
+    "test": "vitest run",
+    "check-log-secrets": "node scripts/check-log-secrets.mjs"
   },
   "dependencies": {
     "@noble/curves": "^2.4.0",
@@ -23,7 +25,7 @@
     "@eslint/eslintrc": "^3",
     "@playwright/test": "^1.63.0",
     "@tailwindcss/postcss": "^4",
-    "@types/node": "^20",
+    "@types/node": "^22",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",

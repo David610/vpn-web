@@ -24,13 +24,16 @@ jobs:
           cache: "npm"
 
       - name: Install dependencies
-        run: npm ci --legacy-peer-deps
+        run: npm ci
 
       - name: Production dependency audit
         run: npm audit --omit=dev --audit-level=high
 
       - name: Lint
         run: npm run lint
+
+      - name: Lint functions/ and scripts/ (not covered by `next lint`)
+        run: npx eslint functions scripts
 
       - name: Unit tests
         run: npm test
@@ -46,6 +49,17 @@ jobs:
 
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
+
+      - name: CSP hydration regression check (real _headers, real browser)
+        # This serves out/ through `wrangler pages dev`, which is the one
+        # local server that actually applies Cloudflare Pages' `_headers`
+        # file, unlike the plain python http.server used for the a11y check
+        # below. That distinction matters: a `script-src` CSP that blocks
+        # Next's inline RSC hydration scripts was shipped and went unnoticed
+        # specifically because nothing in this pipeline had ever exercised
+        # the real header under real enforcement. See public/_headers'
+        # "ROUND 2 CORRECTION" comment and scripts/verify-csp-hydration.mjs.
+        run: node scripts/verify-csp-hydration.mjs
 
       - name: Serve static export for the a11y/visual check
         # trailingSlash: true in next.config makes every route an
@@ -77,6 +91,38 @@ jobs:
           path: scratch/c6-screens
           retention-days: 14
 
+
+  sql-tests:
+    name: SQL tests on replayed migrations (Postgres 16)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: postgres
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install PostgreSQL client
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client
+
+      - name: Replay migrations and run supabase/tests/*.sql
+        run: bash scripts/test-supabase-sql.sh
 
   db-migrations:
     name: Supabase migration smoke

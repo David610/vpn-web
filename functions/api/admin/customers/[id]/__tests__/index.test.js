@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const getClaims = vi.fn();
 const adminMaybeSingle = vi.fn();
 const getUserById = vi.fn();
-let subMaybeSingle, vpnMaybeSingle, jobsOrder, jobsLimit, memberMaybeSingle, accountMaybeSingle, memberCount;
+let subMaybeSingle, vpnAccountsEq, jobsOrder, jobsLimit, jobsIn, memberMaybeSingle, accountMaybeSingle, memberCount;
 
 vi.mock("@supabase/supabase-js", () => ({
   createClient: vi.fn(() => ({
@@ -42,12 +42,17 @@ vi.mock("@supabase/supabase-js", () => ({
         };
       }
       if (table === "vpn_accounts") {
-        return { select: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(), maybeSingle: vpnMaybeSingle };
+        // getVpnAccountsForUser: select(...).eq("user_id", userId) — a list,
+        // no .maybeSingle(), since a user can have 2+ devices.
+        return { select: vi.fn().mockReturnThis(), eq: vpnAccountsEq };
       }
       if (table === "provisioning_jobs") {
         const chain = {
           select: vi.fn(() => chain),
-          eq: vi.fn(() => chain),
+          in: vi.fn((...args) => {
+            jobsIn(...args);
+            return chain;
+          }),
           order: vi.fn((...args) => {
             jobsOrder(...args);
             return chain;
@@ -88,8 +93,9 @@ beforeEach(() => {
     data: { status: "active", current_period_end: "2026-10-21T00:00:00Z", stripe_subscription_id: "sub_123" },
     error: null,
   });
-  vpnMaybeSingle = vi.fn().mockResolvedValue({ data: { id: 1, vpn_user_id: "vpn-abc", node_id: "node-1", enabled: true }, error: null });
+  vpnAccountsEq = vi.fn().mockResolvedValue({ data: [{ id: 1, vpn_user_id: "vpn-abc", node_id: "node-1", enabled: true }], error: null });
   jobsOrder = vi.fn();
+  jobsIn = vi.fn();
   jobsLimit = vi.fn().mockResolvedValue({
     data: [{ id: 9, job_type: "CREATE_USER", status: "done", created_at: "t1", claimed_at: "t2", completed_at: "t3", result: { subscription_url: "https://secret" } }],
     error: null,
@@ -116,15 +122,29 @@ describe("GET /api/admin/customers/:id", () => {
     expect(jobsLimit).toHaveBeenCalledWith(100);
   });
 
-  it("returns null vpnAccount when the user has none", async () => {
-    vpnMaybeSingle.mockResolvedValue({ data: null, error: null });
+  it("returns an empty vpnAccounts list when the user has none", async () => {
+    vpnAccountsEq.mockResolvedValue({ data: [], error: null });
     const res = await onRequestGet({ env, request: makeRequest(), params: { id: "user-1" } });
     const body = await res.json();
-    expect(body.vpnAccount).toBeNull();
+    expect(body.vpnAccounts).toEqual([]);
   });
 
-  it("returns 500 (not a false null vpnAccount) when the vpn_accounts query errors", async () => {
-    vpnMaybeSingle.mockResolvedValue({ data: null, error: { message: "db unavailable" } });
+  it("returns every provisioned device, not just one (the repro this fix targets)", async () => {
+    vpnAccountsEq.mockResolvedValue({
+      data: [
+        { id: 1, vpn_user_id: "vpn-abc", node_id: "node-1", enabled: true },
+        { id: 2, vpn_user_id: "vpn-def", node_id: "node-2", enabled: true },
+      ],
+      error: null,
+    });
+    const res = await onRequestGet({ env, request: makeRequest(), params: { id: "user-1" } });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.vpnAccounts).toHaveLength(2);
+  });
+
+  it("returns 500 (not a false empty vpnAccounts) when the vpn_accounts query errors", async () => {
+    vpnAccountsEq.mockResolvedValue({ data: null, error: { message: "db unavailable" } });
     const res = await onRequestGet({ env, request: makeRequest(), params: { id: "user-1" } });
     expect(res.status).toBe(500);
   });

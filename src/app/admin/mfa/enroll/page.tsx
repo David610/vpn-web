@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
-import { supabase } from "@/lib/supabase";
+import { supabaseAdmin } from "@/lib/supabase";
 
 type Enrollment = { factorId: string; qrCode: string; secret: string };
 
@@ -20,7 +20,7 @@ export default function AdminMfaEnrollPage() {
   const started = useRef(false);
 
   const begin = useCallback(async () => {
-    const { data: sessionData } = await supabase.auth.getSession();
+    const { data: sessionData } = await supabaseAdmin.auth.getSession();
     if (!sessionData.session) {
       router.replace("/admin/login");
       return;
@@ -44,7 +44,7 @@ export default function AdminMfaEnrollPage() {
       return;
     }
 
-    const { data: factors, error: listError } = await supabase.auth.mfa.listFactors();
+    const { data: factors, error: listError } = await supabaseAdmin.auth.mfa.listFactors();
     if (listError) {
       console.error("mfa.listFactors failed:", listError.message);
       setFatal("Could not read your authentication factors. Please try again.");
@@ -68,10 +68,10 @@ export default function AdminMfaEnrollPage() {
         (f) => f.factor_type === "totp" && f.status === "unverified"
       ) ?? [];
     for (const factor of stale) {
-      await supabase.auth.mfa.unenroll({ factorId: factor.id });
+      await supabaseAdmin.auth.mfa.unenroll({ factorId: factor.id });
     }
 
-    const { data, error: enrollError } = await supabase.auth.mfa.enroll({
+    const { data, error: enrollError } = await supabaseAdmin.auth.mfa.enroll({
       factorType: "totp",
       friendlyName: `Arcana Admin (${new Date().toISOString().slice(0, 10)})`,
     });
@@ -100,7 +100,7 @@ export default function AdminMfaEnrollPage() {
     setError(null);
     setSubmitting(true);
 
-    const { error: verifyError } = await supabase.auth.mfa.challengeAndVerify({
+    const { error: verifyError } = await supabaseAdmin.auth.mfa.challengeAndVerify({
       factorId: enrollment.factorId,
       code: code.trim(),
     });

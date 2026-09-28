@@ -59,9 +59,18 @@ export async function createNodeRevision(supabaseAdmin, { nodeId, config, reason
     .eq("status", "pending");
   if (cancelError) throw new Error(`provisioning_jobs coalesce failed: ${cancelError.message}`);
 
+  // F-17 fix: provisioning_jobs.idempotency_key is NOT NULL + unique. This
+  // insert used to omit it entirely, so every APPLY_NODE_REVISION enqueue
+  // failed with 23502 (not_null_violation) -- never the 23505 this code
+  // was written to tolerate -- meaning node revision rollout always threw
+  // here and the caller never got its {revision} result. Give it a
+  // deterministic key so a genuine race with another concurrent enqueue for
+  // the same node+revision collides on 23505 (intentionally tolerated
+  // below) instead of writing a duplicate job.
   const { error: enqueueError } = await supabaseAdmin.from("provisioning_jobs").insert({
     node_id: nodeId,
     job_type: "APPLY_NODE_REVISION",
+    idempotency_key: `apply-revision:${nodeId}:${revision}`,
     payload: { revision },
   });
   if (enqueueError && enqueueError.code !== "23505") {

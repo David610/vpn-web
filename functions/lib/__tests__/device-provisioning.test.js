@@ -20,13 +20,28 @@ function node(node_id, location_id, extra = {}) {
   return { node_id, location_id, role: "EXIT", lifecycle_state: "READY", configured_users: 0, max_sessions: null, ...extra };
 }
 
-function world({ nodes = [], paths = [], profile = null, identities = [], deviceStatus = "ACTIVE" } = {}) {
-  const device = { id: "dev-1", account_id: "acct-1", user_id: "user-1", status: deviceStatus };
+// F-01/C-01: finalizeCreatedIdentity now asks public.device_entitlement()
+// (mirrored for tests by fake-supabase.js) instead of only checking
+// device.status/account membership, so every fixture needs a subscription
+// that actually covers the device -- extra_seats defaults comfortably high
+// so existing scenarios (one device) keep the same "entitled" outcome as
+// before; dedicated capacity tests below override it.
+function world({
+  nodes = [],
+  paths = [],
+  profile = null,
+  identities = [],
+  deviceStatus = "ACTIVE",
+  subscriptionId = 1,
+  extraSeats = 90,
+} = {}) {
+  const device = { id: "dev-1", account_id: "acct-1", user_id: "user-1", status: deviceStatus, subscription_id: subscriptionId };
   return {
     device,
     db: makeFakeSupabase({
       customer_accounts: [{ id: "acct-1" }],
       account_members: [{ account_id: "acct-1", user_id: "user-1", role: "owner" }],
+      subscriptions: subscriptionId == null ? [] : [{ id: subscriptionId, account_id: "acct-1", status: "active", extra_seats: extraSeats }],
       devices: [{ ...device, name: "Phone" }],
       nodes,
       allowed_paths: paths,
@@ -260,5 +275,46 @@ describe("device revocation removes real network access", () => {
     });
     expect(db._tables.devices).toHaveLength(1);
     expect(jobs(db).filter((j) => j.job_type !== "DISABLE_USER")).toHaveLength(0);
+  });
+
+  // F-01/C-01 regression (audit Appendix A capacity bypass, inverted): a
+  // CREATE_USER job for a 4th device on a 3-device subscription must never
+  // be finalized (left enabled) just because the device itself is ACTIVE
+  // and its owner is still a member -- capacity must be checked too. Before
+  // this fix, finalizeCreatedIdentity's "stillEntitled" never looked at
+  // subscription capacity at all, so this test fails on the old code (the
+  // new identity stays enabled) and passes once device_entitlement() gates
+  // it.
+  it("a CREATE_USER that raced past its subscription's device limit is disabled on completion, not enabled", async () => {
+    const db = makeFakeSupabase({
+      customer_accounts: [{ id: "acct-1" }],
+      account_members: [{ account_id: "acct-1", user_id: "user-1", role: "owner" }],
+      subscriptions: [{ id: 1, account_id: "acct-1", status: "active", extra_seats: 0 }],
+      devices: [
+        { id: "dev-1", account_id: "acct-1", user_id: "user-1", status: "ACTIVE", subscription_id: 1 },
+        { id: "dev-2", account_id: "acct-1", user_id: "user-1", status: "ACTIVE", subscription_id: 1 },
+        { id: "dev-3", account_id: "acct-1", user_id: "user-1", status: "ACTIVE", subscription_id: 1 },
+        // The 4th device: over the 3-device capacity of subscription 1.
+        { id: "dev-4", account_id: "acct-1", user_id: "user-1", status: "ACTIVE", subscription_id: 1 },
+      ],
+      vpn_accounts: [],
+    });
+    db._tables.vpn_accounts.push({
+      id: 9,
+      user_id: "user-1",
+      device_id: "dev-4",
+      node_id: "de-fsn-001",
+      vpn_user_id: "vpn-dev4",
+      enabled: true,
+    });
+    const r = await finalizeCreatedIdentity(db, {
+      identity: { id: 9, deviceId: "dev-4", vpnUserId: "vpn-dev4" },
+      nodeId: "de-fsn-001",
+      userId: "user-1",
+    });
+    expect(r.disabledNew).toBe(true);
+    expect(jobs(db)).toEqual([
+      expect.objectContaining({ job_type: "DISABLE_USER", node_id: "de-fsn-001", vpn_account_id: 9 }),
+    ]);
   });
 });
