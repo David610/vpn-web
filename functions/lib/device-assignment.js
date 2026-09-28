@@ -14,6 +14,7 @@
  */
 import { getAccountForUser, getEffectiveEntitlement } from "./accounts.js";
 import { reconcileDeviceProvisioning } from "./device-provisioning.js";
+import { checkDeviceEntitlement } from "./device-entitlement.js";
 
 const fail = (status, error) => ({ status, body: { error } });
 
@@ -100,7 +101,13 @@ export async function assignDeviceProfile(supabaseAdmin, env, user, deviceId, pr
   // route the new profile does not allow.
   let placement = null;
   const entitlement = await getEffectiveEntitlement(supabaseAdmin, account.accountId);
-  if (entitlement) {
+  // F-01/C-01: getEffectiveEntitlement is account-level (it only asks "is
+  // any subscription live"); it does not know whether THIS device is within
+  // its own subscription's device capacity. device_entitlement() is the
+  // single authoritative per-device answer, so it gates the reconcile that
+  // would otherwise place the device and enqueue CREATE_USER.
+  const gate = await checkDeviceEntitlement(supabaseAdmin, deviceId);
+  if (entitlement && gate.entitled) {
     const result = await reconcileDeviceProvisioning(supabaseAdmin, env, {
       device: { ...device, status: deviceAfter.status },
       entitlement,

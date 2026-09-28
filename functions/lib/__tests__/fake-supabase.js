@@ -1,5 +1,6 @@
 import { vi } from "vitest";
 import { agentSyncLeaseSlots, leaseRouteSlots, revokeDeviceLeases } from "./lease-pool-model.js";
+import { deviceEntitlementModel } from "./device-entitlement-model.js";
 
 /**
  * A small in-memory stand-in for the PostgREST query builder, covering the
@@ -223,6 +224,7 @@ export function makeFakeSupabase(seed = {}, options = {}) {
       if (name === "lease_route_slots") return leaseRouteSlots(args, tables);
       if (name === "agent_sync_lease_slots") return agentSyncLeaseSlots(args, tables);
       if (name === "revoke_device_leases") return revokeDeviceLeases(args, tables);
+      if (name === "device_entitlement") return deviceEntitlementModel(args, tables);
 
       if (name === "customer_dashboard_state") {
         const membership = tables.account_members.find(
