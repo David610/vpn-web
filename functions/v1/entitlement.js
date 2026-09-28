@@ -1,5 +1,5 @@
 import { ensureSessionDevice } from "../lib/account-service.js";
-import { loadDeviceEntitlements } from "../lib/subscriptions.js";
+import { resolveDeviceEntitlement } from "../lib/device-entitlement.js";
 import { withV1User, v1Json } from "../lib/v1-http.js";
 
 /**
@@ -15,12 +15,7 @@ export const onRequestGet = (context) =>
       .eq("id", device.id)
       .single();
     if (error) throw new Error(`devices lookup failed: ${error.message}`);
-    const { data: devices, error: listError } = await db
-      .from("devices")
-      .select("id, status, subscription_id, created_at")
-      .eq("account_id", row.account_id);
-    if (listError) throw new Error(`devices lookup failed: ${listError.message}`);
-    const entitlement = (await loadDeviceEntitlements(db, row.account_id, devices ?? [])).get(row.id);
+    const entitlement = await resolveDeviceEntitlement(db, row);
     if (!entitlement) {
       return v1Json({
         status: "inactive",
