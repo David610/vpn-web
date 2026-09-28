@@ -62,7 +62,11 @@ export async function onRequestPost({ env, request }) {
   // account is confirmed disabled (see account-service.js).
   let deletedAccounts = 0;
   try {
-    deletedAccounts = (await finalizeAccountDeletions(supabaseAdmin)).length;
+    // F-08/C-05: passing env lets finalizeAccountDeletions resume a
+    // deletion saga that was interrupted mid-flight (e.g. a Stripe error
+    // between cancel and revoke), not just finalize ones that already
+    // completed every step on the user's own repeat request.
+    deletedAccounts = (await finalizeAccountDeletions(supabaseAdmin, { env })).length;
   } catch (err) {
     console.error("fleet-tick: account deletion finalize failed:", err.message);
   }
