@@ -56,7 +56,7 @@ function miniAppPost(path, body, initData) {
   });
 }
 
-function seed(overrides = {}) {
+function seed(overrides = {}, rpc = {}) {
   return makeFakeSupabase(
     {
       customer_accounts: [{ id: "acct-1" }],
@@ -65,7 +65,7 @@ function seed(overrides = {}) {
       telegram_link_codes: [],
       ...overrides,
     },
-    { user: { id: "user-1", email: "owner@example.com" } }
+    { user: { id: "user-1", email: "owner@example.com" }, rpc }
   );
 }
 
@@ -108,6 +108,14 @@ describe("POST /api/account/telegram/link-code", () => {
     db = seed({ telegram_links: [{ user_id: "user-1", telegram_user_id: 1 }] });
     const res = await issueLinkCode({ env, request: authedPost("/api/account/telegram/link-code") });
     expect(res.status).toBe(409);
+  });
+
+  // F-49: this account already requested codes past the window's limit.
+  it("returns 429 once the per-account rate limit is exceeded", async () => {
+    db = seed({}, { check_rate_limit: async () => ({ data: false, error: null }) });
+    const res = await issueLinkCode({ env, request: authedPost("/api/account/telegram/link-code") });
+    expect(res.status).toBe(429);
+    expect(db._tables.telegram_link_codes).toHaveLength(0);
   });
 });
 
@@ -160,6 +168,28 @@ describe("POST /api/telegram/link (Mini App code consumption)", () => {
     });
     expect(res.status).toBe(401);
     expect(db._tables.telegram_links).toHaveLength(0);
+  });
+
+  // F-49: guessing attempts against the short human-typed code must be
+  // throttled independently of the code's own TTL/single-use CAS.
+  it("returns 429 once the per-Telegram-user rate limit is exceeded, without touching the code", async () => {
+    const codeHash = await hashLinkCode("ABCD1234");
+    db = seed(
+      {
+        telegram_link_codes: [
+          { code_hash: codeHash, user_id: "user-1", expires_at: new Date(Date.now() + 60_000).toISOString(), consumed_at: null },
+        ],
+      },
+      { check_rate_limit: async () => ({ data: false, error: null }) }
+    );
+    const initData = await buildInitData(42, "dm");
+    const res = await consumeLink({
+      env: { ...env, TELEGRAM_BOT_TOKEN: BOT_TOKEN },
+      request: miniAppPost("/api/telegram/link", { code: "abcd1234" }, initData),
+    });
+    expect(res.status).toBe(429);
+    expect(db._tables.telegram_links).toHaveLength(0);
+    expect(db._tables.telegram_link_codes[0].consumed_at).toBeNull();
   });
 
   it("rejects reuse of an already-consumed code", async () => {

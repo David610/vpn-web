@@ -28,4 +28,21 @@ describe("safeNextPath", () => {
   it("accepts a caller-supplied fallback", () => {
     expect(safeNextPath("?next=https%3A%2F%2Fevil.test", "/")).toBe("/");
   });
+
+  // F-14: control characters and their encoded forms get collapsed by URL
+  // parsers into protocol-relative redirects. Each of these must fall back.
+  it.each([
+    ["raw tab before host", "?next=/%09/evil.test".replace("%09", "\t")],
+    ["raw newline before host", "?next=/%0a/evil.test".replace("%0a", "\n")],
+    ["encoded tab", "?next=%2F%09%2Fevil.test"],
+    ["encoded tab (percent-09)", "?next=%2F%2Fevil.test%09"],
+    ["tab-then-slashes bypass", "?next=/\t/evil.test"],
+    ["double slash", "?next=//evil.test"],
+    ["backslash-escaped double slash", "?next=/\\evil.test"],
+    ["percent-encoded tab then encoded slash", "?next=%09%2Fevil.test"],
+    ["double-encoded protocol-relative", "?next=/%2F%2Fevil.test"],
+    ["encoded backslash", "?next=%2F%5Cevil.test"],
+  ])("refuses control-character bypass: %s", (_label, search) => {
+    expect(safeNextPath(search)).toBe("/dashboard/");
+  });
 });
