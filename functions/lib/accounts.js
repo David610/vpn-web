@@ -18,6 +18,7 @@
 // below, and re-exporting keeps every existing server-side import of these
 // three names from "./accounts.js" working unchanged.
 import { INCLUDED_SEATS, SEAT_PACK_SIZE, packQuantityFromExtraSeats } from "./seat-constants.js";
+import { isPastDueWithinGrace } from "./stripe-fields.js";
 export { INCLUDED_SEATS, SEAT_PACK_SIZE, packQuantityFromExtraSeats };
 import { applyLegacyExpiryGrace } from "./stripe-fields.js";
 
@@ -163,19 +164,30 @@ export async function getMemberVpnAccounts(supabaseAdmin, accountId, nodeId) {
  *
  * past_due and trialing count as live on purpose: a customer in Stripe's
  * dunning window, or on the free trial, still has service.
+ *
+ * F-40: past_due is only live WITHIN its bounded grace window
+ * (isPastDueWithinGrace) — a subscription that has stayed past_due beyond
+ * that window is filtered out here even though its status string still
+ * reads "past_due", the same rule subscriptions.js's isLive() applies.
+ * `past_due_since` is always fetched (regardless of the caller's requested
+ * `columns`) so this filter can be applied without every caller having to
+ * remember to ask for it.
  */
-export async function getLiveSubscription(supabaseAdmin, accountId, columns = "*") {
+export async function getLiveSubscription(supabaseAdmin, accountId, columns = "*", env = {}) {
   // An account may now hold several live subscriptions; this returns the one
   // that runs longest, which is what account-level questions ("does this
   // account have access, and until when?") need. Per-device access is
   // decided in subscriptions.js.
+  const selectColumns = columns === "*" ? "*" : `${columns}, past_due_since`;
   const { data, error } = await supabaseAdmin
     .from("subscriptions")
-    .select(columns)
+    .select(selectColumns)
     .eq("account_id", accountId)
     .in("status", ["trialing", "active", "past_due"]);
   if (error) throw new Error(`subscriptions lookup failed: ${error.message}`);
-  const rows = data ?? [];
+  const rows = (data ?? []).filter(
+    (row) => row.status !== "past_due" || isPastDueWithinGrace(row.past_due_since, env)
+  );
   rows.sort((a, b) =>
     String(b.current_period_end ?? "").localeCompare(String(a.current_period_end ?? ""))
   );
@@ -290,12 +302,13 @@ export function resolveEffectiveEntitlement(subscription, grants = []) {
  * queries. Read-heavy dashboard paths use the same pure resolver with the
  * batched snapshot RPC.
  */
-export async function getEffectiveEntitlement(supabaseAdmin, accountId) {
+export async function getEffectiveEntitlement(supabaseAdmin, accountId, env = {}) {
   const [subscription, grants] = await Promise.all([
     getLiveSubscription(
       supabaseAdmin,
       accountId,
-      "id, status, current_period_end, cancel_at_period_end, extra_seats"
+      "id, status, current_period_end, cancel_at_period_end, extra_seats",
+      env
     ),
     getActiveAdminEntitlements(supabaseAdmin, accountId),
   ]);

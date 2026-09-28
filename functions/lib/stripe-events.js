@@ -69,7 +69,7 @@ function isStaleSubscriptionWrite(current, eventCreatedAt, nextStatus) {
 async function readSubscriptionSyncState(supabaseAdmin, subscriptionId) {
   const { data, error } = await supabaseAdmin
     .from("subscriptions")
-    .select("status, stripe_synced_at, account_id, current_period_end")
+    .select("status, stripe_synced_at, account_id, current_period_end, past_due_since")
     .eq("stripe_subscription_id", subscriptionId)
     .maybeSingle();
   if (error) {
@@ -253,6 +253,10 @@ export async function handleInvoicePaid(supabaseAdmin, invoice, env = {}) {
     .update({
       status: "active",
       current_period_end: currentPeriodEnd,
+      // F-40: a successful payment always clears past_due_since, whether or
+      // not the row was actually past_due — an invoice.paid confirms the
+      // subscription is fully current again.
+      past_due_since: null,
       stripe_synced_at: eventCreatedAt ?? new Date().toISOString(),
       updated_at: new Date().toISOString(),
     })
@@ -294,7 +298,7 @@ export async function handleInvoicePaid(supabaseAdmin, invoice, env = {}) {
     throw new Error(`customer_accounts trial update failed: ${trialConsumeError.message}`);
   }
 
-  const entitlement = await getEffectiveEntitlement(supabaseAdmin, sub.account_id);
+  const entitlement = await getEffectiveEntitlement(supabaseAdmin, sub.account_id, env);
   if (!entitlement) {
     throw new Error(`invoice.paid ${invoice.id} produced no effective entitlement`);
   }
@@ -406,6 +410,7 @@ export async function handleSubscriptionTrialing(supabaseAdmin, subscription, en
     .update({
       status: "trialing",
       current_period_end: trialEnd,
+      past_due_since: null,
       stripe_synced_at: eventCreatedAt ?? new Date().toISOString(),
       updated_at: new Date().toISOString(),
     })
@@ -448,7 +453,7 @@ export async function handleSubscriptionTrialing(supabaseAdmin, subscription, en
 
   // Reconcile against all valid access sources. A longer/no-expiry support
   // grant must not be shortened merely because a Stripe trial started.
-  const entitlement = await getEffectiveEntitlement(supabaseAdmin, sub.account_id);
+  const entitlement = await getEffectiveEntitlement(supabaseAdmin, sub.account_id, env);
   if (!entitlement) {
     throw new Error(`trialing subscription ${subscription.id} produced no effective entitlement`);
   }
@@ -476,7 +481,7 @@ async function enqueueDisableForAccount(supabaseAdmin, accountId, subscriptionId
   // The Stripe subscription that triggered this event is no longer an
   // entitlement, but a support grant (or a newer paid subscription) may
   // still be. Reconcile to that instead of blindly disabling the account.
-  const remainingEntitlement = await getEffectiveEntitlement(supabaseAdmin, accountId);
+  const remainingEntitlement = await getEffectiveEntitlement(supabaseAdmin, accountId, env);
   if (remainingEntitlement) {
     await syncAccountProvisioningToEntitlement(
       supabaseAdmin,
@@ -549,6 +554,20 @@ export async function handleSubscriptionUpdated(
   // would see the NEW value and never detect a renewal.
   const previousPeriodEnd = current?.current_period_end ?? null;
 
+  // F-40: record WHEN this subscription first became past_due, so isLive()/
+  // getLiveSubscription() can bound how long it stays entitled while
+  // unpaid. Only stamped on the transition INTO past_due (an already-
+  // past_due row keeps its original timestamp — a same-status redelivery or
+  // an unrelated field change, e.g. a pack purchase mid-dunning, must not
+  // restart the grace clock); any other status clears it, including a
+  // recovery back to active (handleInvoicePaid also clears it, redundantly
+  // but harmlessly, since a recovery invoice and this event can arrive in
+  // either order).
+  const pastDueSince =
+    subscription.status === "past_due"
+      ? current?.past_due_since ?? (eventCreatedAt ?? new Date().toISOString())
+      : null;
+
   // F-31/C-04: only trust a base price this deployment actually sells. If
   // the payload names a base item at all AND an allowlist is configured
   // (STRIPE_PRICE_ID), an unrecognized price refuses the whole write rather
@@ -579,6 +598,7 @@ export async function handleSubscriptionUpdated(
       // arrives as this event, so syncing here covers both.
       extra_seats: getExtraSeatCount(subscription, seatPriceId),
       ...(basePriceId ? { stripe_price_id: basePriceId } : {}),
+      past_due_since: pastDueSince,
       stripe_synced_at: eventCreatedAt ?? new Date().toISOString(),
       updated_at: new Date().toISOString(),
     })
@@ -635,7 +655,7 @@ export async function handleSubscriptionUpdated(
     currentPeriodEnd &&
     new Date(currentPeriodEnd).getTime() > new Date(previousPeriodEnd).getTime();
   if (periodAdvanced) {
-    const entitlement = await getEffectiveEntitlement(supabaseAdmin, updated.account_id);
+    const entitlement = await getEffectiveEntitlement(supabaseAdmin, updated.account_id, env);
     if (entitlement) {
       await syncAccountProvisioningToEntitlement(
         supabaseAdmin,

@@ -192,3 +192,60 @@ export function applyLegacyExpiryGrace(iso) {
   if (!Number.isFinite(ms)) return iso;
   return new Date(ms + LEGACY_NODE_EXPIRY_GRACE_MS).toISOString();
 }
+
+/**
+ * F-40: how long a `past_due` subscription keeps entitlement after it FIRST
+ * went past_due, before it stops counting as live.
+ *
+ * 14 days: Stripe's default Smart Retries dunning schedule keeps retrying a
+ * failed payment for up to ~2 weeks (exact spacing depends on the account's
+ * configured retry rules, but 14 days covers the overwhelming majority of
+ * configurations) before the subscription is marked `unpaid`/`canceled`.
+ * Bounding at the same order of magnitude means a customer whose card is
+ * still being retried keeps service through the whole dunning window (the
+ * case this deployment actually wants to protect: a temporarily-declined or
+ * just-expired card the customer hasn't updated yet), while a subscription
+ * that stays past_due well beyond how long Stripe itself would still be
+ * retrying no longer grants free, indefinite service (F-40 — previously
+ * `past_due` was fully live forever, with no cap at all).
+ *
+ * Configurable via env.PAST_DUE_GRACE_MS for deployments running a
+ * different dunning configuration in the Stripe dashboard, same pattern as
+ * other grace/config knobs in this codebase (e.g. AUTO_REPLACE_AFTER_FAILED_MS
+ * in node-auto-replace.js).
+ */
+export const DEFAULT_PAST_DUE_GRACE_MS = 14 * 24 * 60 * 60 * 1000;
+
+/**
+ * @param {{ PAST_DUE_GRACE_MS?: string | number }} env
+ * @returns {number} milliseconds
+ */
+export function getPastDueGraceMs(env = {}) {
+  const configured = Number(env?.PAST_DUE_GRACE_MS);
+  return Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_PAST_DUE_GRACE_MS;
+}
+
+/**
+ * Is a `past_due` subscription still within its bounded grace window?
+ *
+ * A missing/invalid `pastDueSince` (a legacy row from before this column
+ * existed, or one whose webhook handler somehow never set it) fails OPEN —
+ * treated as still within grace — rather than instantly cutting off
+ * entitlement for a row this code cannot actually date. This mirrors
+ * isStaleSubscriptionWrite's degrade-gracefully-on-missing-timestamp
+ * precedent in stripe-events.js. Going forward, handleSubscriptionUpdated
+ * sets pastDueSince on every transition into `past_due`, so this fallback
+ * should only ever apply to rows written before that wiring existed.
+ *
+ * @param {string | null} pastDueSince - ISO timestamp of when the row first
+ *   became past_due (subscriptions.past_due_since)
+ * @param {{ PAST_DUE_GRACE_MS?: string | number }} env
+ * @param {number} now - unix ms, injectable for tests
+ * @returns {boolean}
+ */
+export function isPastDueWithinGrace(pastDueSince, env = {}, now = Date.now()) {
+  if (!pastDueSince) return true;
+  const since = new Date(pastDueSince).getTime();
+  if (!Number.isFinite(since)) return true;
+  return now - since < getPastDueGraceMs(env);
+}
