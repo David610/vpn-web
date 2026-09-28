@@ -684,11 +684,12 @@ export async function advanceOperation(ctx, op) {
 //   2. Once that identity is enabled, flip device_node_assignments to the
 //      new node and enqueue DISABLE_USER on the old one.
 
-async function pickReplacementNode(supabase, { excludeNodeId }) {
+async function pickReplacementNode(supabase, { excludeNodeId, role, locationId }) {
   const { data: nodes, error } = await supabase
     .from("nodes")
     .select("node_id, configured_users, max_sessions, lifecycle_state")
-    .eq("role", "EXIT")
+    .eq("role", role)
+    .eq("location_id", locationId)
     .in("lifecycle_state", ["READY", "CANARY"])
     .neq("node_id", excludeNodeId);
   if (error) throw new Error(`nodes lookup failed: ${error.message}`);
@@ -708,7 +709,7 @@ async function pickReplacementNode(supabase, { excludeNodeId }) {
   return sorted[0].node_id;
 }
 
-async function reconcileOneFailedNodeDevice(supabase, { deviceId, oldNodeId }) {
+async function reconcileOneFailedNodeDevice(supabase, { deviceId, oldNodeId, hop }) {
   // A device whose entitlement already lapsed has nothing worth re-placing
   // -- the normal device-provisioning reconcile path (not this one) is what
   // eventually disables it everywhere.
@@ -732,7 +733,24 @@ async function reconcileOneFailedNodeDevice(supabase, { deviceId, oldNodeId }) {
   const oldIdentity = (identities ?? []).find((i) => i.node_id === oldNodeId && i.enabled);
   if (!oldIdentity) return null; // nothing live on the bad node to move
 
-  const targetNodeId = await pickReplacementNode(supabase, { excludeNodeId: oldNodeId });
+  // The replacement must have the SAME role and location as the node being
+  // replaced. This is what keeps a DOUBLE_HOP device's path valid without
+  // re-deriving it from allowed_paths: the (entry_location, exit_location)
+  // pair the device was scheduled under doesn't change, only which physical
+  // node fills the failed hop's role/location slot.
+  const { data: oldNode, error: oldNodeError } = await supabase
+    .from("nodes")
+    .select("role, location_id")
+    .eq("node_id", oldNodeId)
+    .maybeSingle();
+  if (oldNodeError) throw new Error(`nodes lookup failed: ${oldNodeError.message}`);
+  if (!oldNode) return null;
+
+  const targetNodeId = await pickReplacementNode(supabase, {
+    excludeNodeId: oldNodeId,
+    role: oldNode.role,
+    locationId: oldNode.location_id,
+  });
   if (!targetNodeId) return { status: "no_replacement_available" };
 
   const existingOnTarget = (identities ?? []).find((i) => i.node_id === targetNodeId);
@@ -745,11 +763,11 @@ async function reconcileOneFailedNodeDevice(supabase, { deviceId, oldNodeId }) {
     // recovers, which is harmless -- the assignment has already moved.
     const { error: upsertError } = await supabase
       .from("device_node_assignments")
-      .upsert({ device_id: deviceId, node_id: targetNodeId, hop: "EXIT" }, { onConflict: "device_id,hop" });
+      .upsert({ device_id: deviceId, node_id: targetNodeId, hop }, { onConflict: "device_id,hop" });
     if (upsertError) throw new Error(`device_node_assignments upsert failed: ${upsertError.message}`);
 
     const { error: jobError } = await supabase.from("provisioning_jobs").insert({
-      idempotency_key: `replace-legacy:${deviceId}:disable:${oldNodeId}`,
+      idempotency_key: `replace-legacy:${deviceId}:${hop}:disable:${oldNodeId}`,
       node_id: oldNodeId,
       job_type: "DISABLE_USER",
       vpn_account_id: oldIdentity.id,
@@ -768,7 +786,7 @@ async function reconcileOneFailedNodeDevice(supabase, { deviceId, oldNodeId }) {
   // identity on it, and a crash between these two steps just means the
   // next tick re-checks and continues from wherever it left off.
   const { error: createError } = await supabase.from("provisioning_jobs").insert({
-    idempotency_key: `replace-legacy:${deviceId}:create:${targetNodeId}`,
+    idempotency_key: `replace-legacy:${deviceId}:${hop}:create:${targetNodeId}`,
     node_id: targetNodeId,
     job_type: "CREATE_USER",
     vpn_account_id: null,
@@ -794,23 +812,31 @@ export async function reconcileFailedNodeAssignments(supabase) {
 
   const results = [];
   for (const node of badNodes ?? []) {
+    // Both hops of a DOUBLE_HOP device can independently fail over: a
+    // RELAY-node failure previously left DOUBLE_HOP devices stranded
+    // forever (only EXIT was scanned here), even though the EXIT hop was
+    // perfectly healthy. See fleet-operations.js history for the fix.
     const { data: assignments, error: assignError } = await supabase
       .from("device_node_assignments")
-      .select("device_id")
+      .select("device_id, hop")
       .eq("node_id", node.node_id)
-      .eq("hop", "EXIT");
+      .in("hop", ["EXIT", "RELAY"]);
     if (assignError) throw new Error(`device_node_assignments lookup failed: ${assignError.message}`);
     for (const assignment of assignments ?? []) {
       try {
         const outcome = await reconcileOneFailedNodeDevice(supabase, {
           deviceId: assignment.device_id,
           oldNodeId: node.node_id,
+          hop: assignment.hop,
         });
-        if (outcome) results.push({ deviceId: assignment.device_id, oldNodeId: node.node_id, ...outcome });
+        if (outcome) {
+          results.push({ deviceId: assignment.device_id, oldNodeId: node.node_id, hop: assignment.hop, ...outcome });
+        }
       } catch (err) {
         console.error(
           "reconcileFailedNodeAssignments: device reconcile failed:",
           assignment.device_id,
+          assignment.hop,
           err.message
         );
       }
