@@ -35,4 +35,39 @@ describe("public/_headers", () => {
       expect(csp).not.toContain("frame-ancestors 'none'");
     });
   }
+
+  // F-15: sessions live in localStorage, so a strict script-src is this
+  // app's primary defense against token-stealing XSS. No route may relax
+  // it to 'unsafe-inline'/'unsafe-eval', and connect-src must stay scoped
+  // to Supabase + self rather than being left wide open.
+  describe("F-15 CSP hardening", () => {
+    it("site-wide: locks script-src to 'self' with no unsafe directives", () => {
+      const csp = rules().get("/*").find((l) => l.startsWith("Content-Security-Policy:"));
+      const directive = csp.split(";").map((s) => s.trim()).find((d) => d.startsWith("script-src"));
+      expect(directive).toBe("script-src 'self'");
+      expect(csp).not.toContain("unsafe-eval");
+    });
+
+    it("site-wide: scopes connect-src to self and Supabase only", () => {
+      const csp = rules().get("/*").find((l) => l.startsWith("Content-Security-Policy:"));
+      const directive = csp.split(";").map((s) => s.trim()).find((d) => d.startsWith("connect-src"));
+      expect(directive).toBe("connect-src 'self' https://*.supabase.co");
+    });
+
+    for (const path of ["/*", "/telegram", "/telegram/*"]) {
+      it(`${path}: keeps frame-ancestors and object-src locked down`, () => {
+        const csp = rules().get(path).find((l) => l.startsWith("Content-Security-Policy:"));
+        expect(csp).toContain("object-src 'none'");
+        expect(csp).toContain("base-uri 'self'");
+      });
+    }
+
+    for (const path of ["/telegram", "/telegram/*"]) {
+      it(`${path}: only widens script-src for Telegram's own bootstrap script, not to 'unsafe-inline'`, () => {
+        const csp = rules().get(path).find((l) => l.startsWith("Content-Security-Policy:"));
+        const directive = csp.split(";").map((s) => s.trim()).find((d) => d.startsWith("script-src"));
+        expect(directive).toBe("script-src 'self' https://telegram.org");
+      });
+    }
+  });
 });

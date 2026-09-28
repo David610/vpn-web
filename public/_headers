@@ -4,17 +4,46 @@
   Referrer-Policy: strict-origin-when-cross-origin
   Permissions-Policy: camera=(), microphone=(), geolocation=(), browsing-topics=()
   X-Permitted-Cross-Domain-Policies: none
-  Content-Security-Policy: object-src 'none'; base-uri 'self'; frame-ancestors 'none'
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' https://*.supabase.co; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'
+
+# F-15: session tokens live in localStorage (see src/lib/supabase.ts), not
+# HttpOnly cookies -- a full cookie migration is out of scope for a Next.js
+# static export served from Cloudflare Pages Functions with no server
+# runtime to set/rotate them. This CSP is the compensating control instead:
+# script-src 'self' with no 'unsafe-inline'/'unsafe-eval' blocks the classic
+# XSS-to-token-theft path (inline <script> injection, eval-based payloads),
+# since this app has no inline scripts to whitelist -- Next's static export
+# only emits external <script src="/_next/..."> chunks and a
+# type="application/json" __NEXT_DATA__ tag, neither of which needs
+# 'unsafe-inline'. style-src keeps 'unsafe-inline' because Next.js emits
+# inline style attributes/tags for its own CSS-in-JS-adjacent tooling and
+# third-party UI primitives used here; that is a much smaller blast radius
+# than script-src (CSS cannot read localStorage) and is not itself a path to
+# exfiltrating the session token.
+#
+# IMPORTANT: this materially reduces the XSS blast radius but does NOT fully
+# mitigate F-15. A CSP is enforced by the browser and can be bypassed by any
+# gadget CSP itself doesn't cover (e.g. a same-origin JSONP-like endpoint, a
+# trusted third-party script origin later added without review, or a browser
+# extension); it also does nothing once script execution is achieved through
+# an allowed script-src origin. The session token remains readable by any
+# script that does execute in this origin. Treat this as raising the bar for
+# exploitation, not eliminating the localStorage-token risk documented in
+# the audit -- closing it fully requires the HttpOnly-cookie migration this
+# pass explicitly did not attempt.
 
 # Telegram Mini App: Telegram Web (web.telegram.org) embeds Mini Apps in an
 # iframe, so the site-wide DENY / frame-ancestors 'none' above would blank the
 # app there. Detach them for /telegram/ only and allow Telegram's origins.
+# The Mini App also loads Telegram's own bootstrap script
+# (src/app/telegram/layout.tsx), so script-src needs that one extra origin
+# on these routes only -- every other route stays script-src 'self'.
 /telegram
   ! X-Frame-Options
   ! Content-Security-Policy
-  Content-Security-Policy: object-src 'none'; base-uri 'self'; frame-ancestors 'self' https://web.telegram.org https://*.telegram.org
+  Content-Security-Policy: default-src 'self'; script-src 'self' https://telegram.org; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://*.supabase.co; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self' https://web.telegram.org https://*.telegram.org
 
 /telegram/*
   ! X-Frame-Options
   ! Content-Security-Policy
-  Content-Security-Policy: object-src 'none'; base-uri 'self'; frame-ancestors 'self' https://web.telegram.org https://*.telegram.org
+  Content-Security-Policy: default-src 'self'; script-src 'self' https://telegram.org; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://*.supabase.co; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self' https://web.telegram.org https://*.telegram.org
