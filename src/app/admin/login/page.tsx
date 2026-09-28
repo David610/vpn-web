@@ -2,7 +2,7 @@
 
 import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
-import { supabase } from "@/lib/supabase";
+import { supabaseAdmin } from "@/lib/supabase";
 
 type Phase = "credentials" | "totp";
 
@@ -41,11 +41,11 @@ export default function AdminLoginPage() {
       const body = await res.json().catch(() => ({}));
       if (body.code === "mfa_required") {
         const { data: aal } =
-          await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+          await supabaseAdmin.auth.mfa.getAuthenticatorAssuranceLevel();
         if (aal?.nextLevel === "aal2") {
           // A verified factor exists; challenge it. listFactors() narrows
           // `.totp` to verified factors, so the first entry is usable as-is.
-          const { data: factors } = await supabase.auth.mfa.listFactors();
+          const { data: factors } = await supabaseAdmin.auth.mfa.listFactors();
           const totp = factors?.totp[0];
           if (totp) {
             setFactorId(totp.id);
@@ -63,7 +63,7 @@ export default function AdminLoginPage() {
 
     // 401, or anything else we cannot make sense of: not an admin. Drop the
     // session so nobody is left half-authenticated on an admin URL.
-    await supabase.auth.signOut();
+    await supabaseAdmin.auth.signOut();
     setPhase("credentials");
     setError("This account does not have admin access.");
   }
@@ -73,7 +73,7 @@ export default function AdminLoginPage() {
     setError(null);
     setSubmitting(true);
 
-    const { data, error: signInError } = await supabase.auth.signInWithPassword({
+    const { data, error: signInError } = await supabaseAdmin.auth.signInWithPassword({
       email,
       password,
     });
@@ -98,7 +98,7 @@ export default function AdminLoginPage() {
     setError(null);
     setSubmitting(true);
 
-    const { error: verifyError } = await supabase.auth.mfa.challengeAndVerify({
+    const { error: verifyError } = await supabaseAdmin.auth.mfa.challengeAndVerify({
       factorId,
       code: code.trim(),
     });
@@ -113,7 +113,7 @@ export default function AdminLoginPage() {
 
     // challengeAndVerify upgrades the current session to aal2 in place, so
     // the stored session now carries a token the admin routes will accept.
-    const { data } = await supabase.auth.getSession();
+    const { data } = await supabaseAdmin.auth.getSession();
     if (data.session) {
       await routeBySessionLevel(data.session.access_token);
     } else {
@@ -124,7 +124,7 @@ export default function AdminLoginPage() {
   }
 
   async function startOver() {
-    await supabase.auth.signOut();
+    await supabaseAdmin.auth.signOut();
     setPhase("credentials");
     setPassword("");
     setCode("");
