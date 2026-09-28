@@ -3,6 +3,7 @@ import { generateHexSecret, ENROLLMENT_TOKEN_TTL_MS } from "./node-enrollment.js
 import { canTransitionLifecycle } from "./node-lifecycle.js";
 import { buildNodeBootstrapUserData } from "./node-bootstrap.js";
 import { FAILURE_THRESHOLD, HEARTBEAT_INTERVAL_MS, SILENCE_THRESHOLD_MULTIPLIER } from "./node-health-transition.js";
+import { checkDeviceEntitlement } from "./device-entitlement.js";
 
 /**
  * Resumable fleet operations (spec §24 sagas), persisted in
@@ -376,6 +377,21 @@ const REPLACE_NODE_HANDLERS = {
       throw new FatalStepError(`old node ${oldNodeId} is ${oldNode.lifecycle_state}, expected DRAINING or RETIRED`);
     }
 
+    // F-20/B-03: RETIRE is already assignment-gated in this saga --
+    // DRAIN_OLD_NODE (above) only ever completes ("done") once
+    // device_node_assignments for oldNodeId is empty, OR once its own
+    // maxWaitHours deadline has explicitly passed (an admin-configured,
+    // audited timeout the operator chose when starting this REPLACE_NODE
+    // operation -- see startReplaceNodeOperation's maxWaitHours param).
+    // Regression test: "forces the drain through once drainDeadline
+    // passes, even with assignments remaining, and actually retires"
+    // (functions/lib/__tests__/fleet-operations.test.js) confirms this
+    // step is never reached with live assignments except via that explicit,
+    // pre-audited forced-timeout path. The *other* place a RETIRE can be
+    // requested -- a direct admin action outside this saga -- has its own
+    // separate, explicit assignment refusal; see
+    // functions/api/admin/nodes/[id]/lifecycle.js.
+
     if (!oldNode.dns_removed_at) {
       const adapter = dns(env);
       await adapter.deleteRecord({ recordId: oldNode.dns_record_id, name: oldNode.hostname, type: "A" });
@@ -620,4 +636,155 @@ export async function advanceOperation(ctx, op) {
 
   await finishOperation(supabase, op, "COMPLETED");
   return { status: "COMPLETED" };
+}
+
+// ------------------------------------------------------ F-20/B-03/C-12 --
+// Make-before-break re-placement of legacy (non-scheduler) devices off
+// FAILED/DRAINING nodes, driven from fleet-tick every minute independent of
+// any explicit REPLACE_NODE operation -- a node can go FAILED with nobody
+// ever starting a replace for it (spec's B-03).
+//
+// Two-step, resumed across ticks purely by re-reading current state (no
+// separate saga/lease table -- this is a much smaller state machine than
+// CREATE_NODE/REPLACE_NODE and each step's own idempotency_key already
+// makes re-running it safe):
+//   1. CREATE_USER on a replacement node (idempotency_key
+//      `replace-legacy:<device>:create:<targetNode>`). Never touches the
+//      assignment yet.
+//   2. Once that identity is enabled, flip device_node_assignments to the
+//      new node and enqueue DISABLE_USER on the old one.
+
+async function pickReplacementNode(supabase, { excludeNodeId }) {
+  const { data: nodes, error } = await supabase
+    .from("nodes")
+    .select("node_id, configured_users, max_sessions, lifecycle_state")
+    .eq("role", "EXIT")
+    .in("lifecycle_state", ["READY", "CANARY"])
+    .neq("node_id", excludeNodeId);
+  if (error) throw new Error(`nodes lookup failed: ${error.message}`);
+  const candidates = (nodes ?? []).filter((n) => {
+    const max =
+      n.lifecycle_state === "CANARY" ? Math.min(n.max_sessions ?? Infinity, CANARY_SESSION_CAP) : n.max_sessions;
+    if (max == null) return true;
+    return (n.configured_users ?? 0) < max;
+  });
+  if (candidates.length === 0) return null;
+  const sorted = [...candidates].sort((a, b) => {
+    const loadA = a.configured_users ?? Infinity;
+    const loadB = b.configured_users ?? Infinity;
+    if (loadA !== loadB) return loadA - loadB;
+    return a.node_id < b.node_id ? -1 : a.node_id > b.node_id ? 1 : 0;
+  });
+  return sorted[0].node_id;
+}
+
+async function reconcileOneFailedNodeDevice(supabase, { deviceId, oldNodeId }) {
+  // A device whose entitlement already lapsed has nothing worth re-placing
+  // -- the normal device-provisioning reconcile path (not this one) is what
+  // eventually disables it everywhere.
+  const { entitled } = await checkDeviceEntitlement(supabase, deviceId);
+  if (!entitled) return null;
+
+  const { data: device, error: deviceError } = await supabase
+    .from("devices")
+    .select("id, user_id")
+    .eq("id", deviceId)
+    .maybeSingle();
+  if (deviceError) throw new Error(`devices lookup failed: ${deviceError.message}`);
+  if (!device) return null;
+
+  const { data: identities, error: idError } = await supabase
+    .from("vpn_accounts")
+    .select("id, node_id, vpn_user_id, enabled")
+    .eq("device_id", deviceId);
+  if (idError) throw new Error(`vpn_accounts lookup failed: ${idError.message}`);
+
+  const oldIdentity = (identities ?? []).find((i) => i.node_id === oldNodeId && i.enabled);
+  if (!oldIdentity) return null; // nothing live on the bad node to move
+
+  const targetNodeId = await pickReplacementNode(supabase, { excludeNodeId: oldNodeId });
+  if (!targetNodeId) return { status: "no_replacement_available" };
+
+  const existingOnTarget = (identities ?? []).find((i) => i.node_id === targetNodeId);
+
+  if (existingOnTarget?.enabled) {
+    // Step 1 already landed (a previous tick's CREATE_USER reported done) --
+    // complete the switch now: assignment first, then disable the old
+    // identity. The old node may itself be unreachable (that's often WHY
+    // it's FAILED); DISABLE_USER simply never applies until/unless it
+    // recovers, which is harmless -- the assignment has already moved.
+    const { error: upsertError } = await supabase
+      .from("device_node_assignments")
+      .upsert({ device_id: deviceId, node_id: targetNodeId, hop: "EXIT" }, { onConflict: "device_id,hop" });
+    if (upsertError) throw new Error(`device_node_assignments upsert failed: ${upsertError.message}`);
+
+    const { error: jobError } = await supabase.from("provisioning_jobs").insert({
+      idempotency_key: `replace-legacy:${deviceId}:disable:${oldNodeId}`,
+      node_id: oldNodeId,
+      job_type: "DISABLE_USER",
+      vpn_account_id: oldIdentity.id,
+      device_id: deviceId,
+      payload: { vpn_user_id: oldIdentity.vpn_user_id, user_id: device.user_id, device_id: deviceId },
+    });
+    if (jobError && jobError.code !== "23505") {
+      throw new Error(`provisioning_jobs insert failed: ${jobError.message}`);
+    }
+    return { status: "reassigned", targetNodeId };
+  }
+
+  // Step 1: create the replacement identity (make-before-break). The
+  // assignment is not switched until a later tick observes this identity
+  // enabled (above) -- so a device is never left pointing at a node with no
+  // identity on it, and a crash between these two steps just means the
+  // next tick re-checks and continues from wherever it left off.
+  const { error: createError } = await supabase.from("provisioning_jobs").insert({
+    idempotency_key: `replace-legacy:${deviceId}:create:${targetNodeId}`,
+    node_id: targetNodeId,
+    job_type: "CREATE_USER",
+    vpn_account_id: null,
+    device_id: deviceId,
+    payload: { user_id: device.user_id, device_id: deviceId },
+  });
+  if (createError && createError.code !== "23505") {
+    throw new Error(`provisioning_jobs insert failed: ${createError.message}`);
+  }
+  return { status: "creating", targetNodeId };
+}
+
+/**
+ * @param {object} supabase service-role client
+ * @returns {Promise<Array<{deviceId: string, oldNodeId: string, status: string, targetNodeId?: string}>>}
+ */
+export async function reconcileFailedNodeAssignments(supabase) {
+  const { data: badNodes, error } = await supabase
+    .from("nodes")
+    .select("node_id")
+    .in("lifecycle_state", ["FAILED", "DRAINING"]);
+  if (error) throw new Error(`nodes lookup failed: ${error.message}`);
+
+  const results = [];
+  for (const node of badNodes ?? []) {
+    const { data: assignments, error: assignError } = await supabase
+      .from("device_node_assignments")
+      .select("device_id")
+      .eq("node_id", node.node_id)
+      .eq("hop", "EXIT");
+    if (assignError) throw new Error(`device_node_assignments lookup failed: ${assignError.message}`);
+    for (const assignment of assignments ?? []) {
+      try {
+        const outcome = await reconcileOneFailedNodeDevice(supabase, {
+          deviceId: assignment.device_id,
+          oldNodeId: node.node_id,
+        });
+        if (outcome) results.push({ deviceId: assignment.device_id, oldNodeId: node.node_id, ...outcome });
+      } catch (err) {
+        console.error(
+          "reconcileFailedNodeAssignments: device reconcile failed:",
+          assignment.device_id,
+          err.message
+        );
+      }
+    }
+  }
+  return results;
 }

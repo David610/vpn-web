@@ -40,7 +40,27 @@ function query(table) {
 vi.mock("../../../../lib/admin-auth.js", () => ({
   requireAdmin: vi.fn(async () => ({ admin: { userId: "a", role: "owner" }, response: null })),
 }));
-vi.mock("@supabase/supabase-js", () => ({ createClient: vi.fn(() => ({ from: (t) => query(t) })) }));
+// F-50: assignments.js/health.js now call the device_node_assignment_counts
+// aggregate RPC instead of selecting every device_node_assignments row.
+function deviceNodeAssignmentCounts() {
+  const counts = new Map();
+  for (const row of ROWS.device_node_assignments ?? []) {
+    const key = `${row.node_id}:${row.hop}`;
+    const existing = counts.get(key) ?? { node_id: row.node_id, hop: row.hop, count: 0 };
+    existing.count += 1;
+    counts.set(key, existing);
+  }
+  return { data: [...counts.values()], error: null };
+}
+vi.mock("@supabase/supabase-js", () => ({
+  createClient: vi.fn(() => ({
+    from: (t) => query(t),
+    rpc: (name) => {
+      if (name === "device_node_assignment_counts") return Promise.resolve(deviceNodeAssignmentCounts());
+      return Promise.resolve({ data: null, error: null });
+    },
+  })),
+}));
 
 const ENV = {
   SUPABASE_SERVICE_ROLE_KEY: "LEAK_ENV_SERVICE_ROLE",

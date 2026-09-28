@@ -21,14 +21,21 @@ export async function onRequestGet({ env, request }) {
   const q = (url.searchParams.get("q") ?? "").trim();
   const limit = Math.min(Math.max(Number(url.searchParams.get("limit")) || 100, 1), 500);
   try {
-    const { data: all, error: aggError } = await supabase.from("device_node_assignments").select("node_id, hop");
+    // F-50: an unbounded `.select("node_id, hop")` here silently truncated
+    // at PostgREST's default 1000-row max_rows once the fleet had more
+    // assignments than that. device_node_assignment_counts() aggregates in
+    // SQL instead -- one row per (node_id, hop), never per assignment.
+    const { data: counts, error: aggError } = await supabase.rpc("device_node_assignment_counts");
     if (aggError) throw new Error(aggError.message);
     const agg = new Map();
-    for (const row of all ?? []) {
+    let totalAssignments = 0;
+    for (const row of counts ?? []) {
       const a = agg.get(row.node_id) ?? { nodeId: row.node_id, exit: 0, relay: 0, total: 0 };
-      if (row.hop === "RELAY") a.relay += 1;
-      else a.exit += 1;
-      a.total += 1;
+      const n = Number(row.count);
+      if (row.hop === "RELAY") a.relay += n;
+      else a.exit += n;
+      a.total += n;
+      totalAssignments += n;
       agg.set(row.node_id, a);
     }
 
@@ -50,7 +57,7 @@ export async function onRequestGet({ env, request }) {
       if (devError) throw new Error(devError.message);
       const ids = (devs ?? []).map((d) => d.id);
       if (!ids.length) {
-        return fleetJson({ byNode: [...agg.values()].sort((a, b) => b.total - a.total), total: (all ?? []).length, assignments: [], limit });
+        return fleetJson({ byNode: [...agg.values()].sort((a, b) => b.total - a.total), total: totalAssignments, assignments: [], limit });
       }
       query = query.in("device_id", ids);
     }
@@ -74,7 +81,7 @@ export async function onRequestGet({ env, request }) {
 
     return fleetJson({
       byNode: [...agg.values()].sort((a, b) => b.total - a.total),
-      total: (all ?? []).length,
+      total: totalAssignments,
       assignments,
       limit,
     });

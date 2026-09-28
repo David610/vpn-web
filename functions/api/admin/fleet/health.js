@@ -49,7 +49,11 @@ export async function onRequestGet({ env, request }) {
   try {
     const [nodesRes, assignRes, revRes, eventsRes, probesRes] = await Promise.all([
       supabase.from("nodes").select(NODE_COLUMNS),
-      supabase.from("device_node_assignments").select("node_id"),
+      // F-50: was an unbounded `.select("node_id")`, silently truncated at
+      // PostgREST's default 1000-row max_rows once the fleet had more
+      // assignments than that -- see device_node_assignment_counts()
+      // (migration 20261007010000), a SQL aggregate with no such limit.
+      supabase.rpc("device_node_assignment_counts"),
       supabase.from("node_revisions").select("node_id, revision, reason, created_at").order("created_at", { ascending: false }).limit(50),
       supabase
         .from("admin_audit_log")
@@ -68,7 +72,9 @@ export async function onRequestGet({ env, request }) {
     for (const r of [nodesRes, assignRes, revRes, eventsRes, probesRes]) if (r.error) throw new Error(r.error.message);
 
     const assigned = new Map();
-    for (const a of assignRes.data ?? []) assigned.set(a.node_id, (assigned.get(a.node_id) ?? 0) + 1);
+    for (const row of assignRes.data ?? []) {
+      assigned.set(row.node_id, (assigned.get(row.node_id) ?? 0) + Number(row.count));
+    }
 
     const nodes = (nodesRes.data ?? []).map((n) => {
       const devices = assigned.get(n.node_id) ?? 0;

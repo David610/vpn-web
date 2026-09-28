@@ -2,6 +2,7 @@ import { createClient } from "@supabase/supabase-js";
 import { authenticateNode } from "../../../../lib/node-auth.js";
 import { encryptSecret } from "../../../../lib/crypto.js";
 import { finalizeCreatedIdentity, resolveLegacyDeviceForJob } from "../../../../lib/identity-lifecycle.js";
+import { validateJobClaim } from "../../../../lib/job-claims.js";
 
 // provisioning_jobs.result is stored in plaintext and is readable by
 // service_role/admins (see functions/lib/admin-sanitize.js's redaction,
@@ -67,7 +68,7 @@ export async function onRequestPost({ env, request, params }) {
   try {
     const { data: job, error: jobError } = await supabaseAdmin
       .from("provisioning_jobs")
-      .select("id, job_type, payload, vpn_account_id, node_id, status")
+      .select("id, job_type, payload, vpn_account_id, node_id, status, claim_token, lease_expires_at")
       .eq("id", jobId)
       .maybeSingle();
     if (jobError) {
@@ -77,17 +78,41 @@ export async function onRequestPost({ env, request, params }) {
         headers: { "Content-Type": "application/json" },
       });
     }
+    // F-09/C-10: a missing job (or one that belongs to a different node,
+    // which an agent should never legitimately hit) is now 410 job_gone,
+    // not 404 -- the agent's own contract treats 404/409/410 on
+    // complete/fail identically (terminal, drop and log), so this only
+    // changes what shows up in logs, not agent behavior.
     if (!job || job.node_id !== nodeId) {
-      return new Response(JSON.stringify({ error: "Job not found" }), {
-        status: 404,
+      return new Response(JSON.stringify({ error: "job_gone" }), {
+        status: 410,
         headers: { "Content-Type": "application/json" },
       });
     }
-    if (job.status === "done") {
+    const claimCheck = validateJobClaim(job, body, {
+      requireToken: env.REQUIRE_CLAIM_TOKEN === "true",
+    });
+    if (!claimCheck.ok) {
+      return new Response(JSON.stringify({ error: claimCheck.error }), {
+        status: claimCheck.status,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    if (claimCheck.terminal === "done") {
       // Duplicate report (agent retried a request whose response it
       // never saw) — idempotent no-op, not an error.
       return new Response(JSON.stringify({ ok: true, duplicate: true }), {
         status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    if (claimCheck.terminal === "failed") {
+      // The reaper already gave up on this job (attempts exhausted) before
+      // this (very late) completion report arrived. Treat as stale rather
+      // than resurrecting a failed job as done out from under any alert/
+      // re-placement that already fired for it.
+      return new Response(JSON.stringify({ error: "stale_claim" }), {
+        status: 409,
         headers: { "Content-Type": "application/json" },
       });
     }
@@ -208,6 +233,8 @@ export async function onRequestPost({ env, request, params }) {
         completed_at: new Date().toISOString(),
         result: sanitizeStoredResult(result),
         vpn_account_id: vpnAccountId,
+        claim_token: null,
+        lease_expires_at: null,
       })
       .eq("id", jobId);
     if (updateError) throw new Error(`provisioning_jobs update failed: ${updateError.message}`);
