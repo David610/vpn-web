@@ -20,6 +20,7 @@
  */
 
 import { logEvent } from "./logging.js";
+import { dispatchAlert } from "./alert-dispatch.js";
 
 /**
  * Opens (or re-affirms) an alert. Safe to call repeatedly for the same
@@ -34,10 +35,16 @@ import { logEvent } from "./logging.js";
  * @param {string} params.message - human-readable summary, no secrets
  * @param {string} [params.nodeId]
  * @param {string} [params.requestId] - threaded into the fallback log line if the insert itself fails
+ * @param {object} [params.env] - Worker/Function env bindings. Opt-in only:
+ *   when present, a successfully-(re)raised alert is additionally handed to
+ *   alert-dispatch.js's dispatchAlert() (currently: email, `critical` only)
+ *   after the row is written. Omitting it (existing call sites) keeps
+ *   dispatch off and behaviour unchanged -- this is a seam for wiring a
+ *   real paging vendor later, not a behaviour change today.
  */
 export async function raiseAlert(
   supabaseAdmin,
-  { kind, severity, dedupKey, message, nodeId = null, requestId = null }
+  { kind, severity, dedupKey, message, nodeId = null, requestId = null, env = null }
 ) {
   const { error } = await supabaseAdmin.from("operational_alerts").insert({
     alert_type: kind,
@@ -54,6 +61,21 @@ export async function raiseAlert(
       error: error.message,
     });
     return { ok: false, error };
+  }
+  if (env) {
+    // Best-effort, never throws past this boundary and never delays the
+    // caller's own response -- see dispatchAlert()'s own try/catch per
+    // adapter for the isolation this relies on.
+    try {
+      await dispatchAlert(env, { kind, severity, dedupKey, message, nodeId });
+    } catch (err) {
+      logEvent("error", "alerts.dispatch_failed", {
+        request_id: requestId,
+        alert_type: kind,
+        dedup_key: dedupKey,
+        error: err.message,
+      });
+    }
   }
   return { ok: true, error: null };
 }
@@ -85,10 +107,10 @@ export async function resolveAlert(supabaseAdmin, dedupKey, { requestId = null }
  */
 export async function reconcileAlert(
   supabaseAdmin,
-  { kind, active, severity, dedupKey, message, nodeId = null, requestId = null }
+  { kind, active, severity, dedupKey, message, nodeId = null, requestId = null, env = null }
 ) {
   if (active) {
-    return raiseAlert(supabaseAdmin, { kind, severity, dedupKey, message, nodeId, requestId });
+    return raiseAlert(supabaseAdmin, { kind, severity, dedupKey, message, nodeId, requestId, env });
   }
   return resolveAlert(supabaseAdmin, dedupKey, { requestId });
 }

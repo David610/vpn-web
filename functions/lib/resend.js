@@ -67,6 +67,48 @@ function truncateUserId(userId) {
   return `${userId.slice(0, 8)}…`;
 }
 
+/**
+ * Generic operational-alert email, used by functions/lib/alert-dispatch.js
+ * for any `operational_alerts` row (not just job failures -- see
+ * sendFailureAlert below, which predates this and stays as-is for its own
+ * call site). Same fail-closed gating: no ALERT_TO_EMAIL, no send. The
+ * message text is whatever the alert writer put in `operational_alerts
+ * .message`, which by this codebase's convention (see functions/lib/
+ * alerts.js's raiseAlert doc comment) is already human-readable and
+ * secret-free -- this function does not re-sanitize it, since the alert
+ * writers are trusted call sites, not free-text from an external agent
+ * the way sendFailureAlert's `error` argument is.
+ */
+export async function sendOperationalAlertEmail(env, { kind, severity, message, nodeId }) {
+  if (!env.RESEND_API_KEY || !env.ALERT_TO_EMAIL) {
+    console.error("resend: RESEND_API_KEY/ALERT_TO_EMAIL not configured, cannot send operational alert email");
+    return;
+  }
+  try {
+    const res = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${env.RESEND_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        from: env.ALERT_FROM_EMAIL || "onboarding@resend.dev",
+        to: env.ALERT_TO_EMAIL,
+        subject: `[${String(severity ?? "alert").toUpperCase()}] Arcana: ${sanitizeForEmailBody(kind ?? "operational_alert", 80)}`,
+        text:
+          `${sanitizeForEmailBody(message, 1000)}\n\n` +
+          (nodeId ? `Node: ${sanitizeForEmailBody(nodeId, 80)}\n` : "") +
+          `Severity: ${sanitizeForEmailBody(severity, 20)}`,
+      }),
+    });
+    if (!res.ok) {
+      console.error("resend: failed to send operational alert email:", res.status, await res.text());
+    }
+  } catch (err) {
+    console.error("resend: failed to send operational alert email:", err.message);
+  }
+}
+
 export async function sendFailureAlert(env, { jobId, jobType, userId, error }) {
   if (!env.RESEND_API_KEY) {
     console.error("resend: RESEND_API_KEY not configured, cannot send failure alert");

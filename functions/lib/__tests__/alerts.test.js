@@ -100,3 +100,74 @@ describe("reconcileAlert", () => {
     expect(db._tables.operational_alerts[0].status).toBe("resolved");
   });
 });
+
+describe("raiseAlert dispatch seam (Phase 15)", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("does not call dispatch when env is omitted (default, unchanged behaviour)", async () => {
+    const db = makeFakeSupabase({ operational_alerts: [] });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(() => {
+      throw new Error("fetch must not be called without env");
+    });
+    const result = await raiseAlert(db, {
+      kind: "node_failed",
+      severity: "critical",
+      dedupKey: "node:n1:node_failed",
+      message: "Node n1 is FAILED",
+      nodeId: "n1",
+    });
+    expect(result.ok).toBe(true);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("dispatches a critical alert to email when env is passed and configured", async () => {
+    const db = makeFakeSupabase({ operational_alerts: [] });
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue({ ok: true, text: async () => "" });
+    const env = { RESEND_API_KEY: "key", ALERT_TO_EMAIL: "ops@example.com" };
+    const result = await raiseAlert(db, {
+      kind: "node_failed",
+      severity: "critical",
+      dedupKey: "node:n1:node_failed",
+      message: "Node n1 is FAILED",
+      nodeId: "n1",
+      env,
+    });
+    expect(result.ok).toBe(true);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy.mock.calls[0][0]).toBe("https://api.resend.com/emails");
+  });
+
+  it("does not dispatch non-critical severities even when env is passed", async () => {
+    const db = makeFakeSupabase({ operational_alerts: [] });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue({ ok: true, text: async () => "" });
+    const env = { RESEND_API_KEY: "key", ALERT_TO_EMAIL: "ops@example.com" };
+    await raiseAlert(db, {
+      kind: "disk_high",
+      severity: "warning",
+      dedupKey: "node:n1:disk_high",
+      message: "Node n1 disk usage is at or above 90%",
+      nodeId: "n1",
+      env,
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("a dispatch failure never turns a successful raise into ok: false", async () => {
+    const db = makeFakeSupabase({ operational_alerts: [] });
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("network down"));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const env = { RESEND_API_KEY: "key", ALERT_TO_EMAIL: "ops@example.com" };
+    const result = await raiseAlert(db, {
+      kind: "node_failed",
+      severity: "critical",
+      dedupKey: "node:n1:node_failed",
+      message: "Node n1 is FAILED",
+      nodeId: "n1",
+      env,
+    });
+    expect(result.ok).toBe(true);
+    expect(db._tables.operational_alerts).toHaveLength(1);
+  });
+});
