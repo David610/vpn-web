@@ -625,3 +625,169 @@ describe("handleSubscriptionTrialing", () => {
     });
   });
 });
+
+// F-02/C-02/C-14: Stripe does not guarantee webhook delivery order. Each of
+// these ends at Stripe's actual final state regardless of the order the
+// events reach this handler, by comparing the delivered event's own
+// creation time (T1 < T2 < T3 below) against subscriptions.stripe_synced_at
+// and by making "canceled" sticky.
+describe("event ordering (F-02/C-02/C-14)", () => {
+  const T1 = "2026-01-01T00:00:00.000Z";
+  const T2 = "2026-01-01T00:05:00.000Z";
+  const T3 = "2026-01-01T00:10:00.000Z";
+
+  it("updated-after-deleted: a stale reactivation arriving after cancellation is rejected", async () => {
+    const db = makeFakeSupabase(seedAccount({ provisioned: [{ userId: "user-1", vpnUserId: "vpn-1" }] }));
+
+    await handleSubscriptionDeleted(db, { id: "sub_123" }, {}, T2);
+    await handleSubscriptionUpdated(
+      db,
+      { id: "sub_123", status: "active", cancel_at_period_end: false, current_period_end: PERIOD_END_UNIX },
+      undefined,
+      {},
+      T1
+    );
+
+    expect(db._tables.subscriptions[0].status).toBe("canceled");
+  });
+
+  it("duplicate deleted: a redelivered/late deleted event stays a no-op canceled row", async () => {
+    const db = makeFakeSupabase(seedAccount({ provisioned: [{ userId: "user-1", vpnUserId: "vpn-1" }] }));
+
+    await handleSubscriptionDeleted(db, { id: "sub_123" }, {}, T2);
+    await handleSubscriptionDeleted(db, { id: "sub_123" }, {}, T1);
+
+    expect(db._tables.subscriptions[0].status).toBe("canceled");
+    expect(jobsOf(db).filter((j) => j.job_type === "DISABLE_USER")).toHaveLength(1);
+  });
+
+  it("duplicate updated: a stale updated event never overwrites a newer one's fields", async () => {
+    const db = makeFakeSupabase(seedAccount({}));
+
+    await handleSubscriptionUpdated(
+      db,
+      {
+        id: "sub_123",
+        status: "past_due",
+        cancel_at_period_end: true,
+        current_period_end: PERIOD_END_UNIX,
+      },
+      undefined,
+      {},
+      T2
+    );
+    // A stale redelivery of an OLDER state (active, no cancel) arrives late.
+    await handleSubscriptionUpdated(
+      db,
+      {
+        id: "sub_123",
+        status: "active",
+        cancel_at_period_end: false,
+        current_period_end: PERIOD_END_UNIX,
+      },
+      undefined,
+      {},
+      T1
+    );
+
+    expect(db._tables.subscriptions[0]).toMatchObject({
+      status: "past_due",
+      cancel_at_period_end: true,
+    });
+  });
+
+  it("late invoice.paid: an invoice from before cancellation must not resurrect the subscription", async () => {
+    const db = makeFakeSupabase(seedAccount({ provisioned: [{ userId: "user-1", vpnUserId: "vpn-1" }] }));
+
+    await handleSubscriptionDeleted(db, { id: "sub_123" }, {}, T2);
+    await handleInvoicePaid(db, {
+      id: "in_late",
+      created: new Date(T1).getTime() / 1000,
+      billing_reason: "subscription_cycle",
+      subscription: "sub_123",
+      lines: { data: [{ period: { end: PERIOD_END_UNIX } }] },
+    });
+
+    expect(db._tables.subscriptions[0].status).toBe("canceled");
+    expect(jobsOf(db).filter((j) => j.job_type === "SET_EXPIRY")).toHaveLength(0);
+  });
+
+  it("payment failed then a late invoice.paid for the failed cycle is rejected", async () => {
+    const db = makeFakeSupabase(seedAccount({ provisioned: [{ userId: "user-1", vpnUserId: "vpn-1" }] }));
+
+    await handleSubscriptionUpdated(
+      db,
+      { id: "sub_123", status: "unpaid", cancel_at_period_end: false, current_period_end: PERIOD_END_UNIX },
+      undefined,
+      {},
+      T2
+    );
+    await handleInvoicePaid(db, {
+      id: "in_late",
+      created: new Date(T1).getTime() / 1000,
+      billing_reason: "subscription_create",
+      subscription: "sub_123",
+      lines: { data: [{ period: { end: PERIOD_END_UNIX } }] },
+    });
+
+    expect(db._tables.subscriptions[0].status).toBe("unpaid");
+  });
+
+  it("trial transitions: a stale trialing redelivery cannot revert an activated subscription", async () => {
+    const db = makeFakeSupabase(seedAccount({ status: "trialing" }));
+
+    await handleSubscriptionUpdated(
+      db,
+      { id: "sub_123", status: "active", cancel_at_period_end: false, current_period_end: PERIOD_END_UNIX },
+      undefined,
+      {},
+      T2
+    );
+    await handleSubscriptionTrialing(db, { id: "sub_123", status: "trialing", trial_end: PERIOD_END_UNIX }, {}, T1);
+
+    expect(db._tables.subscriptions[0].status).toBe("active");
+  });
+
+  it("portal mutation: a stale cached updated event cannot undo a newer cancel_at_period_end toggle", async () => {
+    const db = makeFakeSupabase(seedAccount({}));
+
+    await handleSubscriptionUpdated(
+      db,
+      { id: "sub_123", status: "active", cancel_at_period_end: true, current_period_end: PERIOD_END_UNIX },
+      undefined,
+      {},
+      T3
+    );
+    await handleSubscriptionUpdated(
+      db,
+      { id: "sub_123", status: "active", cancel_at_period_end: false, current_period_end: PERIOD_END_UNIX },
+      undefined,
+      {},
+      T2
+    );
+
+    expect(db._tables.subscriptions[0].cancel_at_period_end).toBe(true);
+  });
+
+  it("forward order still applies every write (the guard never blocks a genuinely newer event)", async () => {
+    const db = makeFakeSupabase(seedAccount({}));
+
+    await handleSubscriptionUpdated(
+      db,
+      { id: "sub_123", status: "active", cancel_at_period_end: false, current_period_end: PERIOD_END_UNIX },
+      undefined,
+      {},
+      T1
+    );
+    await handleSubscriptionUpdated(
+      db,
+      { id: "sub_123", status: "past_due", cancel_at_period_end: false, current_period_end: PERIOD_END_UNIX },
+      undefined,
+      {},
+      T2
+    );
+    await handleSubscriptionDeleted(db, { id: "sub_123" }, {}, T3);
+
+    expect(db._tables.subscriptions[0].status).toBe("canceled");
+  });
+});
