@@ -2,6 +2,17 @@ import { AuthRejected, passwordGrant, sessionIdOf } from "../../lib/gotrue.js";
 import { adminClient } from "../../lib/account-http.js";
 import { ensureSessionDevice } from "../../lib/account-service.js";
 import { readV1Json, sessionBody, v1Error, v1Json } from "../../lib/v1-http.js";
+import { checkRateLimit, rateLimitedResponse, clientIpKey } from "../../lib/rate-limit.js";
+
+// F-13: the app's login endpoint had no throttle at all — a credential-
+// stuffing run against it was limited only by GoTrue's own (much coarser)
+// protections. Keyed primarily by the email being authenticated against,
+// since many real users share a NAT/carrier IP (F-49's rate-limit.js module
+// comment); a much more generous IP backstop catches a single attacker
+// cycling through many different email addresses from one source.
+const LOGIN_WINDOW_SECONDS = 15 * 60;
+const LOGIN_LIMIT_PER_EMAIL = 10;
+const LOGIN_LIMIT_PER_IP = 60;
 
 /**
  * POST /v1/auth/login — { email, password, device_name?, platform? }.
@@ -17,6 +28,20 @@ export async function onRequestPost({ env, request }) {
   if (!email || !password || password.length > 4096) {
     return v1Error(400, "Enter your email and password.");
   }
+
+  const supabaseAdmin = adminClient(env);
+  const emailAllowed = await checkRateLimit(supabaseAdmin, `v1-login:email:${email}`, {
+    windowSeconds: LOGIN_WINDOW_SECONDS,
+    limit: LOGIN_LIMIT_PER_EMAIL,
+  });
+  const ipAllowed = await checkRateLimit(supabaseAdmin, `v1-login:ip:${clientIpKey(request)}`, {
+    windowSeconds: LOGIN_WINDOW_SECONDS,
+    limit: LOGIN_LIMIT_PER_IP,
+  });
+  if (!emailAllowed || !ipAllowed) {
+    return rateLimitedResponse("Too many login attempts. Please try again later.");
+  }
+
   let session;
   try {
     session = await passwordGrant(env, email, password);
@@ -27,7 +52,7 @@ export async function onRequestPost({ env, request }) {
   }
   const sessionId = sessionIdOf(session.access_token);
   try {
-    await ensureSessionDevice(adminClient(env), env, { id: session.user.id, email }, sessionId, {
+    await ensureSessionDevice(supabaseAdmin, env, { id: session.user.id, email }, sessionId, {
       name: body.device_name,
       platform: body.platform,
     });
