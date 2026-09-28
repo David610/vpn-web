@@ -6,6 +6,7 @@
     "dev": "next dev",
     "prebuild": "node scripts/check-production-config.mjs",
     "build": "next build",
+    "postbuild": "node scripts/apply-csp-nonce.mjs",
     "start": "next start",
     "lint": "next lint && eslint functions scripts --ext .js,.mjs",
     "test": "vitest run",

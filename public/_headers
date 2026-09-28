@@ -4,27 +4,71 @@
   Referrer-Policy: strict-origin-when-cross-origin
   Permissions-Policy: camera=(), microphone=(), geolocation=(), browsing-topics=()
   X-Permitted-Cross-Domain-Policies: none
-  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' https://*.supabase.co; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'nonce-__CSP_NONCE__'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' https://*.supabase.co; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'
 
 # F-15: session tokens live in localStorage (see src/lib/supabase.ts), not
 # HttpOnly cookies -- a full cookie migration is out of scope for a Next.js
 # static export served from Cloudflare Pages Functions with no server
 # runtime to set/rotate them. This CSP is the compensating control instead:
-# script-src 'self' with no 'unsafe-inline'/'unsafe-eval' blocks the classic
-# XSS-to-token-theft path (inline <script> injection, eval-based payloads),
-# since this app has no inline scripts to whitelist -- Next's static export
-# only emits external <script src="/_next/..."> chunks and a
-# type="application/json" __NEXT_DATA__ tag, neither of which needs
-# 'unsafe-inline'. style-src keeps 'unsafe-inline' because Next.js emits
-# inline style attributes/tags for its own CSS-in-JS-adjacent tooling and
-# third-party UI primitives used here; that is a much smaller blast radius
-# than script-src (CSS cannot read localStorage) and is not itself a path to
-# exfiltrating the session token.
+# script-src blocks the classic XSS-to-token-theft path (inline <script>
+# injection, eval-based payloads). style-src keeps 'unsafe-inline' because
+# Next.js emits inline style attributes/tags for its own CSS-in-JS-adjacent
+# tooling and third-party UI primitives used here; that is a much smaller
+# blast radius than script-src (CSS cannot read localStorage) and is not
+# itself a path to exfiltrating the session token.
 #
-# IMPORTANT: this materially reduces the XSS blast radius but does NOT fully
-# mitigate F-15. A CSP is enforced by the browser and can be bypassed by any
-# gadget CSP itself doesn't cover (e.g. a same-origin JSONP-like endpoint, a
-# trusted third-party script origin later added without review, or a browser
+# ROUND 2 CORRECTION (P0 regression from round 1): round 1 shipped
+# `script-src 'self'` with the claim "Next's static export only emits
+# external script chunks ... neither needs unsafe-inline". That claim was
+# never checked against a real enforced CSP in a real browser and is false
+# for this codebase: Next's App Router always emits its RSC hydration
+# payload as inline `<script>self.__next_f.push(...)</script>` tags directly
+# in the HTML of every single page (confirmed in the actual built output --
+# see out/*.html after `npm run build`, 6-16 such tags per route). With
+# `script-src 'self'` enforced, every one of those is blocked, so every page
+# loaded but never hydrated: no client-side JS ran, no event handler
+# attached, every form/button was dead. This would have shipped broken to
+# production. Caught by a real-browser Playwright check with the CSP header
+# actually applied (serving out/ through `wrangler pages dev`, not the
+# python http.server the a11y check used, which does not apply _headers at
+# all -- see scripts/verify-csp-hydration.mjs, now wired into CI, added
+# specifically so this exact failure mode -- CSP present + page fails to
+# hydrate -- cannot regress silently again).
+#
+# THE FIX: a build-time nonce (`__CSP_NONCE__` above is a literal placeholder
+# -- see scripts/apply-csp-nonce.mjs, wired as the npm `postbuild` step, for
+# the full reasoning). One random nonce is generated per build, stamped onto
+# every one of Next's own inline hydration <script> tags in the already-built
+# static HTML, and substituted into this header's script-src. This is not a
+# per-request nonce (this is a static export -- there is no request at
+# render time to mint one against) and it is visible in the page's raw HTML
+# source, so it is a materially weaker guarantee than a true CSP nonce: an
+# attacker who fetches this build's HTML and regexes the nonce out of it
+# could forge a matching <script nonce="...">. It still blocks the common
+# case this CSP defends against -- a generic/automated injected <script> or
+# eval payload that doesn't specifically fetch-and-parse this build's own
+# HTML first -- and browsers hide the nonce from DOM/JS introspection
+# (`el.getAttribute('nonce')` reads back empty), which blocks the more
+# common DOM-based-XSS pattern of reading a sibling script's nonce via JS. A
+# per-page SHA-256 hash allowlist was also investigated and rejected: the
+# real built output has 127 distinct inline-script hashes across 40 routes
+# already (every route's RSC payload differs), which is impractical to keep
+# byte-exact and in sync with a hand- or CI-maintained header long term, and
+# would only grow. If `apply-csp-nonce.mjs` is ever skipped, the shipped
+# header contains a nonce value that matches nothing, so it fails closed
+# (blocks all inline scripts, same as the round-1 bug) rather than failing
+# open to no restriction.
+#
+# Closing this gap for real requires either an actual per-request nonce
+# (a Cloudflare Pages Function rendering HTML per request instead of serving
+# a static file -- i.e. moving off `output: 'export'`) or accepting the
+# hash-allowlist maintenance cost above.
+#
+# IMPORTANT: independent of the script-src mechanism, this CSP materially
+# reduces the XSS blast radius but does NOT fully mitigate F-15. A CSP is
+# enforced by the browser and can be bypassed by any gadget CSP itself
+# doesn't cover (e.g. a same-origin JSONP-like endpoint, a trusted
+# third-party script origin later added without review, or a browser
 # extension); it also does nothing once script execution is achieved through
 # an allowed script-src origin. The session token remains readable by any
 # script that does execute in this origin. Treat this as raising the bar for
@@ -38,12 +82,15 @@
 # The Mini App also loads Telegram's own bootstrap script
 # (src/app/telegram/layout.tsx), so script-src needs that one extra origin
 # on these routes only -- every other route stays script-src 'self'.
+# These pages also emit the same inline RSC hydration scripts as every other
+# route, so they need the same build-time nonce as the site-wide rule above
+# (see scripts/apply-csp-nonce.mjs) in addition to the telegram.org origin.
 /telegram
   ! X-Frame-Options
   ! Content-Security-Policy
-  Content-Security-Policy: default-src 'self'; script-src 'self' https://telegram.org; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://*.supabase.co; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self' https://web.telegram.org https://*.telegram.org
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'nonce-__CSP_NONCE__' https://telegram.org; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://*.supabase.co; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self' https://web.telegram.org https://*.telegram.org
 
 /telegram/*
   ! X-Frame-Options
   ! Content-Security-Policy
-  Content-Security-Policy: default-src 'self'; script-src 'self' https://telegram.org; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://*.supabase.co; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self' https://web.telegram.org https://*.telegram.org
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'nonce-__CSP_NONCE__' https://telegram.org; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://*.supabase.co; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self' https://web.telegram.org https://*.telegram.org

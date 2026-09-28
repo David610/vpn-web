@@ -50,6 +50,17 @@ jobs:
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
 
+      - name: CSP hydration regression check (real _headers, real browser)
+        # This serves out/ through `wrangler pages dev`, which is the one
+        # local server that actually applies Cloudflare Pages' `_headers`
+        # file, unlike the plain python http.server used for the a11y check
+        # below. That distinction matters: a `script-src` CSP that blocks
+        # Next's inline RSC hydration scripts was shipped and went unnoticed
+        # specifically because nothing in this pipeline had ever exercised
+        # the real header under real enforcement. See public/_headers'
+        # "ROUND 2 CORRECTION" comment and scripts/verify-csp-hydration.mjs.
+        run: node scripts/verify-csp-hydration.mjs
+
       - name: Serve static export for the a11y/visual check
         # trailingSlash: true in next.config makes every route an
         # index.html under its own directory (e.g. out/account/index.html),
