@@ -19,6 +19,8 @@ import {
   getInvoiceSubscriptionId,
   getInvoiceLinePeriodEnd,
   getExtraSeatCount,
+  getBaseSubscriptionPriceId,
+  isAllowedBasePrice,
 } from "./stripe-fields.js";
 import {
   getAccountForUser,
@@ -31,6 +33,48 @@ function subscriptionNameFrom(session) {
   const raw = session.metadata?.subscription_name;
   const name = typeof raw === "string" ? raw.trim() : "";
   return name.length >= 1 && name.length <= 80 ? name : "Personal";
+}
+
+/**
+ * F-02/C-02/C-14: Stripe does not guarantee webhook delivery order. Every
+ * handler that writes subscriptions.status/current_period_end/etc must go
+ * through this guard rather than writing unconditionally, so that a
+ * late-arriving but chronologically-stale event can never clobber a row a
+ * newer event already advanced.
+ *
+ * Two independent protections:
+ *  - Sticky canceled: once a row reads "canceled", Stripe never reactivates
+ *    that same subscription id (a resubscribe creates a new id), so no
+ *    non-canceled write may ever land on top of it again, regardless of
+ *    timestamps.
+ *  - Timestamp ordering: when both the incoming event's creation time and
+ *    the row's last-synced-at are known, an event no newer than the row's
+ *    last sync is stale and must be skipped even if its status looks more
+ *    "current" superficially (e.g. a delayed invoice.paid behind a
+ *    subsequent subscription.updated).
+ *
+ * eventCreatedAt/current.stripe_synced_at absence (legacy rows, or a caller
+ * that doesn't pass a timestamp) degrades to sticky-canceled-only, which is
+ * intentional: this must never regress existing behavior for callers that
+ * predate this guard.
+ */
+function isStaleSubscriptionWrite(current, eventCreatedAt, nextStatus) {
+  if (!current) return false;
+  if (current.status === "canceled" && nextStatus !== "canceled") return true;
+  if (!eventCreatedAt || !current.stripe_synced_at) return false;
+  return new Date(eventCreatedAt).getTime() <= new Date(current.stripe_synced_at).getTime();
+}
+
+async function readSubscriptionSyncState(supabaseAdmin, subscriptionId) {
+  const { data, error } = await supabaseAdmin
+    .from("subscriptions")
+    .select("status, stripe_synced_at, account_id")
+    .eq("stripe_subscription_id", subscriptionId)
+    .maybeSingle();
+  if (error) {
+    throw new Error(`subscriptions sync-state read failed: ${error.message}`);
+  }
+  return data;
 }
 
 /**
@@ -115,6 +159,8 @@ export async function handleInvoicePaid(supabaseAdmin, invoice, env = {}) {
     // A one-off (non-subscription) invoice — nothing for this app to do.
     return;
   }
+  const eventCreatedAt =
+    typeof invoice.created === "number" ? new Date(invoice.created * 1000).toISOString() : null;
 
   const periodEndUnix = getInvoiceLinePeriodEnd(invoice);
   if (typeof periodEndUnix !== "number") {
@@ -142,20 +188,14 @@ export async function handleInvoicePaid(supabaseAdmin, invoice, env = {}) {
   // was marked unpaid/never fully activated — not a later renewal/
   // recovery invoice, which must be allowed through normally even while
   // status still reads "unpaid" at read time.
-  const { data: currentSub, error: currentSubError } = await supabaseAdmin
-    .from("subscriptions")
-    .select("status")
-    .eq("stripe_subscription_id", subscriptionId)
-    .maybeSingle();
-  if (currentSubError) {
-    throw new Error(`subscriptions status read failed: ${currentSubError.message}`);
-  }
+  const currentSub = await readSubscriptionSyncState(supabaseAdmin, subscriptionId);
   const isStaleAfterCancellation = currentSub?.status === "canceled";
   const isFirstInvoiceForUnpaidSubscription =
     currentSub?.status === "unpaid" && invoice.billing_reason === "subscription_create";
-  if (isStaleAfterCancellation || isFirstInvoiceForUnpaidSubscription) {
+  const isStaleByTimestamp = isStaleSubscriptionWrite(currentSub, eventCreatedAt, "active");
+  if (isStaleAfterCancellation || isFirstInvoiceForUnpaidSubscription || isStaleByTimestamp) {
     console.warn(
-      `invoice.paid ${invoice.id} for stripe_subscription_id=${subscriptionId} arrived after a newer cancellation (status=${currentSub.status}) — skipping provisioning`
+      `invoice.paid ${invoice.id} for stripe_subscription_id=${subscriptionId} arrived after a newer/terminal event (status=${currentSub?.status}) — skipping provisioning`
     );
     return;
   }
@@ -165,6 +205,7 @@ export async function handleInvoicePaid(supabaseAdmin, invoice, env = {}) {
     .update({
       status: "active",
       current_period_end: currentPeriodEnd,
+      stripe_synced_at: eventCreatedAt ?? new Date().toISOString(),
       updated_at: new Date().toISOString(),
     })
     .eq("stripe_subscription_id", subscriptionId)
@@ -295,7 +336,7 @@ async function enqueueCreateForMembers(supabaseAdmin, accountId, subscriptionId,
  * Correct either way, and the cost of guessing wrong would be trials that
  * silently deliver no VPN at all.
  */
-export async function handleSubscriptionTrialing(supabaseAdmin, subscription, env = {}) {
+export async function handleSubscriptionTrialing(supabaseAdmin, subscription, env = {}, eventCreatedAt = null) {
   const trialEndUnix = subscription.trial_end;
   if (typeof trialEndUnix !== "number") {
     throw new Error(
@@ -304,11 +345,20 @@ export async function handleSubscriptionTrialing(supabaseAdmin, subscription, en
   }
   const trialEnd = new Date(trialEndUnix * 1000).toISOString();
 
+  const current = await readSubscriptionSyncState(supabaseAdmin, subscription.id);
+  if (isStaleSubscriptionWrite(current, eventCreatedAt, "trialing")) {
+    console.warn(
+      `subscription ${subscription.id} trialing event is stale or would un-cancel a canceled row — skipping`
+    );
+    return;
+  }
+
   const { data: sub, error: subError } = await supabaseAdmin
     .from("subscriptions")
     .update({
       status: "trialing",
       current_period_end: trialEnd,
+      stripe_synced_at: eventCreatedAt ?? new Date().toISOString(),
       updated_at: new Date().toISOString(),
     })
     .eq("stripe_subscription_id", subscription.id)
@@ -427,10 +477,41 @@ async function enqueueDisableForAccount(supabaseAdmin, accountId, subscriptionId
  * @param {import('@supabase/supabase-js').SupabaseClient} supabaseAdmin
  * @param {object} subscription - a Stripe Subscription object
  */
-export async function handleSubscriptionUpdated(supabaseAdmin, subscription, seatPriceId, env = {}) {
+export async function handleSubscriptionUpdated(
+  supabaseAdmin,
+  subscription,
+  seatPriceId,
+  env = {},
+  eventCreatedAt = null
+) {
   const periodEndUnix = getSubscriptionPeriodEnd(subscription);
   const currentPeriodEnd =
     typeof periodEndUnix === "number" ? new Date(periodEndUnix * 1000).toISOString() : null;
+
+  const current = await readSubscriptionSyncState(supabaseAdmin, subscription.id);
+  if (isStaleSubscriptionWrite(current, eventCreatedAt, subscription.status)) {
+    console.warn(
+      `customer.subscription.updated for stripe_subscription_id=${subscription.id} is stale or would un-cancel a canceled row — skipping`
+    );
+    return;
+  }
+
+  // F-31/C-04: only trust a base price this deployment actually sells. If
+  // the payload names a base item at all AND an allowlist is configured
+  // (STRIPE_PRICE_ID), an unrecognized price refuses the whole write rather
+  // than silently syncing status/period/seats from an event that could be a
+  // dashboard tamper or a stale plan migration — no entitlement is granted
+  // or extended off data this deployment cannot vouch for. A payload with no
+  // item data (most unit tests, and any event Stripe sends without
+  // items expanded) has nothing to validate and is allowed through
+  // unchanged — this is a price allowlist, not an "items required" check.
+  const basePriceId = getBaseSubscriptionPriceId(subscription, seatPriceId);
+  if (basePriceId && env.STRIPE_PRICE_ID && !isAllowedBasePrice(basePriceId, env)) {
+    console.error(
+      `ALERT: customer.subscription.updated for stripe_subscription_id=${subscription.id} reports base price ${basePriceId}, which is not in the configured allowlist — refusing to sync (no entitlement granted); investigate a possible dashboard price change`
+    );
+    return;
+  }
 
   const { data: updated, error: subError } = await supabaseAdmin
     .from("subscriptions")
@@ -444,6 +525,8 @@ export async function handleSubscriptionUpdated(supabaseAdmin, subscription, sea
       // change — bought here, or refunded/adjusted in the Stripe dashboard —
       // arrives as this event, so syncing here covers both.
       extra_seats: getExtraSeatCount(subscription, seatPriceId),
+      ...(basePriceId ? { stripe_price_id: basePriceId } : {}),
+      stripe_synced_at: eventCreatedAt ?? new Date().toISOString(),
       updated_at: new Date().toISOString(),
     })
     .eq("stripe_subscription_id", subscription.id)
@@ -480,10 +563,29 @@ export async function handleSubscriptionUpdated(supabaseAdmin, subscription, sea
  * @param {import('@supabase/supabase-js').SupabaseClient} supabaseAdmin
  * @param {object} subscription - a Stripe Subscription object
  */
-export async function handleSubscriptionDeleted(supabaseAdmin, subscription, env = {}) {
+export async function handleSubscriptionDeleted(supabaseAdmin, subscription, env = {}, eventCreatedAt = null) {
+  const current = await readSubscriptionSyncState(supabaseAdmin, subscription.id);
+  // Sticky-canceled never blocks this handler (nextStatus is always
+  // "canceled" here), but a timestamp guard still applies: an out-of-order
+  // "deleted" that is actually OLDER than a write already recorded (e.g. a
+  // very late redelivery arriving after a subsequent event already synced
+  // this row) must not stomp current_period_end/extra_seats fields that a
+  // newer event may have set — it still only ever needs to ensure status is
+  // "canceled", which a prior canceled write has already achieved.
+  if (isStaleSubscriptionWrite(current, eventCreatedAt, "canceled")) {
+    console.warn(
+      `customer.subscription.deleted for stripe_subscription_id=${subscription.id} is stale — skipping write (already synced more recently)`
+    );
+    if (current?.status === "canceled") return;
+  }
+
   const { data: updated, error: subError } = await supabaseAdmin
     .from("subscriptions")
-    .update({ status: "canceled", updated_at: new Date().toISOString() })
+    .update({
+      status: "canceled",
+      stripe_synced_at: eventCreatedAt ?? new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    })
     .eq("stripe_subscription_id", subscription.id)
     .select("account_id")
     .maybeSingle();

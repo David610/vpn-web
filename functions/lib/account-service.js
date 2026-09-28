@@ -9,7 +9,7 @@
  * subscription covers 3 devices plus 3 per paid pack.
  */
 import Stripe from "stripe";
-import { getAccountForUser, getEffectiveEntitlement } from "./accounts.js";
+import { getAccountForUser, getAccountMembers, getEffectiveEntitlement } from "./accounts.js";
 import { syncAccountProvisioningToEntitlement } from "./provision-entitlement.js";
 import { revokeDevice } from "./device-provisioning.js";
 import {
@@ -39,6 +39,21 @@ async function accountOf(supabaseAdmin, user) {
   const account = await getAccountForUser(supabaseAdmin, user.id);
   if (!account) throw new Error(`user ${user.id} has no account_members row`);
   return account;
+}
+
+/**
+ * F-12/C-03: legacy multi-member accounts let a mere member mutate the
+ * owner's billing — buy/drop device packs, toggle cancellation, or rename
+ * the subscription itself — because these actions only ever checked
+ * membership, never role. Every subscription-level mutation must go through
+ * this first, mirroring account/devices/[id]/revoke.js's existing
+ * owner-vs-member split for device-level actions.
+ */
+function requireOwner(account) {
+  if (account.role !== "owner") {
+    return fail(403, "Only the account owner can do this.");
+  }
+  return null;
 }
 
 async function listDevices(supabaseAdmin, accountId) {
@@ -121,6 +136,8 @@ async function subscriptionOrFail(supabaseAdmin, account, subscriptionId) {
 
 export async function renameSubscription(supabaseAdmin, user, subscriptionId, name) {
   const account = await accountOf(supabaseAdmin, user);
+  const ownerCheck = requireOwner(account);
+  if (ownerCheck) return ownerCheck;
   const trimmed = typeof name === "string" ? name.trim() : "";
   if (!NAME.test(trimmed)) return fail(400, "Use 1–80 characters.");
   const sub = await subscriptionOrFail(supabaseAdmin, account, subscriptionId);
@@ -144,6 +161,8 @@ export async function setExtraPacks(supabaseAdmin, env, user, subscriptionId, pa
   }
   if (!env.STRIPE_SEAT_PRICE_ID) return fail(503, "Adding devices is not available yet.");
   const account = await accountOf(supabaseAdmin, user);
+  const ownerCheck = requireOwner(account);
+  if (ownerCheck) return ownerCheck;
   const sub = await subscriptionOrFail(supabaseAdmin, account, subscriptionId);
   if (!sub) return fail(404, "Subscription not found.");
   if (!isLive(sub) || !sub.stripe_subscription_id) {
@@ -199,6 +218,8 @@ export async function setExtraPacks(supabaseAdmin, env, user, subscriptionId, pa
 
 async function setCancelAtPeriodEnd(supabaseAdmin, env, user, subscriptionId, cancel) {
   const account = await accountOf(supabaseAdmin, user);
+  const ownerCheck = requireOwner(account);
+  if (ownerCheck) return ownerCheck;
   const sub = await subscriptionOrFail(supabaseAdmin, account, subscriptionId);
   if (!sub) return fail(404, "Subscription not found.");
   if (!isLive(sub) || !sub.stripe_subscription_id) return fail(409, "This subscription is not active.");
@@ -228,12 +249,25 @@ async function deviceOrFail(supabaseAdmin, account, deviceId) {
   return data;
 }
 
+/**
+ * F-12/C-03: owners manage every device on the plan; a member only their
+ * own — the same split account/devices/[id]/revoke.js already enforces.
+ */
+function requireOwnerOrOwnDevice(account, user, device) {
+  if (device.user_id !== user.id && account.role !== "owner") {
+    return fail(403, "Only the account owner can manage another member's device.");
+  }
+  return null;
+}
+
 export async function renameDevice(supabaseAdmin, user, deviceId, name) {
   const account = await accountOf(supabaseAdmin, user);
   const trimmed = typeof name === "string" ? name.trim() : "";
   if (!DEVICE_NAME.test(trimmed)) return fail(400, "Use 1–80 characters.");
   const device = await deviceOrFail(supabaseAdmin, account, deviceId);
   if (!device) return fail(404, "Device not found.");
+  const ownerCheck = requireOwnerOrOwnDevice(account, user, device);
+  if (ownerCheck) return ownerCheck;
   const { error } = await supabaseAdmin.from("devices").update({ name: trimmed }).eq("id", device.id);
   if (error) throw new Error(`devices rename failed: ${error.message}`);
   return ok();
@@ -244,6 +278,8 @@ export async function moveDevice(supabaseAdmin, env, user, deviceId, subscriptio
   const account = await accountOf(supabaseAdmin, user);
   const device = await deviceOrFail(supabaseAdmin, account, deviceId);
   if (!device) return fail(404, "Device not found.");
+  const ownerCheck = requireOwnerOrOwnDevice(account, user, device);
+  if (ownerCheck) return ownerCheck;
   const target = await subscriptionOrFail(supabaseAdmin, account, subscriptionId);
   if (!target || !isLive(target)) return fail(404, "Subscription not found.");
   if (String(device.subscription_id) === String(target.id)) return ok();
@@ -267,6 +303,8 @@ export async function removeDevice(supabaseAdmin, env, user, deviceId) {
   const account = await accountOf(supabaseAdmin, user);
   const device = await deviceOrFail(supabaseAdmin, account, deviceId);
   if (!device) return fail(404, "Device not found.");
+  const ownerCheck = requireOwnerOrOwnDevice(account, user, device);
+  if (ownerCheck) return ownerCheck;
   const { revoked } = await revokeDevice(supabaseAdmin, env, device, `device-revoked:${device.id}`, {
     urgent: device.user_id !== user.id,
   });
@@ -339,10 +377,72 @@ export async function releaseSessionDevice(supabaseAdmin, env, user, sessionId) 
 }
 
 /**
- * Requests permanent deletion. Requires the password again. Bans sign-in,
- * cancels every subscription immediately, revokes every device; the auth
- * user (and everything cascading from it) is removed by
- * finalizeAccountDeletions() once no VPN identity remains enabled.
+ * F-08/C-05: the deletion saga's three billing/access-cutoff steps, in the
+ * order that must never leave a user banned (sign-in blocked, so they can't
+ * even see their own billing) while still being charged: cancel Stripe
+ * first, revoke devices next, ban sign-in last. Each step only acts on rows
+ * not already in the target state, so calling this again for an
+ * already-fully-processed account (a duplicate request, or a fleet-tick
+ * resume of a saga that completed) touches nothing and is a cheap no-op —
+ * this is what makes both repeated requestAccountDeletion calls and the
+ * fleet-tick resume path in finalizeAccountDeletions safe.
+ */
+async function runDeletionSaga(supabaseAdmin, env, accountId, ownerUserId) {
+  // Step 1: cancel every still-live subscription. An idempotency key per
+  // subscription row means a retried saga that already canceled this
+  // subscription on a prior run does not issue a second Stripe call for it;
+  // "already canceled" from Stripe itself (a stale local row racing a
+  // webhook that got there first) is treated as success so the saga still
+  // converges rather than retrying a call that can never succeed twice.
+  const subscriptions = await listAccountSubscriptions(supabaseAdmin, accountId);
+  const stripe = stripeClient(env);
+  for (const sub of subscriptions.filter((s) => isLive(s) && s.stripe_subscription_id)) {
+    try {
+      await stripe.subscriptions.cancel(sub.stripe_subscription_id, {
+        idempotencyKey: `account-deletion-cancel:${sub.id}`,
+      });
+    } catch (err) {
+      const alreadyGone = /already.*cancel|no such subscription/i.test(err?.message ?? "");
+      if (!alreadyGone) throw err;
+    }
+    const { error } = await supabaseAdmin
+      .from("subscriptions")
+      .update({ status: "canceled", updated_at: new Date().toISOString() })
+      .eq("id", sub.id);
+    if (error) throw new Error(`subscriptions cancel-mirror failed: ${error.message}`);
+  }
+
+  // Step 2: revoke every device not already revoked.
+  const devices = await listDevices(supabaseAdmin, accountId);
+  for (const device of devices.filter((d) => d.status !== "REVOKED")) {
+    // The owner's own devices: non-urgent (self-service). Other members'
+    // devices: the owner is acting against another person, same as removing
+    // a member, so their credentials rotate now.
+    await revokeDevice(supabaseAdmin, env, device, `account-deleted:${device.id}`, {
+      urgent: device.user_id !== ownerUserId,
+    });
+  }
+
+  // Step 3: ban sign-in LAST. Billing must already be canceled and every
+  // device already revoked before the owner loses the ability to see any of
+  // it — the exact ordering bug this fix targets was ban-then-cancel, which
+  // could leave a banned user still being charged if the saga died between
+  // the two. Re-banning an already-banned user is a harmless no-op.
+  const { error: banError } = await supabaseAdmin.auth.admin.updateUserById(ownerUserId, {
+    ban_duration: "876000h",
+  });
+  if (banError) throw new Error(`auth ban failed: ${banError.message}`);
+}
+
+/**
+ * Requests permanent deletion. Requires the password again. Runs
+ * runDeletionSaga (cancel billing -> revoke devices -> ban sign-in, in that
+ * order — see its own comment for why); the auth user (and everything
+ * cascading from it) is removed by finalizeAccountDeletions() once no VPN
+ * identity remains enabled. Marking deletion_requested_at is itself
+ * idempotent — a repeat request (double-click, retried after a timeout)
+ * never resets an earlier timestamp, and simply re-runs the (idempotent)
+ * saga.
  */
 export async function requestAccountDeletion(supabaseAdmin, env, user, password) {
   if (typeof password !== "string" || password.length === 0 || password.length > 4096) {
@@ -359,44 +459,42 @@ export async function requestAccountDeletion(supabaseAdmin, env, user, password)
     return fail(403, "Only the account owner can delete this account.");
   }
 
-  const { error: markError } = await supabaseAdmin
+  const { data: accountRow, error: readError } = await supabaseAdmin
     .from("customer_accounts")
-    .update({ deletion_requested_at: new Date().toISOString() })
-    .eq("id", account.accountId);
-  if (markError) throw new Error(`customer_accounts mark failed: ${markError.message}`);
-
-  const { error: banError } = await supabaseAdmin.auth.admin.updateUserById(user.id, {
-    ban_duration: "876000h",
-  });
-  if (banError) throw new Error(`auth ban failed: ${banError.message}`);
-
-  const subscriptions = await listAccountSubscriptions(supabaseAdmin, account.accountId);
-  const stripe = stripeClient(env);
-  for (const sub of subscriptions.filter((s) => isLive(s) && s.stripe_subscription_id)) {
-    await stripe.subscriptions.cancel(sub.stripe_subscription_id);
-    await supabaseAdmin
-      .from("subscriptions")
-      .update({ status: "canceled", updated_at: new Date().toISOString() })
-      .eq("id", sub.id);
+    .select("deletion_requested_at")
+    .eq("id", account.accountId)
+    .maybeSingle();
+  if (readError) throw new Error(`customer_accounts read failed: ${readError.message}`);
+  if (!accountRow?.deletion_requested_at) {
+    const { error: markError } = await supabaseAdmin
+      .from("customer_accounts")
+      .update({ deletion_requested_at: new Date().toISOString() })
+      .eq("id", account.accountId);
+    if (markError) throw new Error(`customer_accounts mark failed: ${markError.message}`);
   }
 
-  const devices = await listDevices(supabaseAdmin, account.accountId);
-  for (const device of devices.filter((d) => d.status !== "REVOKED")) {
-    // The owner's own devices: non-urgent (self-service). Other members'
-    // devices: the owner is acting against another person, same as removing
-    // a member, so their credentials rotate now.
-    await revokeDevice(supabaseAdmin, env, device, `account-deleted:${device.id}`, {
-      urgent: device.user_id !== user.id,
-    });
-  }
+  await runDeletionSaga(supabaseAdmin, env, account.accountId, user.id);
   return ok({ ok: true, deletion: "scheduled" }, 202);
 }
 
 /**
  * Completes deletions whose VPN identities are all disabled and whose jobs
  * have finished. Called from the fleet tick.
+ *
+ * F-08/C-05 resume path: before checking whether an account is ready to
+ * finalize, this re-runs the same idempotent saga requestAccountDeletion
+ * uses. A saga that died mid-way (process crash, an uncaught Stripe error)
+ * left deletion_requested_at set but some step undone — this closes that
+ * gap without waiting for the user to retry anything, since a banned user
+ * cannot even reach the delete-account page again to retry.
+ *
+ * env is optional (default null) purely for backward compatibility with the
+ * existing fleet-tick call site, which does not pass it yet — a follow-up
+ * change to that call site (owned by the fleet track) is required to fully
+ * close this gap; without it, only the finalize-and-delete check below runs,
+ * exactly as before this fix.
  */
-export async function finalizeAccountDeletions(supabaseAdmin, { limit = 10 } = {}) {
+export async function finalizeAccountDeletions(supabaseAdmin, { limit = 10, env = null } = {}) {
   const { data: pending, error } = await supabaseAdmin
     .from("customer_accounts")
     .select("id")
@@ -411,6 +509,12 @@ export async function finalizeAccountDeletions(supabaseAdmin, { limit = 10 } = {
       .eq("account_id", row.id);
     if (memberError) throw new Error(`account_members lookup failed: ${memberError.message}`);
     const userIds = (members ?? []).map((m) => m.user_id);
+
+    if (env) {
+      const owner = (await getAccountMembers(supabaseAdmin, row.id)).find((m) => m.role === "owner");
+      if (owner) await runDeletionSaga(supabaseAdmin, env, row.id, owner.userId);
+    }
+
     if (userIds.length > 0) {
       const { data: live, error: liveError } = await supabaseAdmin
         .from("vpn_accounts")

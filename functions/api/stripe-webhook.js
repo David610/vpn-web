@@ -83,6 +83,13 @@ export async function onRequestPost({ env, request }) {
     }
   }
 
+  // F-02/C-02/C-14: the Stripe-assigned creation time of THIS event, used by
+  // every subscriptions-row writer below to reject a write that is
+  // chronologically stale relative to a write already recorded from a newer
+  // event — Stripe does not guarantee webhook delivery order.
+  const eventCreatedAt =
+    typeof event.created === "number" ? new Date(event.created * 1000).toISOString() : null;
+
   try {
     switch (event.type) {
       case "checkout.session.completed":
@@ -96,7 +103,7 @@ export async function onRequestPost({ env, request }) {
         // in "incomplete" and provisions off invoice.paid; a trial never
         // produces a payment to wait for.
         if (event.data.object.status === "trialing") {
-          await handleSubscriptionTrialing(supabaseAdmin, event.data.object, env);
+          await handleSubscriptionTrialing(supabaseAdmin, event.data.object, env, eventCreatedAt);
         }
         break;
       case "customer.subscription.updated":
@@ -104,12 +111,18 @@ export async function onRequestPost({ env, request }) {
           // Covers a trial that starts via an update rather than at
           // creation, and redeliveries of either; provisioning is keyed so
           // the duplicate is a no-op.
-          await handleSubscriptionTrialing(supabaseAdmin, event.data.object, env);
+          await handleSubscriptionTrialing(supabaseAdmin, event.data.object, env, eventCreatedAt);
         }
-        await handleSubscriptionUpdated(supabaseAdmin, event.data.object, env.STRIPE_SEAT_PRICE_ID, env);
+        await handleSubscriptionUpdated(
+          supabaseAdmin,
+          event.data.object,
+          env.STRIPE_SEAT_PRICE_ID,
+          env,
+          eventCreatedAt
+        );
         break;
       case "customer.subscription.deleted":
-        await handleSubscriptionDeleted(supabaseAdmin, event.data.object, env);
+        await handleSubscriptionDeleted(supabaseAdmin, event.data.object, env, eventCreatedAt);
         break;
       default:
         // Unhandled event types are not an error — Stripe sends many event

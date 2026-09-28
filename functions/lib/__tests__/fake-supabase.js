@@ -173,6 +173,13 @@ export function makeFakeSupabase(seed = {}, options = {}) {
         state.filters.push((r) => r[col] !== val);
         return chain;
       },
+      not(col, op, val) {
+        // Only the shape account-service.js's finalizeAccountDeletions uses
+        // — .not(col, "is", null), PostgREST's "column is not null".
+        if (op !== "is") throw new Error(`fake-supabase: unsupported .not() operator ${op}`);
+        state.filters.push((r) => (r[col] ?? null) !== val);
+        return chain;
+      },
       gt(col, val) {
         state.filters.push((r) => r[col] > val);
         return chain;
