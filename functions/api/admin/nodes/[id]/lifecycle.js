@@ -64,6 +64,34 @@ export async function onRequestPatch({ env, request, params }) {
       // bypass that — only with an explicit, audited flag, never silently.
       const overrideDnsCheck = body.state === "RETIRED" && body.overrideDnsCheck === true;
 
+      // F-20/B-03: a direct admin RETIRE (as opposed to the REPLACE_NODE
+      // saga's own RETIRE_OLD_NODE step, which only ever reaches RETIRED
+      // once device_node_assignments is empty or its own audited
+      // maxWaitHours timeout has explicitly elapsed) had no equivalent
+      // check at all -- an admin could retire a node straight out from
+      // under every legacy device still assigned to it. Same
+      // explicit-override shape as overrideDnsCheck just above: refuse by
+      // default, allow only with a deliberate, audited flag.
+      let assignmentsOverridden = false;
+      if (body.state === "RETIRED") {
+        const { count: liveAssignments, error: assignError } = await supabaseAdmin
+          .from("device_node_assignments")
+          .select("device_id", { count: "exact", head: true })
+          .eq("node_id", nodeId);
+        if (assignError) throw new Error(`device_node_assignments count failed: ${assignError.message}`);
+        if ((liveAssignments ?? 0) > 0) {
+          if (body.overrideAssignmentsCheck !== true) {
+            return jsonResponse(
+              {
+                error: `Node still has ${liveAssignments} device assignment(s). Re-place them first, or pass overrideAssignmentsCheck: true to retire anyway (audited).`,
+              },
+              409
+            );
+          }
+          assignmentsOverridden = true;
+        }
+      }
+
       const { data: rpcResult, error: rpcError } = await supabaseAdmin.rpc("revoke_node_key_and_transition", {
         p_node_id: nodeId,
         p_to_state: body.state,
@@ -101,6 +129,7 @@ export async function onRequestPatch({ env, request, params }) {
           jobs_cancelled: rpcResult?.jobs_cancelled ?? 0,
           lease_slots_deleted: rpcResult?.lease_slots_deleted ?? 0,
           ...(overrideDnsCheck ? { dns_check_overridden: true } : {}),
+          ...(assignmentsOverridden ? { assignments_check_overridden: true } : {}),
         },
       });
 

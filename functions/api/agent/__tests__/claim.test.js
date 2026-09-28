@@ -75,6 +75,30 @@ describe("agent/claim last_seen_at", () => {
     consoleErrorSpy.mockRestore();
   });
 
+  it("returns claim_token and lease_expires_at from the claimed job (F-09/C-10)", async () => {
+    authenticateNode.mockResolvedValue("node-1");
+    rpc.mockResolvedValue({
+      data: [
+        {
+          id: 1,
+          job_type: "CREATE_USER",
+          payload: {},
+          claim_token: "token-123",
+          lease_expires_at: "2026-01-01T00:10:00.000Z",
+        },
+      ],
+      error: null,
+    });
+    const request = new Request("https://example.test/api/agent/claim", {
+      method: "POST",
+      headers: { Authorization: "Bearer key" },
+    });
+    const res = await onRequestPost({ env, request });
+    const body = await res.json();
+    expect(body.job.claim_token).toBe("token-123");
+    expect(body.job.lease_expires_at).toBe("2026-01-01T00:10:00.000Z");
+  });
+
   it("would have caught the old .catch()-on-thenable bug: calling .catch on the mock throws", () => {
     // Documents WHY this mock shape matters: the real postgrest-js builder
     // (and this thenable mock) has no `.catch`, only `.then`. The old

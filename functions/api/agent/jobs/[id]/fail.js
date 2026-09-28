@@ -1,6 +1,7 @@
 import { createClient } from "@supabase/supabase-js";
 import { authenticateNode } from "../../../../lib/node-auth.js";
 import { sendFailureAlert } from "../../../../lib/resend.js";
+import { validateJobClaim } from "../../../../lib/job-claims.js";
 
 export async function onRequestPost({ env, request, params }) {
   const jobId = params.id;
@@ -30,7 +31,7 @@ export async function onRequestPost({ env, request, params }) {
   try {
     const { data: job, error: jobError } = await supabaseAdmin
       .from("provisioning_jobs")
-      .select("id, job_type, payload, node_id, status")
+      .select("id, job_type, payload, node_id, status, claim_token, lease_expires_at")
       .eq("id", jobId)
       .maybeSingle();
     if (jobError) {
@@ -40,13 +41,23 @@ export async function onRequestPost({ env, request, params }) {
         headers: { "Content-Type": "application/json" },
       });
     }
+    // F-09/C-10: was 404; a missing/foreign job is now 410 job_gone.
     if (!job || job.node_id !== nodeId) {
-      return new Response(JSON.stringify({ error: "Job not found" }), {
-        status: 404,
+      return new Response(JSON.stringify({ error: "job_gone" }), {
+        status: 410,
         headers: { "Content-Type": "application/json" },
       });
     }
-    if (job.status === "done" || job.status === "failed") {
+    const claimCheck = validateJobClaim(job, body, {
+      requireToken: env.REQUIRE_CLAIM_TOKEN === "true",
+    });
+    if (!claimCheck.ok) {
+      return new Response(JSON.stringify({ error: claimCheck.error }), {
+        status: claimCheck.status,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    if (claimCheck.terminal) {
       // Duplicate report (agent retried a request whose response it
       // never saw) — idempotent no-op, not an error. Critically, this
       // must not regress an already-`done` job back to `failed` (see
@@ -65,6 +76,8 @@ export async function onRequestPost({ env, request, params }) {
         status: "failed",
         completed_at: new Date().toISOString(),
         result: { error: errorMessage },
+        claim_token: null,
+        lease_expires_at: null,
       })
       .eq("id", jobId);
     if (updateError) throw new Error(`provisioning_jobs update failed: ${updateError.message}`);

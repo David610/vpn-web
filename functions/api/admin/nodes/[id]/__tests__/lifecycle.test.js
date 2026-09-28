@@ -14,6 +14,11 @@ const auditInsert = vi.fn();
 const credDeleteEq = vi.fn(async () => ({ error: null }));
 const credDelete = vi.fn(() => ({ eq: credDeleteEq }));
 const rpc = vi.fn();
+// F-20/B-03: the RETIRED path now counts live device_node_assignments
+// before calling the revoke RPC. Defaults to zero live assignments so
+// every pre-existing test (which predates this check) keeps passing
+// unchanged; the dedicated assignments tests below override this count.
+const assignmentsCount = vi.fn(async () => ({ count: 0, error: null }));
 
 vi.mock("@supabase/supabase-js", () => ({
   createClient: vi.fn(() => ({
@@ -33,6 +38,9 @@ vi.mock("@supabase/supabase-js", () => ({
       }
       if (table === "admin_audit_log") return { insert: auditInsert };
       if (table === "node_probe_credentials") return { delete: credDelete };
+      if (table === "device_node_assignments") {
+        return { select: vi.fn(() => ({ eq: assignmentsCount })) };
+      }
       throw new Error(`unexpected table ${table}`);
     }),
   })),
@@ -60,6 +68,7 @@ beforeEach(() => {
   nodeUpdateChain.eq.mockClear();
   auditInsert.mockReset().mockResolvedValue({ error: null });
   rpc.mockReset().mockResolvedValue({ data: { status: "ok", jobs_cancelled: 0, lease_slots_deleted: 0 }, error: null });
+  assignmentsCount.mockReset().mockResolvedValue({ count: 0, error: null });
 });
 
 describe("PATCH /api/admin/nodes/:id/lifecycle", () => {
@@ -170,6 +179,35 @@ describe("PATCH /api/admin/nodes/:id/lifecycle", () => {
     );
     expect(auditInsert).toHaveBeenCalledWith(
       expect.objectContaining({ metadata: expect.objectContaining({ dns_check_overridden: true }) })
+    );
+  });
+
+  // F-20/B-03: RETIRE must refuse while live device assignments remain,
+  // unless the admin explicitly passes the audited override.
+  it("refuses RETIRED with live assignments and never calls the revoke RPC", async () => {
+    nodeMaybeSingle.mockResolvedValue({ data: { node_id: "node-1", lifecycle_state: "DRAINING" }, error: null });
+    assignmentsCount.mockResolvedValue({ count: 3, error: null });
+    const res = await onRequestPatch({ env, request: makeRequest({ state: "RETIRED" }), params: { id: "node-1" } });
+    expect(res.status).toBe(409);
+    expect(rpc).not.toHaveBeenCalled();
+    expect(auditInsert).not.toHaveBeenCalled();
+  });
+
+  it("retires with live assignments when overrideAssignmentsCheck is explicitly requested", async () => {
+    nodeMaybeSingle.mockResolvedValue({ data: { node_id: "node-1", lifecycle_state: "DRAINING" }, error: null });
+    assignmentsCount.mockResolvedValue({ count: 3, error: null });
+    const res = await onRequestPatch({
+      env,
+      request: makeRequest({ state: "RETIRED", overrideAssignmentsCheck: true }),
+      params: { id: "node-1" },
+    });
+    expect(res.status).toBe(200);
+    expect(rpc).toHaveBeenCalledWith(
+      "revoke_node_key_and_transition",
+      expect.objectContaining({ p_to_state: "RETIRED" })
+    );
+    expect(auditInsert).toHaveBeenCalledWith(
+      expect.objectContaining({ metadata: expect.objectContaining({ assignments_check_overridden: true }) })
     );
   });
 

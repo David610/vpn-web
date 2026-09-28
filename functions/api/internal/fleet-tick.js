@@ -6,6 +6,8 @@ import { autoReplaceFailedNodes } from "../../lib/node-auto-replace.js";
 import { autoScaleFullLocations } from "../../lib/node-auto-scale.js";
 import { failSilentNodes } from "../../lib/node-silence-failover.js";
 import { SILENCE_ELIGIBLE_STATES } from "../../lib/node-health-transition.js";
+import { raiseAlert } from "../../lib/alerts.js";
+import { reconcileFailedNodeAssignments } from "../../lib/fleet-operations.js";
 
 function json(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -85,6 +87,44 @@ export async function onRequestPost({ env, request }) {
     }
   }
 
+  // F-09/D-03/C-10: reap claimed jobs whose 10-minute lease has expired --
+  // the agent that claimed them is presumed dead. Runs every tick
+  // unconditionally (no feature flag): unlike auto-replace/auto-scale this
+  // has no fleet-shape side effect, only a status flip + attempt counter,
+  // so there is no blast-radius reason to gate it.
+  let reapedJobs = [];
+  try {
+    const { data: reaped, error: reapError } = await supabaseAdmin.rpc("reap_expired_job_claims", {
+      p_max_attempts: 5,
+    });
+    if (reapError) throw new Error(reapError.message);
+    reapedJobs = reaped ?? [];
+    for (const job of reapedJobs) {
+      if (job.new_status !== "failed") continue;
+      await raiseAlert(supabaseAdmin, {
+        kind: "provisioning_job_claim_exhausted",
+        severity: "critical",
+        dedupKey: `job-claim-exhausted:${job.id}`,
+        nodeId: job.node_id,
+        message: `Provisioning job #${job.id} (${job.job_type}) exhausted its retry budget (${job.attempts} attempts) after repeated claim-lease expiry`,
+      });
+    }
+  } catch (err) {
+    console.error("fleet-tick: job claim reaper failed:", err.message);
+  }
+
+  // F-20/B-03/C-12: make-before-break re-placement of legacy devices off
+  // FAILED/DRAINING nodes, independent of any explicit REPLACE_NODE
+  // operation. See fleet-operations.js#reconcileFailedNodeAssignments.
+  let reassignedDevices = [];
+  if (env.FEATURE_AUTO_NODE_HEALTH === "true") {
+    try {
+      reassignedDevices = await reconcileFailedNodeAssignments(supabaseAdmin);
+    } catch (err) {
+      console.error("fleet-tick: failed-node re-placement failed:", err.message);
+    }
+  }
+
   let autoReplaced = [];
   if (env.FEATURE_AUTO_NODE_REPLACE === "true") {
     try {
@@ -101,5 +141,14 @@ export async function onRequestPost({ env, request }) {
       console.error("fleet-tick: auto-scale failed:", err.message);
     }
   }
-  return json({ leased: results.length, results, deletedAccounts, silenceFailed, autoReplaced, autoScaled });
+  return json({
+    leased: results.length,
+    results,
+    deletedAccounts,
+    silenceFailed,
+    reapedJobs,
+    reassignedDevices,
+    autoReplaced,
+    autoScaled,
+  });
 }
