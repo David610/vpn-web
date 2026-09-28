@@ -110,4 +110,38 @@ describe("agent/jobs/[id]/complete", () => {
     expect(vpnAccountsUpdate).toHaveBeenCalledWith({ enabled: true });
     expect(alertUpdate).toHaveBeenCalled();
   });
+
+  it("never persists the plaintext subscription_url/provisioning_url into provisioning_jobs.result (F-04)", async () => {
+    const { encryptSecret } = await import("../../../../../lib/crypto.js");
+    encryptSecret.mockResolvedValue({ ciphertext: "cipher", nonce: "nonce" });
+    maybeSingle.mockResolvedValue({
+      data: {
+        id: "job-1",
+        job_type: "ROTATE_SUBSCRIPTION_TOKEN",
+        payload: {},
+        vpn_account_id: 7,
+        node_id: "node-1",
+        status: "claimed",
+      },
+      error: null,
+    });
+
+    const secretUrl = "https://node.example/sub/very-secret-token";
+    const provisioningUrl = "https://node.example/provision/other-secret";
+    const res = await onRequestPost({
+      env,
+      request: makeRequest({ subscription_url: secretUrl, provisioning_url: provisioningUrl }),
+      params: { id: "job-1" },
+    });
+    expect(res.status).toBe(200);
+
+    const storedResult = jobsUpdate.mock.calls[0][0].result;
+    const serialized = JSON.stringify(storedResult);
+    expect(serialized).not.toContain(secretUrl);
+    expect(serialized).not.toContain(provisioningUrl);
+    expect(storedResult.subscription_url_reported).toBe(true);
+    expect(storedResult.provisioning_url_reported).toBe(true);
+    expect(storedResult.subscription_url).toBeUndefined();
+    expect(storedResult.provisioning_url).toBeUndefined();
+  });
 });
