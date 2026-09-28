@@ -28,7 +28,17 @@ function startWrangler() {
     ["wrangler", "pages", "dev", "out", "--port", PORT, "--compatibility-date=2024-01-01"],
     // shell: true is needed on Windows to resolve `npx` (a .cmd shim);
     // args are fixed literals above, not user input, so this is safe here.
-    { stdio: ["ignore", "pipe", "pipe"], shell: process.platform === "win32" }
+    //
+    // detached: true (POSIX only) puts `npx` in its own process group so
+    // stopWrangler() below can kill the whole tree it spawns (npx -> the
+    // wrangler CLI -> workerd) at once. Without this, child.kill() only
+    // signals the top-level `npx` process; wrangler/workerd survive as
+    // orphans still holding this process's stdout/stderr pipes open, which
+    // is exactly what made this script hang for 20+ minutes in CI after
+    // already printing PASS and finishing everything else -- the *script*
+    // exited, but the CI step's shell kept waiting for those pipes to
+    // close, because a grandchild process still had them open.
+    { stdio: ["ignore", "pipe", "pipe"], shell: process.platform === "win32", detached: process.platform !== "win32" }
   );
   let ready = false;
   const readyPromise = new Promise((resolve, reject) => {
@@ -60,6 +70,24 @@ async function waitForServer(timeoutMs) {
     await sleep(300);
   }
   throw new Error(`Server at ${BASE} did not become ready in time`);
+}
+
+function stopWrangler(child) {
+  if (!child.pid) return;
+  try {
+    if (process.platform !== "win32") {
+      // Negative pid = signal the whole process group (works because the
+      // child was spawned with detached: true, which makes it its own
+      // group leader with gid === pid) -- this reaches wrangler/workerd,
+      // not just the `npx` launcher process.
+      process.kill(-child.pid, "SIGKILL");
+    } else {
+      child.kill();
+    }
+  } catch {
+    // Already exited, or the group is already gone -- either way, nothing
+    // left to clean up.
+  }
 }
 
 const { child, readyPromise } = startWrangler();
@@ -127,7 +155,7 @@ try {
 
   await browser.close();
 } finally {
-  child.kill();
+  stopWrangler(child);
 }
 
 console.log(`\n=== CSP hydration check (${PAGES.length} pages) ===`);
