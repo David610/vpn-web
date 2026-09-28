@@ -1,6 +1,14 @@
 import { createClient } from "@supabase/supabase-js";
 import { requireRecentUser, jsonResponse } from "../../../lib/user-auth.js";
 import { generateLinkCode, hashLinkCode, LINK_CODE_TTL_SECONDS } from "../../../lib/telegram-link-code.js";
+import { checkRateLimit, rateLimitedResponse } from "../../../lib/rate-limit.js";
+
+// F-49: an authenticated user who can mint unlimited codes could brute-force
+// the CAS-guarded consume step over many codes, or simply hammer this route.
+// Keyed by account, since this route already requires a fresh session --
+// there is no NAT-sharing concern the way there is on anonymous endpoints.
+const LINK_CODE_WINDOW_SECONDS = 10 * 60;
+const LINK_CODE_LIMIT = 5;
 
 /**
  * Issues a short-lived linking code the customer sends to the bot / enters
@@ -16,6 +24,12 @@ export async function onRequestPost({ env, request }) {
 
   const { user, response } = await requireRecentUser(request, supabaseAdmin);
   if (!user) return response;
+
+  const allowed = await checkRateLimit(supabaseAdmin, `telegram-link-code:${user.id}`, {
+    windowSeconds: LINK_CODE_WINDOW_SECONDS,
+    limit: LINK_CODE_LIMIT,
+  });
+  if (!allowed) return rateLimitedResponse("Too many linking codes requested. Please try again later.");
 
   try {
     const { data: existingLink, error: linkError } = await supabaseAdmin

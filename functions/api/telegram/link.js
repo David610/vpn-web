@@ -2,6 +2,18 @@ import { createClient } from "@supabase/supabase-js";
 import { jsonResponse } from "../../lib/user-auth.js";
 import { verifyTelegramInitData } from "../../lib/telegram-init-data.js";
 import { hashLinkCode } from "../../lib/telegram-link-code.js";
+import { checkRateLimit, rateLimitedResponse, clientIpKey } from "../../lib/rate-limit.js";
+
+// F-49: this is the code-verification step -- exactly the kind of endpoint
+// a guesser hammers to brute-force the (short, human-typed) linking code
+// before its TTL/single-use CAS would otherwise matter. Keyed by the
+// verified Telegram user id (proven by the initData signature, so it can't
+// be spoofed to spread guesses across keys) rather than IP, since Telegram
+// clients can share egress IPs; a much more generous IP backstop catches a
+// single attacker cycling through many different Telegram accounts.
+const LINK_ATTEMPT_WINDOW_SECONDS = 10 * 60;
+const LINK_ATTEMPT_LIMIT_PER_TELEGRAM_USER = 5;
+const LINK_ATTEMPT_LIMIT_PER_IP = 30;
 
 /**
  * Called by the Mini App (never by a normal browser session -- there is no
@@ -26,6 +38,19 @@ export async function onRequestPost({ env, request }) {
 
   const verified = await verifyTelegramInitData(initData, env.TELEGRAM_BOT_TOKEN);
   if (!verified.ok) return jsonResponse({ error: "Invalid Telegram initData" }, 401);
+
+  const ipAllowed = await checkRateLimit(supabaseAdmin, `telegram-link:ip:${clientIpKey(request)}`, {
+    windowSeconds: LINK_ATTEMPT_WINDOW_SECONDS,
+    limit: LINK_ATTEMPT_LIMIT_PER_IP,
+  });
+  const userAllowed = await checkRateLimit(
+    supabaseAdmin,
+    `telegram-link:tguser:${verified.user.id}`,
+    { windowSeconds: LINK_ATTEMPT_WINDOW_SECONDS, limit: LINK_ATTEMPT_LIMIT_PER_TELEGRAM_USER }
+  );
+  if (!ipAllowed || !userAllowed) {
+    return rateLimitedResponse("Too many linking attempts. Please try again later.");
+  }
 
   let body;
   try {
