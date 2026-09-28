@@ -6,6 +6,31 @@
  * getClaims() rather than trusting a browser timestamp.
  */
 
+// F-43 (per-request GoTrue round trip): supabase-js's getClaims() verifies
+// locally against the project's JWKS when the signing key is asymmetric
+// (ES256/RS256), and only falls back to a network call to GoTrue's
+// getUser() when the key is symmetric (HS256) — because a shared HS256
+// secret is not something a client-side JWKS can safely expose. The current
+// project's anon key is confirmed HS256 (audit section 22); whether user
+// access tokens are also HS256 is not verified but assumed likely, in which
+// case every requireUser()/requireRecentUser() call costs one extra
+// synchronous round trip to Supabase Auth.
+//
+// This file cannot remove that round trip on its own: doing so without the
+// hosted project's config change would mean re-implementing JWT HMAC
+// verification here with the shared SUPABASE_JWT_SECRET, which duplicates
+// security-sensitive logic (exp/aud/iss/nbf checks, key rotation handling)
+// that supabase-js already owns, for a request path that also decides
+// account access. That trade is not worth making without dedicated review
+// and tests, so it is deliberately left alone here.
+//
+// REQUIRES PRODUCTION ACCESS: the real fix is moving the hosted Supabase
+// project from a legacy shared JWT secret to asymmetric JWT signing keys
+// (Supabase dashboard: Project Settings -> API -> JWT Keys -> "Migrate to
+// asymmetric keys", or `supabase projects api-keys` for the CLI-driven
+// path). Once user access tokens are signed with an asymmetric key,
+// getClaims() verifies them locally against the JWKS with no code change
+// needed here, and the per-request GoTrue round trip disappears.
 const DEFAULT_RECENT_AUTH_SECONDS = 15 * 60;
 
 // Supabase AMR methods that represent a human-controlled authentication or

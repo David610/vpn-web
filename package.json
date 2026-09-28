@@ -8,7 +8,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test": "vitest run"
+    "test": "vitest run",
+    "check-log-secrets": "node scripts/check-log-secrets.mjs"
   },
   "dependencies": {
     "@noble/curves": "^2.4.0",
