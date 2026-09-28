@@ -791,3 +791,113 @@ describe("event ordering (F-02/C-02/C-14)", () => {
     expect(db._tables.subscriptions[0].status).toBe("canceled");
   });
 });
+
+// F-31/C-04: a subscription reporting a base price this deployment doesn't
+// sell must not have its status/period/seats synced — no entitlement is
+// granted or extended off data this deployment cannot vouch for.
+describe("price allowlist (F-31/C-04)", () => {
+  const envWithAllowlist = { STRIPE_PRICE_ID: "price_base_v2" };
+
+  it("refuses to sync when the base item's price is not in the allowlist", async () => {
+    const db = makeFakeSupabase(seedAccount({ status: "incomplete" }));
+
+    await handleSubscriptionUpdated(
+      db,
+      {
+        id: "sub_123",
+        status: "active",
+        cancel_at_period_end: false,
+        current_period_end: PERIOD_END_UNIX,
+        items: { data: [{ id: "si_base", price: { id: "price_unknown" }, quantity: 1 }] },
+      },
+      undefined,
+      envWithAllowlist
+    );
+
+    expect(db._tables.subscriptions[0].status).toBe("incomplete");
+  });
+
+  it("syncs normally when the base item's price matches the allowlist", async () => {
+    const db = makeFakeSupabase(seedAccount({ status: "incomplete" }));
+
+    await handleSubscriptionUpdated(
+      db,
+      {
+        id: "sub_123",
+        status: "active",
+        cancel_at_period_end: false,
+        current_period_end: PERIOD_END_UNIX,
+        items: { data: [{ id: "si_base", price: { id: "price_base_v2" }, quantity: 1 }] },
+      },
+      undefined,
+      envWithAllowlist
+    );
+
+    expect(db._tables.subscriptions[0]).toMatchObject({ status: "active", stripe_price_id: "price_base_v2" });
+  });
+
+  it("accepts a price on the legacy allowlist", async () => {
+    const db = makeFakeSupabase(seedAccount({ status: "incomplete" }));
+
+    await handleSubscriptionUpdated(
+      db,
+      {
+        id: "sub_123",
+        status: "active",
+        cancel_at_period_end: false,
+        current_period_end: PERIOD_END_UNIX,
+        items: { data: [{ id: "si_base", price: { id: "price_old_v1" }, quantity: 1 }] },
+      },
+      undefined,
+      { STRIPE_PRICE_ID: "price_base_v2", STRIPE_PRICE_ID_LEGACY: "price_old_v1,price_old_v0" }
+    );
+
+    expect(db._tables.subscriptions[0].status).toBe("active");
+  });
+
+  it("does not distinguish the seat-pack item from the base item as unknown", async () => {
+    // The seat-pack item's own price id must never be mistaken for the base
+    // item and rejected.
+    const db = makeFakeSupabase(seedAccount({ status: "incomplete" }));
+
+    await handleSubscriptionUpdated(
+      db,
+      {
+        id: "sub_123",
+        status: "active",
+        cancel_at_period_end: false,
+        current_period_end: PERIOD_END_UNIX,
+        items: {
+          data: [
+            { id: "si_base", price: { id: "price_base_v2" }, quantity: 1 },
+            { id: "si_seat", price: { id: "price_seat" }, quantity: 2 },
+          ],
+        },
+      },
+      "price_seat",
+      envWithAllowlist
+    );
+
+    expect(db._tables.subscriptions[0].status).toBe("active");
+    expect(db._tables.subscriptions[0].extra_seats).toBe(6);
+  });
+
+  it("allows the write through when no allowlist is configured (fails open, not closed)", async () => {
+    const db = makeFakeSupabase(seedAccount({ status: "incomplete" }));
+
+    await handleSubscriptionUpdated(
+      db,
+      {
+        id: "sub_123",
+        status: "active",
+        cancel_at_period_end: false,
+        current_period_end: PERIOD_END_UNIX,
+        items: { data: [{ id: "si_base", price: { id: "price_anything" }, quantity: 1 }] },
+      },
+      undefined,
+      {}
+    );
+
+    expect(db._tables.subscriptions[0].status).toBe("active");
+  });
+});

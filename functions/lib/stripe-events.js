@@ -19,6 +19,8 @@ import {
   getInvoiceSubscriptionId,
   getInvoiceLinePeriodEnd,
   getExtraSeatCount,
+  getBaseSubscriptionPriceId,
+  isAllowedBasePrice,
 } from "./stripe-fields.js";
 import {
   getAccountForUser,
@@ -494,6 +496,23 @@ export async function handleSubscriptionUpdated(
     return;
   }
 
+  // F-31/C-04: only trust a base price this deployment actually sells. If
+  // the payload names a base item at all AND an allowlist is configured
+  // (STRIPE_PRICE_ID), an unrecognized price refuses the whole write rather
+  // than silently syncing status/period/seats from an event that could be a
+  // dashboard tamper or a stale plan migration — no entitlement is granted
+  // or extended off data this deployment cannot vouch for. A payload with no
+  // item data (most unit tests, and any event Stripe sends without
+  // items expanded) has nothing to validate and is allowed through
+  // unchanged — this is a price allowlist, not an "items required" check.
+  const basePriceId = getBaseSubscriptionPriceId(subscription, seatPriceId);
+  if (basePriceId && env.STRIPE_PRICE_ID && !isAllowedBasePrice(basePriceId, env)) {
+    console.error(
+      `ALERT: customer.subscription.updated for stripe_subscription_id=${subscription.id} reports base price ${basePriceId}, which is not in the configured allowlist — refusing to sync (no entitlement granted); investigate a possible dashboard price change`
+    );
+    return;
+  }
+
   const { data: updated, error: subError } = await supabaseAdmin
     .from("subscriptions")
     .update({
@@ -506,6 +525,7 @@ export async function handleSubscriptionUpdated(
       // change — bought here, or refunded/adjusted in the Stripe dashboard —
       // arrives as this event, so syncing here covers both.
       extra_seats: getExtraSeatCount(subscription, seatPriceId),
+      ...(basePriceId ? { stripe_price_id: basePriceId } : {}),
       stripe_synced_at: eventCreatedAt ?? new Date().toISOString(),
       updated_at: new Date().toISOString(),
     })

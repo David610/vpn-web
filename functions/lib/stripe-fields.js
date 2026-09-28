@@ -73,6 +73,53 @@ export function getSeatSubscriptionItem(subscription, seatPriceId) {
 }
 
 /**
+ * The base (non-pack) item's price id — the item Checkout put the customer
+ * on, as opposed to the +3-device pack item matched by seatPriceId.
+ *
+ * F-31/C-04: this is the id validated against an allowlist before a
+ * subscription is trusted to grant entitlement. A subscription normally
+ * carries exactly one non-pack item; if Stripe ever reports more than one
+ * (a manual dashboard edit, a plan migration), the first is used — the same
+ * "match by price id, not position" reasoning as getSeatSubscriptionItem
+ * applies here too, just inverted (this wants the one item that ISN'T the
+ * pack).
+ *
+ * @param {object} subscription - a Stripe Subscription object
+ * @param {string | undefined} seatPriceId - env.STRIPE_SEAT_PRICE_ID
+ * @returns {string | null}
+ */
+export function getBaseSubscriptionPriceId(subscription, seatPriceId) {
+  const items = subscription.items?.data;
+  if (!Array.isArray(items) || items.length === 0) return null;
+  const base = items.find((item) => {
+    const priceId = typeof item.price === "string" ? item.price : item.price?.id;
+    return priceId !== seatPriceId;
+  });
+  if (!base) return null;
+  return typeof base.price === "string" ? base.price : base.price?.id ?? null;
+}
+
+/**
+ * F-31/C-04: is this price id one this deployment actually sells as a base
+ * subscription? STRIPE_PRICE_ID is the current price; STRIPE_PRICE_ID_LEGACY
+ * (optional, comma-separated) lets a price that was retired still be
+ * honored for customers already on it, without silently accepting an
+ * arbitrary price a compromised or fat-fingered dashboard edit switched a
+ * subscription to.
+ *
+ * @param {string | null} priceId
+ * @param {{ STRIPE_PRICE_ID?: string, STRIPE_PRICE_ID_LEGACY?: string }} env
+ * @returns {boolean}
+ */
+export function isAllowedBasePrice(priceId, env) {
+  if (!priceId) return false;
+  const allowlist = [env.STRIPE_PRICE_ID, ...(env.STRIPE_PRICE_ID_LEGACY?.split(",") ?? [])]
+    .map((id) => id?.trim())
+    .filter(Boolean);
+  return allowlist.includes(priceId);
+}
+
+/**
  * How many +3-device packs a subscription is paying for. Absent a pack
  * item — the common case — that is zero, not unknown.
  *
