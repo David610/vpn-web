@@ -47,8 +47,8 @@ describe("isProductionDeployEnv", () => {
 
 describe("checkProductionConfig", () => {
   const goodEnv = {
-    NEXT_PUBLIC_SITE_URL: "https://arcana.example.com",
-    NEXT_PUBLIC_SUPPORT_EMAIL: "support@arcana.example.com",
+    NEXT_PUBLIC_SITE_URL: "https://arcanavpn.io",
+    NEXT_PUBLIC_SUPPORT_EMAIL: "support@arcanavpn.io",
   };
 
   function fakeReadFile(cleanContent) {
@@ -57,7 +57,7 @@ describe("checkProductionConfig", () => {
 
   it("fails when a draft marker is present in a legal page and env indicates production", () => {
     const readFile = (filePath) => {
-      if (filePath.endsWith("terms/page.tsx")) {
+      if (filePath.replace(/\\/g, "/").endsWith("terms/page.tsx")) {
         return "TODO (legal review needed): this page is a structural draft";
       }
       return "final legal text, no placeholders here";
@@ -70,7 +70,7 @@ describe("checkProductionConfig", () => {
 
   it("fails when the impressum still has the placeholder legal name", () => {
     const readFile = (filePath) => {
-      if (filePath.endsWith("impressum/page.tsx")) {
+      if (filePath.replace(/\\/g, "/").endsWith("impressum/page.tsx")) {
         return "Operator: [Company or sole-proprietor legal name]";
       }
       return "final legal text";

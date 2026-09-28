@@ -25,12 +25,23 @@ vi.mock("@supabase/supabase-js", () => ({
           eq: vi.fn().mockReturnThis(),
           maybeSingle,
           update: jobsUpdate.mockReturnValue({ eq: jobsUpdateEq }),
+          insert: vi.fn().mockResolvedValue({ error: null }),
         };
       }
       if (table === "vpn_accounts") {
         return {
           update: vpnAccountsUpdate.mockReturnValue({ eq: vpnAccountsUpdateEq }),
+          // finalizeCreatedIdentity's "others on a different node" lookup
+          // (identity-lifecycle.js): no stale identities in this scenario.
+          select: vi.fn().mockReturnValue({
+            eq: vi.fn().mockReturnValue({
+              eq: vi.fn().mockResolvedValue({ data: [], error: null }),
+            }),
+          }),
         };
+      }
+      if (table === "vpn_secrets") {
+        return { insert: vi.fn().mockResolvedValue({ error: null }) };
       }
       if (table === "operational_alerts") {
         const chain = {
@@ -43,6 +54,15 @@ vi.mock("@supabase/supabase-js", () => ({
         return chain;
       }
       return {};
+    }),
+    rpc: vi.fn((fn) => {
+      if (fn === "device_entitlement") {
+        return Promise.resolve({
+          data: [{ entitled: true, subscription_id: "sub-1", reason: null }],
+          error: null,
+        });
+      }
+      return Promise.resolve({ data: null, error: null });
     }),
   })),
 }));

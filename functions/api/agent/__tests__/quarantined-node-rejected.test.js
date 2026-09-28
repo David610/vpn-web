@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 
 // F-05/C-09 enumerated-route regression test: authenticateNode is the ONE
 // gate every /api/agent/* handler relies on to reject a quarantined/
@@ -60,7 +60,9 @@ const ROUTES = [
   { name: "jobs/[id]/complete", mod: () => import("../jobs/[id]/complete.js"), fn: "onRequestPost", params: { id: "1" } },
   { name: "jobs/[id]/fail", mod: () => import("../jobs/[id]/fail.js"), fn: "onRequestPost", params: { id: "1" } },
   { name: "leases/sync", mod: () => import("../leases/sync.js"), fn: "onRequestPost" },
-  { name: "metrics", mod: () => import("../metrics.js"), fn: "onRequestPost" },
+  // metrics.js is retired (F-21): it always returns 410 without touching
+  // node-auth.js or any table, so it has nothing for a revoked/quarantined
+  // key to gain access to and is intentionally excluded from this list.
   { name: "probe-credential", mod: () => import("../probe-credential.js"), fn: "onRequestPost" },
   { name: "probe-targets", mod: () => import("../probe-targets.js"), fn: "onRequestGet", method: "GET" },
   { name: "revision/[revision]", mod: () => import("../revision/[revision].js"), fn: "onRequestGet", method: "GET", params: { revision: "1" } },
@@ -70,8 +72,8 @@ const ROUTES = [
 describe("every /api/agent/* handler rejects a QUARANTINED node's key with 401", () => {
   for (const route of ROUTES) {
     it(route.name, async () => {
-      const module = await route.mod();
-      const handler = module[route.fn];
+      const routeModule = await route.mod();
+      const handler = routeModule[route.fn];
       expect(typeof handler).toBe("function");
       const response = await handler({
         env,
