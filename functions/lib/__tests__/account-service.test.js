@@ -21,6 +21,8 @@ const {
   moveDevice,
   renameSubscription,
   removeDevice,
+  renameDevice,
+  cancelSubscription,
   ensureSessionDevice,
   requestAccountDeletion,
 } = await import("../account-service.js");
@@ -36,10 +38,10 @@ const env = {
 };
 const uuid = (n) => `00000000-0000-4000-8000-00000000000${n}`;
 
-function db({ devices = [], subscriptions } = {}) {
+function db({ devices = [], subscriptions, role = "owner" } = {}) {
   const fake = makeFakeSupabase({
     customer_accounts: [{ id: "acct-1" }],
-    account_members: [{ account_id: "acct-1", user_id: "user-1", role: "owner" }],
+    account_members: [{ account_id: "acct-1", user_id: "user-1", role }],
     subscriptions: subscriptions ?? [
       { id: 1, account_id: "acct-1", name: "Personal", stripe_subscription_id: "sub_p", status: "active", current_period_end: END, extra_seats: 0, created_at: "2026-01-01" },
       { id: 2, account_id: "acct-1", name: "Family", stripe_subscription_id: "sub_f", status: "active", current_period_end: END, extra_seats: 0, created_at: "2026-01-02" },
@@ -154,6 +156,75 @@ describe("removeDevice", () => {
     const res = await removeDevice(fake, env, user, uuid(1));
     expect(res.status).toBe(200);
     expect(fake._tables.devices[0].status).toBe("REVOKED");
+  });
+
+  it("lets a member remove their own device", async () => {
+    const fake = db({ role: "member", devices: [dev(1, 1)] });
+    const res = await removeDevice(fake, env, user, uuid(1));
+    expect(res.status).toBe(200);
+  });
+
+  it("refuses a member removing another member's device", async () => {
+    const fake = db({ role: "member", devices: [dev(1, 1, { user_id: "user-2" })] });
+    const res = await removeDevice(fake, env, user, uuid(1));
+    expect(res.status).toBe(403);
+    expect(fake._tables.devices[0].status).toBe("ACTIVE");
+  });
+});
+
+// F-12/C-03: a mere member must never be able to mutate the owner's billing.
+// Before this fix, setExtraPacks/setCancelAtPeriodEnd/renameSubscription only
+// checked account membership, so any member could buy packs, toggle
+// cancellation, or rename the subscription on the owner's dime.
+describe("F-12/C-03 owner-only billing actions", () => {
+  it("rejects a member setting 17 extra packs on the owner's subscription without calling Stripe", async () => {
+    const fake = db({ role: "member" });
+    const res = await setExtraPacks(fake, env, user, "2", 17);
+    expect(res.status).toBe(403);
+    expect(stripe.subscriptions.update).not.toHaveBeenCalled();
+    expect(fake._tables.subscriptions.find((s) => s.id === 2).extra_seats).toBe(0);
+  });
+
+  it("rejects a member toggling cancel_at_period_end without calling Stripe", async () => {
+    const fake = db({ role: "member" });
+    const res = await cancelSubscription(fake, env, user, "1");
+    expect(res.status).toBe(403);
+    expect(stripe.subscriptions.update).not.toHaveBeenCalled();
+  });
+
+  it("rejects a member renaming the subscription", async () => {
+    const fake = db({ role: "member" });
+    const res = await renameSubscription(fake, user, "1", "Hijacked");
+    expect(res.status).toBe(403);
+    expect(fake._tables.subscriptions[0].name).toBe("Personal");
+  });
+
+  it("still lets the owner do all three", async () => {
+    const fake = db();
+    expect((await setExtraPacks(fake, env, user, "2", 1)).status).toBe(200);
+    expect((await cancelSubscription(fake, env, user, "1")).status).toBe(200);
+    expect((await renameSubscription(fake, user, "1", "Renamed")).status).toBe(200);
+  });
+});
+
+describe("renameDevice ownership (F-12/C-03)", () => {
+  it("lets a member rename their own device", async () => {
+    const fake = db({ role: "member", devices: [dev(1, 1)] });
+    const res = await renameDevice(fake, user, uuid(1), "My phone");
+    expect(res.status).toBe(200);
+  });
+
+  it("refuses a member renaming another member's device", async () => {
+    const fake = db({ role: "member", devices: [dev(1, 1, { user_id: "user-2" })] });
+    const res = await renameDevice(fake, user, uuid(1), "Hijacked");
+    expect(res.status).toBe(403);
+    expect(fake._tables.devices[0].name).toBe("Device 1");
+  });
+
+  it("lets the owner rename another member's device", async () => {
+    const fake = db({ devices: [dev(1, 1, { user_id: "user-2" })] });
+    const res = await renameDevice(fake, user, uuid(1), "Renamed by owner");
+    expect(res.status).toBe(200);
   });
 });
 

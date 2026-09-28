@@ -41,6 +41,21 @@ async function accountOf(supabaseAdmin, user) {
   return account;
 }
 
+/**
+ * F-12/C-03: legacy multi-member accounts let a mere member mutate the
+ * owner's billing — buy/drop device packs, toggle cancellation, or rename
+ * the subscription itself — because these actions only ever checked
+ * membership, never role. Every subscription-level mutation must go through
+ * this first, mirroring account/devices/[id]/revoke.js's existing
+ * owner-vs-member split for device-level actions.
+ */
+function requireOwner(account) {
+  if (account.role !== "owner") {
+    return fail(403, "Only the account owner can do this.");
+  }
+  return null;
+}
+
 async function listDevices(supabaseAdmin, accountId) {
   const { data, error } = await supabaseAdmin
     .from("devices")
@@ -121,6 +136,8 @@ async function subscriptionOrFail(supabaseAdmin, account, subscriptionId) {
 
 export async function renameSubscription(supabaseAdmin, user, subscriptionId, name) {
   const account = await accountOf(supabaseAdmin, user);
+  const ownerCheck = requireOwner(account);
+  if (ownerCheck) return ownerCheck;
   const trimmed = typeof name === "string" ? name.trim() : "";
   if (!NAME.test(trimmed)) return fail(400, "Use 1–80 characters.");
   const sub = await subscriptionOrFail(supabaseAdmin, account, subscriptionId);
@@ -144,6 +161,8 @@ export async function setExtraPacks(supabaseAdmin, env, user, subscriptionId, pa
   }
   if (!env.STRIPE_SEAT_PRICE_ID) return fail(503, "Adding devices is not available yet.");
   const account = await accountOf(supabaseAdmin, user);
+  const ownerCheck = requireOwner(account);
+  if (ownerCheck) return ownerCheck;
   const sub = await subscriptionOrFail(supabaseAdmin, account, subscriptionId);
   if (!sub) return fail(404, "Subscription not found.");
   if (!isLive(sub) || !sub.stripe_subscription_id) {
@@ -199,6 +218,8 @@ export async function setExtraPacks(supabaseAdmin, env, user, subscriptionId, pa
 
 async function setCancelAtPeriodEnd(supabaseAdmin, env, user, subscriptionId, cancel) {
   const account = await accountOf(supabaseAdmin, user);
+  const ownerCheck = requireOwner(account);
+  if (ownerCheck) return ownerCheck;
   const sub = await subscriptionOrFail(supabaseAdmin, account, subscriptionId);
   if (!sub) return fail(404, "Subscription not found.");
   if (!isLive(sub) || !sub.stripe_subscription_id) return fail(409, "This subscription is not active.");
@@ -228,12 +249,25 @@ async function deviceOrFail(supabaseAdmin, account, deviceId) {
   return data;
 }
 
+/**
+ * F-12/C-03: owners manage every device on the plan; a member only their
+ * own — the same split account/devices/[id]/revoke.js already enforces.
+ */
+function requireOwnerOrOwnDevice(account, user, device) {
+  if (device.user_id !== user.id && account.role !== "owner") {
+    return fail(403, "Only the account owner can manage another member's device.");
+  }
+  return null;
+}
+
 export async function renameDevice(supabaseAdmin, user, deviceId, name) {
   const account = await accountOf(supabaseAdmin, user);
   const trimmed = typeof name === "string" ? name.trim() : "";
   if (!DEVICE_NAME.test(trimmed)) return fail(400, "Use 1–80 characters.");
   const device = await deviceOrFail(supabaseAdmin, account, deviceId);
   if (!device) return fail(404, "Device not found.");
+  const ownerCheck = requireOwnerOrOwnDevice(account, user, device);
+  if (ownerCheck) return ownerCheck;
   const { error } = await supabaseAdmin.from("devices").update({ name: trimmed }).eq("id", device.id);
   if (error) throw new Error(`devices rename failed: ${error.message}`);
   return ok();
@@ -244,6 +278,8 @@ export async function moveDevice(supabaseAdmin, env, user, deviceId, subscriptio
   const account = await accountOf(supabaseAdmin, user);
   const device = await deviceOrFail(supabaseAdmin, account, deviceId);
   if (!device) return fail(404, "Device not found.");
+  const ownerCheck = requireOwnerOrOwnDevice(account, user, device);
+  if (ownerCheck) return ownerCheck;
   const target = await subscriptionOrFail(supabaseAdmin, account, subscriptionId);
   if (!target || !isLive(target)) return fail(404, "Subscription not found.");
   if (String(device.subscription_id) === String(target.id)) return ok();
@@ -267,6 +303,8 @@ export async function removeDevice(supabaseAdmin, env, user, deviceId) {
   const account = await accountOf(supabaseAdmin, user);
   const device = await deviceOrFail(supabaseAdmin, account, deviceId);
   if (!device) return fail(404, "Device not found.");
+  const ownerCheck = requireOwnerOrOwnDevice(account, user, device);
+  if (ownerCheck) return ownerCheck;
   const { revoked } = await revokeDevice(supabaseAdmin, env, device, `device-revoked:${device.id}`, {
     urgent: device.user_id !== user.id,
   });
