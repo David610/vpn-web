@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { pickSubscriptionWithRoom, subscriptionView } from "../subscriptions.js";
+import { pickSubscriptionWithRoom, subscriptionView, isLive } from "../subscriptions.js";
 import { handleSubscriptionDeleted } from "../stripe-events.js";
 import { makeFakeSupabase } from "./fake-supabase.js";
+import { DEFAULT_PAST_DUE_GRACE_MS } from "../stripe-fields.js";
 
 const END = "2030-01-01T00:00:00.000Z";
 const sub = (id, extra = 0, status = "active") => ({
@@ -33,6 +34,46 @@ describe("subscriptionView", () => {
   it("reports packs, capacity and use", () => {
     const view = subscriptionView(sub(1, 3), [device("a", 1, 1), device("b", 2, 2)]);
     expect(view).toMatchObject({ id: "1", extraPacks: 1, capacity: 6, used: 1 });
+  });
+});
+
+describe("isLive — F-40 bounded past_due grace", () => {
+  const NOW = new Date("2030-01-15T00:00:00.000Z").getTime();
+
+  it("treats active/trialing as live regardless of past_due_since", () => {
+    expect(isLive({ status: "active" }, {}, NOW)).toBe(true);
+    expect(isLive({ status: "trialing" }, {}, NOW)).toBe(true);
+  });
+
+  it("treats a fresh past_due (well within the grace window) as live", () => {
+    const pastDueSince = new Date(NOW - 1000 * 60 * 60).toISOString(); // 1h ago
+    expect(isLive({ status: "past_due", past_due_since: pastDueSince }, {}, NOW)).toBe(true);
+  });
+
+  it("treats a past_due subscription older than the grace window as NOT live", () => {
+    const pastDueSince = new Date(NOW - DEFAULT_PAST_DUE_GRACE_MS - 1000).toISOString();
+    expect(isLive({ status: "past_due", past_due_since: pastDueSince }, {}, NOW)).toBe(false);
+  });
+
+  it("treats a past_due subscription with no recorded past_due_since as live (fail open for legacy rows)", () => {
+    expect(isLive({ status: "past_due", past_due_since: null }, {}, NOW)).toBe(true);
+  });
+
+  it("honors env.PAST_DUE_GRACE_MS as an override", () => {
+    const pastDueSince = new Date(NOW - 1000 * 60 * 60 * 24 * 2).toISOString(); // 2 days ago
+    // Default (14 days) still live...
+    expect(isLive({ status: "past_due", past_due_since: pastDueSince }, {}, NOW)).toBe(true);
+    // ...but a 1-day override cuts it off.
+    expect(
+      isLive({ status: "past_due", past_due_since: pastDueSince }, { PAST_DUE_GRACE_MS: 24 * 60 * 60 * 1000 }, NOW)
+    ).toBe(false);
+  });
+
+  it("never treats canceled/unpaid/incomplete as live", () => {
+    expect(isLive({ status: "canceled" }, {}, NOW)).toBe(false);
+    expect(isLive({ status: "unpaid" }, {}, NOW)).toBe(false);
+    expect(isLive({ status: "incomplete" }, {}, NOW)).toBe(false);
+    expect(isLive(null, {}, NOW)).toBe(false);
   });
 });
 
