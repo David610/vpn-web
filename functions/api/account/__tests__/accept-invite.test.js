@@ -70,7 +70,10 @@ describe("POST /api/account/accept-invite", () => {
     expect(jobs[0]).toMatchObject({
       job_type: "CREATE_USER",
       device_id: devices[0].id,
-      payload: { user_id: "invitee-1", device_id: devices[0].id, expires_at: "2030-01-01T00:00:00Z" },
+      // F-19/C-04: node-facing expiry is periodEnd + 72h grace, not the raw
+      // Stripe period end (which "2030-01-01T00:00:00Z" above still is —
+      // that field is billing display, never grace-adjusted).
+      payload: { user_id: "invitee-1", device_id: devices[0].id, expires_at: "2030-01-04T00:00:00.000Z" },
     });
   });
 

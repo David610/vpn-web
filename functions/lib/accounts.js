@@ -19,6 +19,7 @@
 // three names from "./accounts.js" working unchanged.
 import { INCLUDED_SEATS, SEAT_PACK_SIZE, packQuantityFromExtraSeats } from "./seat-constants.js";
 export { INCLUDED_SEATS, SEAT_PACK_SIZE, packQuantityFromExtraSeats };
+import { applyLegacyExpiryGrace } from "./stripe-fields.js";
 
 /**
  * The account a user belongs to. account_members.user_id is unique, so this
@@ -233,7 +234,16 @@ export function resolveEffectiveEntitlement(subscription, grants = []) {
   const seatLimit = Math.max(INCLUDED_SEATS, stripeSeatLimit, grantSeatLimit);
 
   const clearExpiry = grants.some((grant) => grant.expires_at === null);
-  let serviceExpiresAt = subscription?.current_period_end ?? null;
+  // F-19/C-04: the node-facing expiry gets a 72h grace on top of Stripe's
+  // exact period end (see applyLegacyExpiryGrace) — legacy nodes enforce
+  // `now < expires_at` with no grace of their own. This only widens
+  // serviceExpiresAt (what gets pushed to nodes/valid_until); the raw
+  // currentPeriodEnd returned below (billing display, "renews on") is never
+  // grace-adjusted. A support grant's own expires_at is authored explicitly
+  // by an admin and is never grace-extended here.
+  let serviceExpiresAt = subscription?.current_period_end
+    ? applyLegacyExpiryGrace(subscription.current_period_end)
+    : null;
   if (!clearExpiry) {
     for (const grant of grants) {
       serviceExpiresAt = laterIso(serviceExpiresAt, grant.expires_at ?? null);

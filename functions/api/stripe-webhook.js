@@ -93,7 +93,7 @@ export async function onRequestPost({ env, request }) {
   try {
     switch (event.type) {
       case "checkout.session.completed":
-        await handleCheckoutSessionCompleted(supabaseAdmin, event.data.object);
+        await handleCheckoutSessionCompleted(supabaseAdmin, event.data.object, stripe, env);
         break;
       case "invoice.paid":
         await handleInvoicePaid(supabaseAdmin, event.data.object, env);
