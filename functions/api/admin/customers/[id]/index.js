@@ -1,7 +1,7 @@
 import { createClient } from "@supabase/supabase-js";
 import { requireAdmin } from "../../../../lib/admin-auth.js";
 import { sanitizeJobResult } from "../../../../lib/admin-sanitize.js";
-import { getAccountForUser, getLiveSubscription } from "../../../../lib/accounts.js";
+import { getAccountForUser, getLiveSubscription, getVpnAccountsForUser } from "../../../../lib/accounts.js";
 
 function jsonResponse(body, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -18,19 +18,16 @@ export async function onRequestGet({ env, request, params }) {
   const userId = params.id;
 
   try {
-    const [{ data: user, error: userError }, { data: vpnAccount, error: vpnError }] =
-      await Promise.all([
-        supabaseAdmin.auth.admin.getUserById(userId),
-        supabaseAdmin
-          .from("vpn_accounts")
-          .select("id, vpn_user_id, node_id, enabled")
-          .eq("user_id", userId)
-          .maybeSingle(),
-      ]);
+    // F-07/C-06: a user can have 2+ provisioned identities (2+ devices) —
+    // the normal case once a plan includes more than one device — so this
+    // must not use .maybeSingle(), which 500s the moment that's true.
+    const [{ data: user, error: userError }, vpnAccounts] = await Promise.all([
+      supabaseAdmin.auth.admin.getUserById(userId),
+      getVpnAccountsForUser(supabaseAdmin, userId),
+    ]);
     if (userError || !user?.user) {
       return jsonResponse({ error: "Customer not found" }, 404);
     }
-    if (vpnError) throw new Error(`vpn_accounts query failed: ${vpnError.message}`);
 
     // Billing hangs off the account, so the subscription and Stripe customer
     // come from there rather than from this user directly — a member on
@@ -38,6 +35,7 @@ export async function onRequestGet({ env, request, params }) {
     const account = await getAccountForUser(supabaseAdmin, userId);
     let sub = null;
     let stripeCustomerId = null;
+    let accountSuspendedAt = null;
     let memberCount = 0;
     let grants = [];
     if (account) {
@@ -58,7 +56,7 @@ export async function onRequestGet({ env, request, params }) {
       ] = await Promise.all([
         supabaseAdmin
           .from("customer_accounts")
-          .select("stripe_customer_id")
+          .select("stripe_customer_id, suspended_at")
           .eq("id", account.accountId)
           .maybeSingle(),
         supabaseAdmin
@@ -75,6 +73,7 @@ export async function onRequestGet({ env, request, params }) {
       if (memberCountError) throw new Error(`account_members count failed: ${memberCountError.message}`);
       if (grantError) throw new Error(`admin_entitlements query failed: ${grantError.message}`);
       stripeCustomerId = accountRow?.stripe_customer_id ?? null;
+      accountSuspendedAt = accountRow?.suspended_at ?? null;
       memberCount = count ?? 0;
       grants = (grantRows ?? []).map((g) => ({
         id: g.id,
@@ -89,11 +88,14 @@ export async function onRequestGet({ env, request, params }) {
     }
 
     let jobs = [];
-    if (vpnAccount) {
+    if (vpnAccounts.length > 0) {
       const { data: jobRows, error: jobsError } = await supabaseAdmin
         .from("provisioning_jobs")
-        .select("id, job_type, status, created_at, claimed_at, completed_at, result")
-        .eq("vpn_account_id", vpnAccount.id)
+        .select("id, job_type, status, created_at, claimed_at, completed_at, result, vpn_account_id")
+        .in(
+          "vpn_account_id",
+          vpnAccounts.map((v) => v.id)
+        )
         .order("created_at", { ascending: false })
         .limit(100);
       if (jobsError) throw new Error(`provisioning_jobs query failed: ${jobsError.message}`);
@@ -105,6 +107,7 @@ export async function onRequestGet({ env, request, params }) {
         claimedAt: j.claimed_at,
         completedAt: j.completed_at,
         result: sanitizeJobResult(j.result),
+        vpnAccountId: j.vpn_account_id,
       }));
     }
 
@@ -114,6 +117,7 @@ export async function onRequestGet({ env, request, params }) {
       accountId: account?.accountId ?? null,
       accountRole: account?.role ?? null,
       memberCount,
+      suspendedAt: accountSuspendedAt,
       subscription: sub
         ? {
             status: sub.status,
@@ -124,9 +128,14 @@ export async function onRequestGet({ env, request, params }) {
           }
         : null,
       grants,
-      vpnAccount: vpnAccount
-        ? { id: vpnAccount.id, vpnUserId: vpnAccount.vpn_user_id, nodeId: vpnAccount.node_id, enabled: vpnAccount.enabled }
-        : null,
+      // Plural now (F-07/C-06): a customer can have several provisioned
+      // devices, and the admin UI needs to see and act on all of them.
+      vpnAccounts: vpnAccounts.map((v) => ({
+        id: v.id,
+        vpnUserId: v.vpnUserId,
+        nodeId: v.nodeId,
+        enabled: v.enabled,
+      })),
       jobs,
     });
   } catch (err) {
