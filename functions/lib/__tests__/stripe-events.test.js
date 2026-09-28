@@ -1163,3 +1163,249 @@ describe("price allowlist (F-31/C-04)", () => {
     expect(db._tables.subscriptions[0].status).toBe("active");
   });
 });
+
+describe("F-40: past_due grace stamping (customer.subscription.updated)", () => {
+  it("stamps past_due_since on the transition INTO past_due", async () => {
+    const db = makeFakeSupabase(seedAccount({ status: "active" }));
+
+    await handleSubscriptionUpdated(
+      db,
+      { id: "sub_123", status: "past_due", cancel_at_period_end: false, current_period_end: PERIOD_END_UNIX },
+      undefined,
+      {},
+      "2030-01-01T00:00:00.000Z"
+    );
+
+    expect(db._tables.subscriptions[0].status).toBe("past_due");
+    expect(db._tables.subscriptions[0].past_due_since).toBe("2030-01-01T00:00:00.000Z");
+  });
+
+  it("does not restart the grace clock on a repeat past_due event (e.g. a pack purchase mid-dunning)", async () => {
+    const db = makeFakeSupabase(seedAccount({ status: "active" }));
+
+    await handleSubscriptionUpdated(
+      db,
+      { id: "sub_123", status: "past_due", cancel_at_period_end: false, current_period_end: PERIOD_END_UNIX },
+      undefined,
+      {},
+      "2030-01-01T00:00:00.000Z"
+    );
+    await handleSubscriptionUpdated(
+      db,
+      { id: "sub_123", status: "past_due", cancel_at_period_end: false, current_period_end: PERIOD_END_UNIX },
+      undefined,
+      {},
+      "2030-01-05T00:00:00.000Z"
+    );
+
+    expect(db._tables.subscriptions[0].past_due_since).toBe("2030-01-01T00:00:00.000Z");
+  });
+
+  it("clears past_due_since when the subscription recovers to active", async () => {
+    const db = makeFakeSupabase(seedAccount({ status: "past_due" }));
+    db._tables.subscriptions[0].past_due_since = "2030-01-01T00:00:00.000Z";
+
+    await handleSubscriptionUpdated(
+      db,
+      { id: "sub_123", status: "active", cancel_at_period_end: false, current_period_end: PERIOD_END_UNIX },
+      undefined,
+      {},
+      "2030-01-10T00:00:00.000Z"
+    );
+
+    expect(db._tables.subscriptions[0].status).toBe("active");
+    expect(db._tables.subscriptions[0].past_due_since).toBeNull();
+  });
+
+  it("handleInvoicePaid also clears past_due_since on a recovery payment", async () => {
+    const db = makeFakeSupabase(seedAccount({ status: "past_due", provisioned: [{ userId: "user-1", vpnUserId: "vpn-1" }] }));
+    db._tables.subscriptions[0].past_due_since = "2030-01-01T00:00:00.000Z";
+
+    await handleInvoicePaid(db, invoice({ billingReason: "subscription_cycle" }));
+
+    expect(db._tables.subscriptions[0].status).toBe("active");
+    expect(db._tables.subscriptions[0].past_due_since).toBeNull();
+  });
+});
+
+describe("F-40: past_due bounded entitlement (accounts.js getLiveSubscription/getEffectiveEntitlement)", () => {
+  it("a past_due subscription within the grace window keeps pushing a renewed expiry on recovery-style period advance", async () => {
+    const db = makeFakeSupabase({
+      ...seedAccount({ status: "past_due", provisioned: [{ userId: "user-1", vpnUserId: "vpn-1" }] }),
+    });
+    db._tables.subscriptions[0].current_period_end = "2029-12-01T00:00:00.000Z";
+    db._tables.subscriptions[0].past_due_since = new Date().toISOString(); // just went past_due
+
+    await handleSubscriptionUpdated(
+      db,
+      { id: "sub_123", status: "active", cancel_at_period_end: false, current_period_end: PERIOD_END_UNIX },
+      undefined,
+      {}
+    );
+
+    const jobs = jobsOf(db);
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]).toMatchObject({
+      job_type: "SET_EXPIRY",
+      payload: { vpn_user_id: "vpn-1", expires_at: NODE_EXPIRY_ISO },
+    });
+  });
+
+  it("does not extend entitlement for a subscription that has been past_due beyond the grace window (F-40)", async () => {
+    // getEffectiveEntitlement (via getLiveSubscription) must not treat this
+    // row as live at all once it is outside the grace window: no
+    // subscription entitlement, so a renewal-shaped event finds nothing to
+    // push (falls through to the disable path only if there's no other
+    // source of entitlement — here it also has no admin grant).
+    const { getEffectiveEntitlement } = await import("../accounts.js");
+    const db = makeFakeSupabase({
+      ...seedAccount({ status: "past_due", provisioned: [{ userId: "user-1", vpnUserId: "vpn-1" }] }),
+    });
+    const longAgo = new Date(Date.now() - 20 * 24 * 60 * 60 * 1000).toISOString(); // 20 days ago
+    db._tables.subscriptions[0].past_due_since = longAgo;
+
+    const entitlement = await getEffectiveEntitlement(db, "acct-1");
+    expect(entitlement).toBeNull();
+  });
+
+  it("env.PAST_DUE_GRACE_MS shortens the window for getEffectiveEntitlement", async () => {
+    const { getEffectiveEntitlement } = await import("../accounts.js");
+    const db = makeFakeSupabase({
+      ...seedAccount({ status: "past_due" }),
+    });
+    const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
+    db._tables.subscriptions[0].past_due_since = twoDaysAgo;
+
+    // Default 14-day grace: still live.
+    expect(await getEffectiveEntitlement(db, "acct-1")).not.toBeNull();
+    // A 1-day override: no longer live.
+    const cut = await getEffectiveEntitlement(db, "acct-1", { PAST_DUE_GRACE_MS: 24 * 60 * 60 * 1000 });
+    expect(cut).toBeNull();
+  });
+
+  it("a legacy past_due row with no past_due_since stays live (fails open, not closed)", async () => {
+    const { getEffectiveEntitlement } = await import("../accounts.js");
+    const db = makeFakeSupabase({
+      ...seedAccount({ status: "past_due" }),
+    });
+    db._tables.subscriptions[0].past_due_since = null;
+
+    expect(await getEffectiveEntitlement(db, "acct-1")).not.toBeNull();
+  });
+});
+
+describe("F-19 remaining gap coverage", () => {
+  it("duplicate customer.subscription.updated delivery never double-extends node expiry", async () => {
+    const db = makeFakeSupabase({
+      ...seedAccount({ provisioned: [{ userId: "user-1", vpnUserId: "vpn-1" }] }),
+      subscriptions: [
+        {
+          id: 1,
+          account_id: "acct-1",
+          stripe_subscription_id: "sub_123",
+          status: "active",
+          current_period_end: "2029-12-01T00:00:00.000Z",
+          extra_seats: 0,
+        },
+      ],
+    });
+    const payload = {
+      id: "sub_123",
+      status: "active",
+      cancel_at_period_end: false,
+      current_period_end: PERIOD_END_UNIX,
+    };
+
+    await handleSubscriptionUpdated(db, payload, undefined, {}, "2030-01-01T00:00:00.000Z");
+    // The exact same event redelivered (same or even later creation time —
+    // this is the "duplicate", not the "stale/reordered" case).
+    await handleSubscriptionUpdated(db, payload, undefined, {}, "2030-01-01T00:00:00.000Z");
+
+    const setExpiryJobs = jobsOf(db).filter((j) => j.job_type === "SET_EXPIRY");
+    expect(setExpiryJobs).toHaveLength(1);
+  });
+
+  it("payment recovery via customer.subscription.updated (past_due -> active) pushes a renewed node expiry", async () => {
+    const db = makeFakeSupabase({
+      ...seedAccount({ status: "past_due", provisioned: [{ userId: "user-1", vpnUserId: "vpn-1" }] }),
+      subscriptions: [
+        {
+          id: 1,
+          account_id: "acct-1",
+          stripe_subscription_id: "sub_123",
+          status: "past_due",
+          current_period_end: "2029-12-01T00:00:00.000Z",
+          extra_seats: 0,
+          past_due_since: new Date().toISOString(),
+        },
+      ],
+    });
+
+    await handleSubscriptionUpdated(
+      db,
+      { id: "sub_123", status: "active", cancel_at_period_end: false, current_period_end: PERIOD_END_UNIX },
+      undefined,
+      {}
+    );
+
+    expect(db._tables.subscriptions[0].status).toBe("active");
+    const jobs = jobsOf(db).filter((j) => j.job_type === "SET_EXPIRY");
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0].payload.expires_at).toBe(NODE_EXPIRY_ISO);
+  });
+
+  it("cancel_at_period_end=true never triggers an incorrect grace extension by itself (only a genuine period advance does)", async () => {
+    const db = makeFakeSupabase({
+      ...seedAccount({ provisioned: [{ userId: "user-1", vpnUserId: "vpn-1" }] }),
+      subscriptions: [
+        {
+          id: 1,
+          account_id: "acct-1",
+          stripe_subscription_id: "sub_123",
+          status: "active",
+          current_period_end: PERIOD_END_ISO,
+          extra_seats: 0,
+        },
+      ],
+    });
+
+    // Customer opts to cancel at period end — same period, cancel flag
+    // flips. No push, no grace extension.
+    await handleSubscriptionUpdated(
+      db,
+      { id: "sub_123", status: "active", cancel_at_period_end: true, current_period_end: PERIOD_END_UNIX },
+      undefined,
+      {}
+    );
+    expect(jobsOf(db)).toHaveLength(0);
+    expect(db._tables.subscriptions[0].current_period_end).toBe(PERIOD_END_ISO);
+
+    // At the actual period end Stripe fires the terminal transition — cut
+    // immediately, no grace, regardless of the cancel_at_period_end flag
+    // that preceded it.
+    await handleSubscriptionUpdated(
+      db,
+      { id: "sub_123", status: "canceled", cancel_at_period_end: false, current_period_end: PERIOD_END_UNIX },
+      undefined,
+      {}
+    );
+    const disables = jobsOf(db).filter((j) => j.job_type === "DISABLE_USER");
+    expect(disables).toHaveLength(1);
+  });
+
+  it("F-19: grace never leaks into currentPeriodEnd — only serviceExpiresAt is extended (resolveEffectiveEntitlement)", async () => {
+    const { resolveEffectiveEntitlement } = await import("../accounts.js");
+    const entitlement = resolveEffectiveEntitlement(
+      {
+        status: "active",
+        current_period_end: PERIOD_END_ISO,
+        cancel_at_period_end: false,
+        extra_seats: 0,
+      },
+      []
+    );
+    expect(entitlement.currentPeriodEnd).toBe(PERIOD_END_ISO);
+    expect(entitlement.serviceExpiresAt).toBe(NODE_EXPIRY_ISO);
+    expect(entitlement.serviceExpiresAt).not.toBe(entitlement.currentPeriodEnd);
+  });
+});

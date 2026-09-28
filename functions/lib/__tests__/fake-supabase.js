@@ -184,6 +184,10 @@ export function makeFakeSupabase(seed = {}, options = {}) {
         state.filters.push((r) => r[col] > val);
         return chain;
       },
+      lt(col, val) {
+        state.filters.push((r) => r[col] < val);
+        return chain;
+      },
       lte(col, val) {
         state.filters.push((r) => r[col] <= val);
         return chain;

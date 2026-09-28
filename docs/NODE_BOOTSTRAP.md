@@ -64,6 +64,13 @@ node in the fleet — `install.sh` refuses to guess one and dies under
 `FLEET_HETZNER_IMAGE` (default `alma-9`). Schedule the reconciler once per
 project with `scripts/setup-fleet-cron.mjs`.
 
+Data retention (`functions/lib/retention.js`, F-18/H-02) is reachable at
+`/api/internal/retention-tick` but is **not** invoked by anything on its
+own — it must be scheduled separately, once per project, with
+`scripts/setup-retention-cron.mjs` (`RETENTION_TICK_SECRET`). Without that
+step the retention code exists but never runs, and every table it prunes
+grows unbounded exactly as the audit originally found.
+
 ## What readiness does NOT yet prove
 
 The Worker cannot speak UDP or run a sing-box client, so READY today means

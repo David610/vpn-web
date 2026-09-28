@@ -3,8 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const getClaims = vi.fn();
 const adminMaybeSingle = vi.fn();
 const vpnAccountsEq = vi.fn();
-const jobInsert = vi.fn();
-const auditInsert = vi.fn();
+const rpc = vi.fn();
 
 vi.mock("@supabase/supabase-js", () => ({
   createClient: vi.fn(() => ({
@@ -12,10 +11,9 @@ vi.mock("@supabase/supabase-js", () => ({
     from: vi.fn((table) => {
       if (table === "admin_users") return { select: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(), maybeSingle: adminMaybeSingle };
       if (table === "vpn_accounts") return { select: vi.fn().mockReturnThis(), eq: vpnAccountsEq };
-      if (table === "provisioning_jobs") return { insert: jobInsert };
-      if (table === "admin_audit_log") return { insert: auditInsert };
       throw new Error(`unexpected table ${table}`);
     }),
+    rpc,
   })),
 }));
 
@@ -33,8 +31,7 @@ beforeEach(() => {
   getClaims.mockReset().mockResolvedValue({ data: { claims: { sub: "admin-1", aal: "aal2" } }, error: null });
   adminMaybeSingle.mockReset().mockResolvedValue({ data: { role: "owner" }, error: null });
   vpnAccountsEq.mockReset().mockResolvedValue({ data: [{ id: 1, node_id: "node-1", vpn_user_id: "vpn-user-test-1" }], error: null });
-  jobInsert.mockReset().mockResolvedValue({ error: null });
-  auditInsert.mockReset().mockResolvedValue({ error: null });
+  rpc.mockReset().mockResolvedValue({ data: { status: "ok", jobs_enqueued: 1 }, error: null });
 });
 
 describe("POST /api/admin/customers/:id/rotate-credentials", () => {
@@ -50,14 +47,14 @@ describe("POST /api/admin/customers/:id/rotate-credentials", () => {
     expect(res.status).toBe(404);
   });
 
-  it("returns 403 for a readonly admin and does not insert a job", async () => {
+  it("returns 403 for a readonly admin and does not call the RPC", async () => {
     adminMaybeSingle.mockResolvedValue({ data: { role: "readonly" }, error: null });
     const res = await onRequestPost({ env, request: makeRequest(), params: { id: "user-1" } });
     expect(res.status).toBe(403);
-    expect(jobInsert).not.toHaveBeenCalled();
+    expect(rpc).not.toHaveBeenCalled();
   });
 
-  it("inserts a ROTATE_CREDENTIALS job per device and an audit row", async () => {
+  it("calls admin_insert_jobs_with_audit once with a job per device", async () => {
     vpnAccountsEq.mockResolvedValue({
       data: [
         { id: 1, node_id: "node-1", vpn_user_id: "vpn-user-test-1" },
@@ -67,9 +64,30 @@ describe("POST /api/admin/customers/:id/rotate-credentials", () => {
     });
     const res = await onRequestPost({ env, request: makeRequest(), params: { id: "user-1" } });
     expect(res.status).toBe(200);
-    expect(jobInsert).toHaveBeenCalledTimes(2);
-    expect(auditInsert).toHaveBeenCalledWith(
-      expect.objectContaining({ action: "admin.rotate_credentials", target_type: "vpn_account" })
+    expect(rpc).toHaveBeenCalledTimes(1);
+    expect(rpc).toHaveBeenCalledWith(
+      "admin_insert_jobs_with_audit",
+      expect.objectContaining({
+        p_job_type: "ROTATE_CREDENTIALS",
+        p_jobs: expect.arrayContaining([
+          expect.objectContaining({ node_id: "node-1", vpn_account_id: 1 }),
+          expect.objectContaining({ node_id: "node-1", vpn_account_id: 2 }),
+        ]),
+        p_action: "admin.rotate_credentials",
+        p_target_type: "vpn_account",
+      })
     );
+  });
+
+  // F-39 round 2 atomicity: the mutation (job rows) and the audit row are
+  // written by a single RPC/transaction. If that RPC fails, the route must
+  // not report success and must not have made any separate mutation or
+  // audit write of its own -- there is no split-brain state to produce
+  // because there is only one write call in total.
+  it("on RPC failure, returns an error and makes no other database write", async () => {
+    rpc.mockResolvedValue({ data: null, error: { message: "simulated transaction failure" } });
+    const res = await onRequestPost({ env, request: makeRequest(), params: { id: "user-1" } });
+    expect(res.status).toBe(500);
+    expect(rpc).toHaveBeenCalledTimes(1);
   });
 });

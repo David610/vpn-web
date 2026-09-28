@@ -318,3 +318,62 @@ describe("device revocation removes real network access", () => {
     ]);
   });
 });
+
+// Phase 3 (docs/security/ARCANA_CROSS_REPO_REMEDIATION_PLAN_2026-09-27.md):
+// reconcileAccountProvisioning used to decide capacity itself, in JS, via
+// subscriptions.js's resolveDeviceEntitlements/loadDeviceEntitlements --
+// a second, independently-maintained copy of the same capacity rule
+// public.device_entitlement() enforces. It now asks device_entitlement()
+// (via resolveDeviceEntitlement) once per device instead. These tests use
+// fake-supabase's faithful mirror of the SQL function (device-entitlement-model.js),
+// so a regression here would mean reconcileAccountProvisioning disagrees
+// with the one true gate, not merely that some JS math changed.
+describe("reconcileAccountProvisioning enforces capacity via device_entitlement(), not JS math", () => {
+  it("a 4th device on a 3-device subscription gets no CREATE_USER job", async () => {
+    const db = makeFakeSupabase({
+      customer_accounts: [{ id: "acct-1" }],
+      account_members: [{ account_id: "acct-1", user_id: "user-1", role: "owner" }],
+      subscriptions: [{ id: 1, account_id: "acct-1", status: "active", extra_seats: 0, current_period_end: "2030-01-01T00:00:00.000Z" }],
+      devices: [
+        { id: "dev-1", account_id: "acct-1", user_id: "user-1", status: "ACTIVE", subscription_id: 1, subscription_assignment_seq: 1 },
+        { id: "dev-2", account_id: "acct-1", user_id: "user-1", status: "ACTIVE", subscription_id: 1, subscription_assignment_seq: 2 },
+        { id: "dev-3", account_id: "acct-1", user_id: "user-1", status: "ACTIVE", subscription_id: 1, subscription_assignment_seq: 3 },
+        { id: "dev-4", account_id: "acct-1", user_id: "user-1", status: "ACTIVE", subscription_id: 1, subscription_assignment_seq: 4 },
+      ],
+      vpn_accounts: [],
+    });
+    const results = await reconcileAccountProvisioning(db, LEGACY, {
+      accountId: "acct-1",
+      members: [{ userId: "user-1", role: "owner" }],
+      entitlement: PAID,
+      idempotencyPrefix: "reconcile",
+    });
+    const byDevice = Object.fromEntries(results.map((r) => [r.deviceId, r.action]));
+    expect(byDevice["dev-1"]).toBe("creating");
+    expect(byDevice["dev-2"]).toBe("creating");
+    expect(byDevice["dev-3"]).toBe("creating");
+    expect(byDevice["dev-4"]).toBe("disabled");
+
+    const createJobs = jobs(db).filter((j) => j.job_type === "CREATE_USER");
+    expect(createJobs.map((j) => j.device_id).sort()).toEqual(["dev-1", "dev-2", "dev-3"]);
+    expect(createJobs.some((j) => j.device_id === "dev-4")).toBe(false);
+  });
+
+  it("a device on a suspended account gets no CREATE_USER job even though the subscription is live", async () => {
+    const db = makeFakeSupabase({
+      customer_accounts: [{ id: "acct-1", suspended_at: "2026-01-01T00:00:00.000Z" }],
+      account_members: [{ account_id: "acct-1", user_id: "user-1", role: "owner" }],
+      subscriptions: [{ id: 1, account_id: "acct-1", status: "active", extra_seats: 0, current_period_end: "2030-01-01T00:00:00.000Z" }],
+      devices: [{ id: "dev-1", account_id: "acct-1", user_id: "user-1", status: "ACTIVE", subscription_id: 1, subscription_assignment_seq: 1 }],
+      vpn_accounts: [],
+    });
+    const results = await reconcileAccountProvisioning(db, LEGACY, {
+      accountId: "acct-1",
+      members: [{ userId: "user-1", role: "owner" }],
+      entitlement: PAID,
+      idempotencyPrefix: "reconcile",
+    });
+    expect(results[0].action).toBe("disabled");
+    expect(jobs(db).some((j) => j.job_type === "CREATE_USER")).toBe(false);
+  });
+});

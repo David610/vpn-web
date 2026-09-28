@@ -684,11 +684,12 @@ export async function advanceOperation(ctx, op) {
 //   2. Once that identity is enabled, flip device_node_assignments to the
 //      new node and enqueue DISABLE_USER on the old one.
 
-async function pickReplacementNode(supabase, { excludeNodeId }) {
+async function pickReplacementNode(supabase, { excludeNodeId, role, locationId }) {
   const { data: nodes, error } = await supabase
     .from("nodes")
     .select("node_id, configured_users, max_sessions, lifecycle_state")
-    .eq("role", "EXIT")
+    .eq("role", role)
+    .eq("location_id", locationId)
     .in("lifecycle_state", ["READY", "CANARY"])
     .neq("node_id", excludeNodeId);
   if (error) throw new Error(`nodes lookup failed: ${error.message}`);
@@ -708,7 +709,7 @@ async function pickReplacementNode(supabase, { excludeNodeId }) {
   return sorted[0].node_id;
 }
 
-async function reconcileOneFailedNodeDevice(supabase, { deviceId, oldNodeId }) {
+async function reconcileOneFailedNodeDevice(supabase, { deviceId, oldNodeId, hop }) {
   // A device whose entitlement already lapsed has nothing worth re-placing
   // -- the normal device-provisioning reconcile path (not this one) is what
   // eventually disables it everywhere.
@@ -732,7 +733,24 @@ async function reconcileOneFailedNodeDevice(supabase, { deviceId, oldNodeId }) {
   const oldIdentity = (identities ?? []).find((i) => i.node_id === oldNodeId && i.enabled);
   if (!oldIdentity) return null; // nothing live on the bad node to move
 
-  const targetNodeId = await pickReplacementNode(supabase, { excludeNodeId: oldNodeId });
+  // The replacement must have the SAME role and location as the node being
+  // replaced. This is what keeps a DOUBLE_HOP device's path valid without
+  // re-deriving it from allowed_paths: the (entry_location, exit_location)
+  // pair the device was scheduled under doesn't change, only which physical
+  // node fills the failed hop's role/location slot.
+  const { data: oldNode, error: oldNodeError } = await supabase
+    .from("nodes")
+    .select("role, location_id")
+    .eq("node_id", oldNodeId)
+    .maybeSingle();
+  if (oldNodeError) throw new Error(`nodes lookup failed: ${oldNodeError.message}`);
+  if (!oldNode) return null;
+
+  const targetNodeId = await pickReplacementNode(supabase, {
+    excludeNodeId: oldNodeId,
+    role: oldNode.role,
+    locationId: oldNode.location_id,
+  });
   if (!targetNodeId) return { status: "no_replacement_available" };
 
   const existingOnTarget = (identities ?? []).find((i) => i.node_id === targetNodeId);
@@ -745,11 +763,11 @@ async function reconcileOneFailedNodeDevice(supabase, { deviceId, oldNodeId }) {
     // recovers, which is harmless -- the assignment has already moved.
     const { error: upsertError } = await supabase
       .from("device_node_assignments")
-      .upsert({ device_id: deviceId, node_id: targetNodeId, hop: "EXIT" }, { onConflict: "device_id,hop" });
+      .upsert({ device_id: deviceId, node_id: targetNodeId, hop }, { onConflict: "device_id,hop" });
     if (upsertError) throw new Error(`device_node_assignments upsert failed: ${upsertError.message}`);
 
     const { error: jobError } = await supabase.from("provisioning_jobs").insert({
-      idempotency_key: `replace-legacy:${deviceId}:disable:${oldNodeId}`,
+      idempotency_key: `replace-legacy:${deviceId}:${hop}:disable:${oldNodeId}`,
       node_id: oldNodeId,
       job_type: "DISABLE_USER",
       vpn_account_id: oldIdentity.id,
@@ -768,7 +786,7 @@ async function reconcileOneFailedNodeDevice(supabase, { deviceId, oldNodeId }) {
   // identity on it, and a crash between these two steps just means the
   // next tick re-checks and continues from wherever it left off.
   const { error: createError } = await supabase.from("provisioning_jobs").insert({
-    idempotency_key: `replace-legacy:${deviceId}:create:${targetNodeId}`,
+    idempotency_key: `replace-legacy:${deviceId}:${hop}:create:${targetNodeId}`,
     node_id: targetNodeId,
     job_type: "CREATE_USER",
     vpn_account_id: null,
@@ -794,27 +812,218 @@ export async function reconcileFailedNodeAssignments(supabase) {
 
   const results = [];
   for (const node of badNodes ?? []) {
+    // Both hops of a DOUBLE_HOP device can independently fail over: a
+    // RELAY-node failure previously left DOUBLE_HOP devices stranded
+    // forever (only EXIT was scanned here), even though the EXIT hop was
+    // perfectly healthy. See fleet-operations.js history for the fix.
     const { data: assignments, error: assignError } = await supabase
       .from("device_node_assignments")
-      .select("device_id")
+      .select("device_id, hop")
       .eq("node_id", node.node_id)
-      .eq("hop", "EXIT");
+      .in("hop", ["EXIT", "RELAY"]);
     if (assignError) throw new Error(`device_node_assignments lookup failed: ${assignError.message}`);
     for (const assignment of assignments ?? []) {
       try {
         const outcome = await reconcileOneFailedNodeDevice(supabase, {
           deviceId: assignment.device_id,
           oldNodeId: node.node_id,
+          hop: assignment.hop,
         });
-        if (outcome) results.push({ deviceId: assignment.device_id, oldNodeId: node.node_id, ...outcome });
+        if (outcome) {
+          results.push({ deviceId: assignment.device_id, oldNodeId: node.node_id, hop: assignment.hop, ...outcome });
+        }
       } catch (err) {
         console.error(
           "reconcileFailedNodeAssignments: device reconcile failed:",
           assignment.device_id,
+          assignment.hop,
           err.message
         );
       }
     }
   }
   return results;
+}
+
+// ---------------------------------------------------------- Phase 8/F-06/F-05 follow-up: abandoned-node cleanup --
+//
+// A FAILED node with nobody replacing it, or a RETIRED node whose provider
+// instance was never destroyed (e.g. a direct admin RETIRED transition --
+// only the REPLACE_NODE saga's RETIRE_OLD_NODE step ever calls
+// destroyInstance today), was previously left running forever: "kept for
+// inspection" in practice meant a billed VPS nobody was watching and,
+// while still FAILED (not yet QUARANTINED/RETIRED), a credential
+// node-auth.js still accepts. This saga reuses the exact same
+// fleet_operations/operation_steps engine as CREATE_NODE/REPLACE_NODE --
+// idempotent per step, resumable across ticks, and self-documenting via
+// operation_steps.detail -- rather than inventing a separate cleanup/audit
+// mechanism.
+//
+// CRITICAL SAFETY RULE (spec for this pass): a node with ANY live
+// device_node_assignments row is never touched destructively, no matter
+// how stale/degraded its health looks. VERIFY_ELIGIBLE below is the sole
+// gate every later, destructive step depends on -- it must complete
+// ("done") before REMOVE_DNS/REVOKE_AND_RETIRE/DESTROY_INSTANCE ever run,
+// and it re-checks assignments (and lifecycle_state) fresh on every call,
+// so a node that gains an assignment or recovers to READY between ticks
+// aborts the whole operation rather than continuing on stale information.
+export const CLEANUP_ABANDONED_NODE_STEPS = [
+  "VERIFY_ELIGIBLE",
+  "REMOVE_DNS",
+  "REVOKE_AND_RETIRE",
+  "DESTROY_INSTANCE",
+];
+
+// How long a node must have sat in FAILED before this sweep will touch it.
+// Deliberately long: FAILED->READY is a normal, automated recovery edge
+// (Phase 8 silence/probe recovery), and node-auto-replace.js already gets
+// first crack at any FAILED node via AUTO_REPLACE_AFTER_FAILED_MS -- this
+// cleanup exists for the ones nothing else is handling, not to race ahead
+// of the fleet's own recovery/replace machinery.
+export const CLEANUP_FAILED_STALE_MS = 24 * 60 * 60 * 1000;
+const CLEANUP_DEADLINE_MS = 24 * 60 * 60 * 1000;
+const CLEANUP_ASSIGNMENT_RECHECK_S = 3600;
+
+async function countLiveAssignments(supabase, nodeId) {
+  const { data, error } = await supabase.from("device_node_assignments").select("device_id").eq("node_id", nodeId);
+  if (error) throw new Error(`device_node_assignments lookup failed: ${error.message}`);
+  return (data ?? []).length;
+}
+
+const CLEANUP_ABANDONED_NODE_HANDLERS = {
+  async VERIFY_ELIGIBLE({ supabase }, _op, node) {
+    if (!["FAILED", "RETIRED"].includes(node.lifecycle_state)) {
+      // The node recovered (or was moved by an admin) since this cleanup
+      // was queued -- abort rather than act on stale eligibility. Fatal,
+      // not a retry: nothing about this outcome changes on its own, and
+      // silently continuing here is exactly the "destroy a node with a
+      // live assignment" hazard this step exists to prevent.
+      throw new FatalStepError(`node ${node.node_id} is ${node.lifecycle_state}, no longer eligible for cleanup`);
+    }
+    const remaining = await countLiveAssignments(supabase, node.node_id);
+    if (remaining > 0) {
+      // Never proceed to a destructive step while assignments remain,
+      // however stale/degraded the node's health is. Unlike DRAIN_OLD_NODE
+      // (which has an audited forced-timeout escape hatch for the explicit
+      // REPLACE_NODE saga a human started), this sweep has none: it runs
+      // unattended, so it only ever waits for reconcileFailedNodeAssignments
+      // (or an admin) to actually clear the assignments, never forces
+      // through on a timer.
+      return wait(CLEANUP_ASSIGNMENT_RECHECK_S, { blocked: "live_assignments", remaining });
+    }
+    return done({ remaining: 0 });
+  },
+
+  // Mirrors RETIRE_OLD_NODE's DNS-removal step exactly (F-06): delete, then
+  // verify by lookup rather than trusting delete's response alone.
+  async REMOVE_DNS({ supabase, dns, env }, _op, node) {
+    if (node.dns_removed_at) return done();
+    if (!node.dns_record_id && !node.hostname) return done();
+    const adapter = dns(env);
+    await adapter.deleteRecord({ recordId: node.dns_record_id, name: node.hostname, type: "A" });
+    const stillThere = await adapter.recordExists({ name: node.hostname, type: "A" });
+    if (stillThere) {
+      return wait(DRAIN_POLL_INTERVAL_S, { retrying: "dns_delete_verification" });
+    }
+    await updateNode(supabase, node.node_id, { dns_removed_at: new Date().toISOString() });
+    return done();
+  },
+
+  // F-05: a FAILED node's credential is still accepted by node-auth.js --
+  // only QUARANTINED/RETIRED are rejected. This step is what actually
+  // revokes it for an abandoned FAILED node, by driving the SAME atomic
+  // RPC the admin lifecycle route uses (key revocation + job cancellation +
+  // lease-slot cleanup + route-directory bump, all one transaction).
+  async REVOKE_AND_RETIRE({ supabase }, _op, node) {
+    if (node.lifecycle_state === "RETIRED") {
+      // Already RETIRED (e.g. a direct admin retirement predating this
+      // cleanup). revoke_node_key_and_transition requires a state
+      // transition to run, so a RETIRED row that -- defensively -- still
+      // has a live credential (a row written before F-05, or any future
+      // path that reaches RETIRED without going through the RPC) is
+      // revoked directly here instead.
+      if (node.revoked_at) return done({ already_revoked: true });
+      await updateNode(supabase, node.node_id, { revoked_at: new Date().toISOString(), api_key_hash: null });
+      return done({ revoked_defensively: true });
+    }
+
+    // dns_removed_at is already set by REMOVE_DNS above, so no override is
+    // ever needed here.
+    const { data: result, error } = await supabase.rpc("revoke_node_key_and_transition", {
+      p_node_id: node.node_id,
+      p_to_state: "RETIRED",
+      p_expected_from_state: "FAILED",
+    });
+    if (error) throw new Error(`revoke_node_key_and_transition failed: ${error.message}`);
+    if (result?.status === "stale") {
+      throw new FatalStepError(`node ${node.node_id} lifecycle changed concurrently during cleanup`);
+    }
+    if (result?.status === "dns_not_removed") {
+      // Should be unreachable (REMOVE_DNS ran first), but never silently
+      // retry a destructive path on an assumption that turned out false.
+      throw new FatalStepError(`node ${node.node_id}: dns_removed_at unexpectedly unset`);
+    }
+    return done({ jobsCancelled: result?.jobs_cancelled ?? 0, leaseSlotsDeleted: result?.lease_slots_deleted ?? 0 });
+  },
+
+  // Idempotent (destroyInstance treats 404 as success) and only reachable
+  // once VERIFY_ELIGIBLE/REMOVE_DNS/REVOKE_AND_RETIRE have all completed --
+  // the saga engine runs steps strictly in order, so this can never run
+  // against a node that still has live assignments, a published DNS
+  // record, or a live credential.
+  async DESTROY_INSTANCE({ supabase, providers, env }, _op, node) {
+    if (node.provider_instance_destroyed_at) return done({ already_destroyed: true });
+    if (node.provider_instance_id) {
+      const adapter = providers(node.provider, env);
+      await adapter.destroyInstance({ providerInstanceId: node.provider_instance_id });
+    }
+    await updateNode(supabase, node.node_id, { provider_instance_destroyed_at: new Date().toISOString() });
+    return done({ destroyed: !!node.provider_instance_id });
+  },
+};
+
+HANDLERS.CLEANUP_ABANDONED_NODE = CLEANUP_ABANDONED_NODE_HANDLERS;
+
+/**
+ * Registers (or, idempotently, re-fetches) the CLEANUP_ABANDONED_NODE
+ * operation for one node. Safe to call every sweep tick for the same
+ * eligible node -- register_cleanup_operation() returns the existing
+ * operation rather than erroring on a repeat call.
+ */
+export async function startCleanupAbandonedNodeOperation(supabase, { nodeId }) {
+  const { data: operation, error } = await supabase.rpc("register_cleanup_operation", {
+    p_node_id: nodeId,
+    p_steps: CLEANUP_ABANDONED_NODE_STEPS,
+    p_deadline_at: new Date(Date.now() + CLEANUP_DEADLINE_MS).toISOString(),
+  });
+  if (error) return { error };
+  return { operation };
+}
+
+/**
+ * Finds nodes eligible for the abandoned-node cleanup sweep: FAILED longer
+ * than CLEANUP_FAILED_STALE_MS, or RETIRED with its provider instance not
+ * yet confirmed destroyed. Used by both the dry-run report and the live
+ * sweep (functions/lib/fleet-cleanup.js) -- the two must agree on exactly
+ * which nodes are "eligible" or a dry-run report would lie about what a
+ * live run will do.
+ */
+export async function findAbandonedNodeCandidates(supabase, { now = Date.now() } = {}) {
+  const staleBefore = new Date(now - CLEANUP_FAILED_STALE_MS).toISOString();
+  const { data: failedNodes, error: failedError } = await supabase
+    .from("nodes")
+    .select("node_id, lifecycle_state, lifecycle_state_changed_at, provider_instance_id, provider_instance_destroyed_at")
+    .eq("lifecycle_state", "FAILED")
+    .lt("lifecycle_state_changed_at", staleBefore);
+  if (failedError) throw new Error(`nodes lookup failed: ${failedError.message}`);
+
+  const { data: retiredNodes, error: retiredError } = await supabase
+    .from("nodes")
+    .select("node_id, lifecycle_state, lifecycle_state_changed_at, provider_instance_id, provider_instance_destroyed_at")
+    .eq("lifecycle_state", "RETIRED")
+    .not("provider_instance_id", "is", null)
+    .is("provider_instance_destroyed_at", null);
+  if (retiredError) throw new Error(`nodes lookup failed: ${retiredError.message}`);
+
+  return [...(failedNodes ?? []), ...(retiredNodes ?? [])];
 }

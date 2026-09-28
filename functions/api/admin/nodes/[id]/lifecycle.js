@@ -1,6 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
 import { requireAdmin } from "../../../../lib/admin-auth.js";
-import { writeAdminAudit } from "../../../../lib/admin-audit.js";
 import { isValidLifecycleState, canTransitionLifecycle } from "../../../../lib/node-lifecycle.js";
 import { sha256Hex } from "../../../../lib/crypto.js";
 import { generateHexSecret, ENROLLMENT_TOKEN_TTL_MS } from "../../../../lib/node-enrollment.js";
@@ -170,30 +169,34 @@ export async function onRequestPatch({ env, request, params }) {
     // security containment (spec §45). If zero rows match, someone else's
     // transition landed first; the client should re-read and retry
     // rather than get a false "ok" for a write that never happened.
-    const { data: updated, error: updateError } = await supabaseAdmin
-      .from("nodes")
-      .update(update)
-      .eq("node_id", nodeId)
-      .eq("lifecycle_state", node.lifecycle_state)
-      .select("node_id")
-      .maybeSingle();
+    //
+    // F-39 round 2: this UPDATE and its admin_audit_log row now commit
+    // together in a single RPC (see
+    // 20261010000000_admin_audit_transactional_round2.sql), the same
+    // pattern the QUARANTINED/RETIRED branch above already uses via
+    // revoke_node_key_and_transition.
+    const { data: rpcResult, error: updateError } = await supabaseAdmin.rpc(
+      "admin_update_node_lifecycle_with_audit",
+      {
+        p_node_id: nodeId,
+        p_to_state: body.state,
+        p_expected_from_state: node.lifecycle_state,
+        p_failed_reason: update.failed_reason,
+        p_enrollment_token_hash: update.enrollment_token_hash ?? null,
+        p_enrollment_token_expires_at: update.enrollment_token_expires_at ?? null,
+        p_admin_user_id: admin.userId,
+        // Never the token or its hash here — admin-audit.js's contract is
+        // identifiers only, same as everywhere else this file is written to.
+        p_audit_metadata: { reissued_enrollment_token: !!enrollmentToken },
+      }
+    );
     if (updateError) throw new Error(`nodes update failed: ${updateError.message}`);
-    if (!updated) {
+    if (rpcResult?.status === "stale") {
       return jsonResponse(
         { error: "Node lifecycle_state changed concurrently — reload and retry" },
         409
       );
     }
-
-    await writeAdminAudit(supabaseAdmin, {
-      adminUserId: admin.userId,
-      action: "admin.node_lifecycle_transition",
-      targetType: "node",
-      targetId: nodeId,
-      // Never the token or its hash here — admin-audit.js's contract is
-      // identifiers only, same as everywhere else this file is written to.
-      metadata: { from: node.lifecycle_state, to: body.state, reissued_enrollment_token: !!enrollmentToken },
-    });
 
     return jsonResponse({
       ok: true,

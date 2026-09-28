@@ -246,44 +246,49 @@ begin
 end $$;
 rollback;
 
--- ── devices / connection_profiles / device_profile_assignments: each
---    account only sees its own rows, and cannot read or write the other
---    account's rows ("select" grant makes a direct UPDATE/DELETE fail on
---    the SQL privilege itself before RLS is even consulted). ────────────
+-- ── devices / connection_profiles / device_profile_assignments: no direct
+--    client read contract exists (functions/ always goes through
+--    service_role -- see 20261002000001_revoke_dead_account_member_grants).
+--    authenticated must have NO privilege to query these at all -- same
+--    fail-closed-at-the-grant shape as vpn_secrets/provisioning_jobs/
+--    stripe_events/abuse_signals/account_members above, not a live
+--    own-account read. (Before that migration, authenticated held a dead
+--    SELECT grant whose RLS policy sub-selected the unreadable
+--    account_members table, so every query here used to blow up mid-policy
+--    with "permission denied for table account_members" instead of failing
+--    cleanly -- exactly the failure this block now asserts does NOT
+--    happen.) ──────────────────────────────────────────────────────────
 begin;
 set local role authenticated;
 set local request.jwt.claims to '{"sub": "11111111-1111-1111-1111-111111111111", "role": "authenticated"}';
 do $$
 declare
-  own_count int;
-  other_count int;
+  n int;
 begin
-  select count(*) into own_count from public.devices where id = '20000000-0000-4000-8000-00000000000a';
-  select count(*) into other_count from public.devices where id = '20000000-0000-4000-8000-00000000000b';
-  if own_count <> 1 then
-    raise exception 'devices RLS FAILED: user A should see their own device, saw %', own_count;
-  end if;
-  if other_count <> 0 then
-    raise exception 'devices RLS FAILED: user A should not see user B''s device, saw %', other_count;
-  end if;
+  select count(*) into n from public.devices;
+  raise exception 'devices RLS FAILED: authenticated should have no privilege to query this table at all, but got % row(s)', n;
+exception when insufficient_privilege then
+  raise notice 'devices: authenticated role correctly has no privilege to query the table at all';
+end $$;
 
-  select count(*) into own_count from public.connection_profiles where id = '30000000-0000-4000-8000-00000000000a';
-  select count(*) into other_count from public.connection_profiles where id = '30000000-0000-4000-8000-00000000000b';
-  if own_count <> 1 then
-    raise exception 'connection_profiles RLS FAILED: user A should see their own profile, saw %', own_count;
-  end if;
-  if other_count <> 0 then
-    raise exception 'connection_profiles RLS FAILED: user A should not see user B''s profile, saw %', other_count;
-  end if;
+do $$
+declare
+  n int;
+begin
+  select count(*) into n from public.connection_profiles;
+  raise exception 'connection_profiles RLS FAILED: authenticated should have no privilege to query this table at all, but got % row(s)', n;
+exception when insufficient_privilege then
+  raise notice 'connection_profiles: authenticated role correctly has no privilege to query the table at all';
+end $$;
 
-  select count(*) into own_count from public.device_profile_assignments where device_id = '20000000-0000-4000-8000-00000000000a';
-  select count(*) into other_count from public.device_profile_assignments where device_id = '20000000-0000-4000-8000-00000000000b';
-  if own_count <> 1 then
-    raise exception 'device_profile_assignments RLS FAILED: user A should see their own assignment, saw %', own_count;
-  end if;
-  if other_count <> 0 then
-    raise exception 'device_profile_assignments RLS FAILED: user A should not see user B''s assignment, saw %', other_count;
-  end if;
+do $$
+declare
+  n int;
+begin
+  select count(*) into n from public.device_profile_assignments;
+  raise exception 'device_profile_assignments RLS FAILED: authenticated should have no privilege to query this table at all, but got % row(s)', n;
+exception when insufficient_privilege then
+  raise notice 'device_profile_assignments: authenticated role correctly has no privilege to query the table at all';
 end $$;
 
 do $$

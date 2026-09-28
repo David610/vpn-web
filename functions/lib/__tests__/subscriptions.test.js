@@ -1,11 +1,8 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import {
-  resolveDeviceEntitlements,
-  pickSubscriptionWithRoom,
-  subscriptionView,
-} from "../subscriptions.js";
+import { pickSubscriptionWithRoom, subscriptionView, isLive } from "../subscriptions.js";
 import { handleSubscriptionDeleted } from "../stripe-events.js";
 import { makeFakeSupabase } from "./fake-supabase.js";
+import { DEFAULT_PAST_DUE_GRACE_MS } from "../stripe-fields.js";
 
 const END = "2030-01-01T00:00:00.000Z";
 const sub = (id, extra = 0, status = "active") => ({
@@ -25,48 +22,6 @@ const device = (id, subscriptionId, created, status = "ACTIVE") => ({
 
 afterEach(() => vi.restoreAllMocks());
 
-describe("resolveDeviceEntitlements", () => {
-  it("serves at most 3 devices per subscription, oldest first", () => {
-    const devices = [1, 2, 3, 4].map((n) => device(`d${n}`, 1, n));
-    const map = resolveDeviceEntitlements([sub(1)], [], devices);
-    expect(["d1", "d2", "d3"].every((id) => map.get(id))).toBe(true);
-    expect(map.get("d4")).toBeNull();
-  });
-
-  it("each pack adds 3 devices", () => {
-    const devices = [1, 2, 3, 4, 5, 6, 7].map((n) => device(`d${n}`, 1, n));
-    const map = resolveDeviceEntitlements([sub(1, 3)], [], devices);
-    expect(devices.filter((d) => map.get(d.id)).length).toBe(6);
-    expect(map.get("d7")).toBeNull();
-  });
-
-  it("a device follows its own subscription, not the account", () => {
-    const map = resolveDeviceEntitlements(
-      [sub(1, 0, "canceled"), sub(2)],
-      [],
-      [device("a", 1, 1), device("b", 2, 2)]
-    );
-    expect(map.get("a")).toBeNull();
-    expect(map.get("b")).toMatchObject({ currentPeriodEnd: END });
-  });
-
-  it("revoked devices neither count nor get served", () => {
-    const devices = [
-      device("gone", 1, 1, "REVOKED"),
-      ...[2, 3, 4].map((n) => device(`d${n}`, 1, n)),
-    ];
-    const map = resolveDeviceEntitlements([sub(1)], [], devices);
-    expect(map.get("gone")).toBeNull();
-    expect(["d2", "d3", "d4"].every((id) => map.get(id))).toBe(true);
-  });
-
-  it("support grants cover unassigned devices only", () => {
-    const grant = { id: "g", starts_at: "2026-01-01", expires_at: null, seat_limit: 3 };
-    const map = resolveDeviceEntitlements([], [grant], [device("x", null, 1)]);
-    expect(map.get("x")).toMatchObject({ source: "admin_grant", clearExpiry: true });
-  });
-});
-
 describe("pickSubscriptionWithRoom", () => {
   it("picks the oldest live subscription with a free place", () => {
     const full = [1, 2, 3].map((n) => device(`d${n}`, 1, n));
@@ -79,6 +34,46 @@ describe("subscriptionView", () => {
   it("reports packs, capacity and use", () => {
     const view = subscriptionView(sub(1, 3), [device("a", 1, 1), device("b", 2, 2)]);
     expect(view).toMatchObject({ id: "1", extraPacks: 1, capacity: 6, used: 1 });
+  });
+});
+
+describe("isLive — F-40 bounded past_due grace", () => {
+  const NOW = new Date("2030-01-15T00:00:00.000Z").getTime();
+
+  it("treats active/trialing as live regardless of past_due_since", () => {
+    expect(isLive({ status: "active" }, {}, NOW)).toBe(true);
+    expect(isLive({ status: "trialing" }, {}, NOW)).toBe(true);
+  });
+
+  it("treats a fresh past_due (well within the grace window) as live", () => {
+    const pastDueSince = new Date(NOW - 1000 * 60 * 60).toISOString(); // 1h ago
+    expect(isLive({ status: "past_due", past_due_since: pastDueSince }, {}, NOW)).toBe(true);
+  });
+
+  it("treats a past_due subscription older than the grace window as NOT live", () => {
+    const pastDueSince = new Date(NOW - DEFAULT_PAST_DUE_GRACE_MS - 1000).toISOString();
+    expect(isLive({ status: "past_due", past_due_since: pastDueSince }, {}, NOW)).toBe(false);
+  });
+
+  it("treats a past_due subscription with no recorded past_due_since as live (fail open for legacy rows)", () => {
+    expect(isLive({ status: "past_due", past_due_since: null }, {}, NOW)).toBe(true);
+  });
+
+  it("honors env.PAST_DUE_GRACE_MS as an override", () => {
+    const pastDueSince = new Date(NOW - 1000 * 60 * 60 * 24 * 2).toISOString(); // 2 days ago
+    // Default (14 days) still live...
+    expect(isLive({ status: "past_due", past_due_since: pastDueSince }, {}, NOW)).toBe(true);
+    // ...but a 1-day override cuts it off.
+    expect(
+      isLive({ status: "past_due", past_due_since: pastDueSince }, { PAST_DUE_GRACE_MS: 24 * 60 * 60 * 1000 }, NOW)
+    ).toBe(false);
+  });
+
+  it("never treats canceled/unpaid/incomplete as live", () => {
+    expect(isLive({ status: "canceled" }, {}, NOW)).toBe(false);
+    expect(isLive({ status: "unpaid" }, {}, NOW)).toBe(false);
+    expect(isLive({ status: "incomplete" }, {}, NOW)).toBe(false);
+    expect(isLive(null, {}, NOW)).toBe(false);
   });
 });
 

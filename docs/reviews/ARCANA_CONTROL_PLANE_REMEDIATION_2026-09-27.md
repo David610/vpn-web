@@ -21,10 +21,37 @@ exactly how one of the bugs below shipped unnoticed until this pass caught it).
 
 ## 1. Headline: is this ready for real payments?
 
-**Both audit P0 blockers are fixed. Every P1 assigned across three rounds is fixed except F-19,
-which was deferred with no attempt.** Everything else genuinely open requires production access,
-legal text, or a different repository — none of which this pass fabricated or attempted without
-authorization.
+**Both audit P0 blockers are fixed. Every P1 assigned across three rounds, including F-19, is now
+fixed** (see the correction below — F-19 was deferred through three rounds but has since been
+implemented and verified; this report's table and narrative below the correction still describe
+those three original rounds and are left as written). Everything else genuinely open requires
+production access, legal text, or a different repository — none of which this pass fabricated or
+attempted without authorization.
+
+> **Correction (2026-09-28, follow-up pass):** F-19 is no longer deferred. It was implemented in a
+> later session (verified against this report, not merely trusted): `LEGACY_NODE_EXPIRY_GRACE_MS`
+> (72h) in `functions/lib/stripe-fields.js`, applied via `applyLegacyExpiryGrace()` and wired into
+> `resolveEffectiveEntitlement()` (`functions/lib/accounts.js`) and
+> `reconcileDeviceProvisioning()`/`buildCreateUserPayload()` (`functions/lib/device-provisioning.js`)
+> for the node-facing `serviceExpiresAt`/`expires_at` only — confirmed never leaking into the
+> customer-visible `currentPeriodEnd`/`subscriptions.current_period_end` (see
+> `functions/lib/__tests__/stripe-events.test.js`'s "F-19 remaining gap coverage" describe block).
+> `handleSubscriptionUpdated` in `functions/lib/stripe-events.js` now pushes the grace-extended
+> expiry on `customer.subscription.updated` too (via a `periodAdvanced` guard comparing against the
+> row's previously-stored period end), not only on `invoice.paid`. Terminal transitions
+> (`canceled`/`unpaid`) cut expiry immediately with **no** grace, confirmed by re-reading the code
+> (not assumed) and by test. Test coverage added/verified this pass: `invoice.paid`; a
+> multi-line-item invoice (`getInvoiceLinePeriodEnd` takes the max across lines, not
+> `lines.data[0]`, in `functions/lib/__tests__/stripe-fields.test.js`); a webhook delayed hours past
+> the period boundary; duplicate/redelivered webhooks (idempotent, no double extension); a
+> reordered/stale webhook (tied to `isStaleSubscriptionWrite`); payment recovery
+> (`past_due -> active`) pushing a renewed expiry via both `invoice.paid` and
+> `customer.subscription.updated`; `cancel_at_period_end` producing no incorrect grace extension by
+> itself. No new bug was found in the F-19 code itself during this verification; see §6 below for the
+> one genuinely new, previously-undocumented gap this pass found and fixed (F-40).
+
+**F-40 (`past_due` unbounded entitlement) — also fixed this pass** (was previously untracked in this
+report's table, listed only under "not reproduced / not attempted"; see §6).
 
 - **F-01 (device capacity bypass) — FIXED.**
 - **F-02 (out-of-order Stripe events) — FIXED** (documented deviation: event-timestamp ordering, not
@@ -68,7 +95,7 @@ text, or another repository.
 | **F-15** localStorage sessions / no `script-src` CSP | **FIXED (as far as code can go without a cookie migration)** | Full HttpOnly-cookie migration explicitly out of scope (static export + Pages Functions, no per-request server). Delivered instead, matching the task's own stated fallback: strict CSP with a working build-time nonce (see the P0 regression story in §1 and §3), Trusted Types enforcement (with the correct two-policy allowlist after the merge-time fix), a separate admin `storageKey` so a customer-targeted XSS payload doesn't also exfiltrate an admin session, and an admin-specific CSP with zero third-party origins. **Explicitly still does not eliminate** the localStorage-token-theft risk itself — a script that does execute in an allowed origin can still read the token. A true separate admin origin/domain remains a production/DNS decision for David. |
 | **F-17** node revision rollout always fails | **FIXED** | Deterministic idempotency key; revision row + job now write together. |
 | **F-18** privacy retention | **FIXED** | Retention jobs for leases, Stripe event payloads, provisioning jobs, traffic samples, Telegram codes, node revisions, revoked-device metadata, resolved alerts. |
-| **F-19** legacy expiry no grace / not pushed on `updated` | **DEFERRED** | The one finding assigned across three rounds with zero attempt — deliberately deprioritized each time rather than rushed. **The single largest remaining code-closable gap.** |
+| **F-19** legacy expiry no grace / not pushed on `updated` | **FIXED** (2026-09-28 follow-up pass, see the correction in §1) | Deferred with zero attempt across the three rounds this table otherwise describes; implemented and verified in a later session — 72h grace via `applyLegacyExpiryGrace()`, pushed on both `invoice.paid` and `customer.subscription.updated`, confirmed never applied to `currentPeriodEnd` or to the terminal (`canceled`/`unpaid`) cut. |
 | **F-20** no failover / lazy silence detection / passive drain | **FIXED** | Silence sweep runs every fleet-tick minute; make-before-break re-placement off FAILED/DRAINING nodes implemented; direct admin RETIRE path now refuses under live assignments unless audited-overridden. |
 | **F-21** dead/legacy routes | **FIXED** | `/api/vpn/usage`, `/api/agent/metrics`, `/api/cancel-subscription`, `/api/resume-subscription` → `410 Gone` (each confirmed unused first). `rotate-credentials.js` kept live but hardened (F-10) rather than removed, since it's a legitimate user action once budgeted. |
 | **F-22** session revocation gaps | **FIXED** (documented residual gap) | Password change signs out other sessions. A future asymmetric-JWT migration would need its own revocation-check work — tracked, not this pass's job. |
@@ -151,9 +178,11 @@ hydration (fiber attached post-load) on both `/` and `/admin/`.
 
 ## 4. What remains open, and why
 
-1. **F-19 (legacy grace period)** — the one finding never attempted across three rounds. A real gap;
-   the node-expiry/proration-line logic is now well-covered by tests from other work in this pass,
-   so a future attempt has good regression coverage to build on.
+1. ~~**F-19 (legacy grace period)**~~ — **fixed in a 2026-09-28 follow-up pass**, see the correction
+   in §1 and §6 below. Was the one finding never attempted across the three rounds this report
+   otherwise describes; the node-expiry/proration-line logic was already well-covered by tests from
+   other work in this pass, which gave the follow-up implementation good regression coverage to
+   build on and verify against.
 2. **F-04's production purge, F-06's abandoned-node cleanup, F-43's key-signing migration** — need
    live Cloudflare/Hetzner/Supabase-dashboard access and David's approval, per the plan's own rules.
    Code and dry-run tooling for the first two are ready to run.
@@ -170,9 +199,10 @@ hydration (fiber attached post-load) on both `/` and `/admin/`.
    for future work, none of them a P0/P1 on the original audit.
 7. Everything in the "not attempted" row of §2 — genuinely out of scope for a `vpn-web`-only pass.
 
-**Net result: every P0 and every assigned P1 is closed except F-19. Every fallback item the original
-task explicitly named for when a fuller fix wasn't feasible (F-15's Trusted Types/admin isolation,
-F-04's redaction-not-migration, F-06's delete-not-just-document) was implemented, not skipped.**
+**Net result (as of the 2026-09-28 follow-up pass): every P0 and every assigned P1, including F-19,
+is closed.** Every fallback item the original task explicitly named for when a fuller fix wasn't
+feasible (F-15's Trusted Types/admin isolation, F-04's redaction-not-migration, F-06's
+delete-not-just-document) was implemented, not skipped.
 
 ## 5. Rollback plan
 
@@ -186,3 +216,54 @@ system was touched.
 See §3's final block above. Not run in this pass (require infrastructure this session does not
 have): `supabase/tests/*.sql` against a live Postgres, any protocol/VPS/device-tier test from the
 cross-repo plan's §7.1, and all production read-only verification queries from the audit's §22.
+
+## 7. F-19 verification and F-40 (2026-09-28 follow-up pass)
+
+This section documents a later, separate pass over this same audit that (a) re-verified F-19's
+implementation against the actual code rather than trusting a prior claim, and (b) found and fixed
+F-40, a finding this report's §2 table had previously left in "not reproduced / not attempted". This
+later pass *did* have a live local Postgres 16 available, unlike the rounds described in §6 above,
+and ran `supabase/tests/*.sql` (including the new `past_due_grace_test.sql`) against it.
+
+**F-19 was re-derived from the code, not assumed.** Every citation in the §1 correction above and
+the updated table row was checked by reading the named function at the named file, and by tests
+that fail if the claim is false (`functions/lib/__tests__/stripe-events.test.js`'s "F-19 remaining
+gap coverage" describe block explicitly asserts `serviceExpiresAt` is grace-extended while
+`currentPeriodEnd` is not, and that a terminal transition never grace-extends anything). No
+previously-unknown bug was found in the F-19 code itself.
+
+**F-40 — `past_due` subscriptions stayed fully entitled indefinitely.** `LIVE_STATUSES` in
+`functions/lib/subscriptions.js` (and `device_entitlement()`'s
+`status in ('active', 'trialing', 'past_due')` check in
+`supabase/migrations/20261001000000_device_entitlement.sql` /
+`20261002000000_device_entitlement_assignment_order.sql`) treated `past_due` as live with no time
+cap at all — a subscription stuck in Stripe's dunning process forever kept full paid service
+forever, with no code path that ever cut it off short of Stripe itself eventually marking it
+`unpaid`/`canceled`.
+
+**Fix: a bounded, explicit 14-day grace window**, added as `subscriptions.past_due_since`
+(`supabase/migrations/20261009000000_past_due_grace.sql`, set/cleared by the
+`customer.subscription.updated`/`invoice.paid` webhook handlers in `functions/lib/stripe-events.js`)
+plus `DEFAULT_PAST_DUE_GRACE_MS = 14 * 24 * 60 * 60 * 1000` in `functions/lib/stripe-fields.js`,
+configurable per deployment via `env.PAST_DUE_GRACE_MS`. **Why 14 days:** Stripe's default Smart
+Retries dunning schedule keeps retrying a failed payment for up to roughly two weeks before giving
+up and marking the subscription `unpaid`/`canceled`; bounding at the same order of magnitude keeps
+service through the entire window a legitimately-recoverable payment (a temporarily-declined or
+just-expired card) is normally retried in, while an account that stays `past_due` well past that no
+longer receives free, indefinite service. The bound is applied consistently on both sides of the
+billing state machine: `isLive()` (`functions/lib/subscriptions.js`) and
+`getLiveSubscription()`/`getEffectiveEntitlement()` (`functions/lib/accounts.js`) on the JS/webhook
+side, and `device_entitlement()`'s SQL (hardcoded to the same 14-day default, since the SQL function
+has no access to `env.PAST_DUE_GRACE_MS`) on the device-capacity side. A `past_due_since` that is
+null (a legacy row, or a transition that predates this column) fails **open** — still counted as
+live — rather than instantly cutting off a row this code cannot actually date; going forward every
+transition into `past_due` stamps it. A recovery payment (`past_due -> active`) always clears
+`past_due_since` and restores full entitlement immediately, regardless of how long the subscription
+had been past_due — the bound targets indefinite non-payment risk, not eventual payment. Test
+coverage: `functions/lib/__tests__/subscriptions.test.js`'s "isLive — F-40 bounded past_due grace"
+block, `functions/lib/__tests__/stripe-events.test.js`'s "F-40" blocks, and
+`supabase/tests/past_due_grace_test.sql`.
+
+**Validation for this follow-up pass:** `npm test` (1035/1035 passing), `npm run lint` (0 errors),
+`npm run build` (clean), and `PGHOST=localhost PGUSER=postgres PGPASSWORD=postgres bash
+scripts/test-supabase-sql.sh` (all 5 `supabase/tests/*.sql` files pass, including the new one).

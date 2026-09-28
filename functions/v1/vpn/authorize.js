@@ -1,5 +1,5 @@
 import { ensureSessionDevice } from "../../lib/account-service.js";
-import { loadDeviceEntitlements } from "../../lib/subscriptions.js";
+import { resolveDeviceEntitlement } from "../../lib/device-entitlement.js";
 import { authorizeRoute } from "../../lib/vpn-authorize.js";
 import { readV1Json, withV1User, v1Json, v1Error } from "../../lib/v1-http.js";
 
@@ -30,13 +30,7 @@ export async function onRequestPost(context) {
       .single();
     if (deviceError) throw new Error(`devices lookup failed: ${deviceError.message}`);
 
-    const { data: accountDevices, error: devicesError } = await db
-      .from("devices")
-      .select("id, status, subscription_id, created_at")
-      .eq("account_id", device.account_id);
-    if (devicesError) throw new Error(`devices lookup failed: ${devicesError.message}`);
-
-    const entitlement = (await loadDeviceEntitlements(db, device.account_id, accountDevices ?? [])).get(device.id);
+    const entitlement = await resolveDeviceEntitlement(db, device);
     if (!entitlement) return v1Error(409, "This device is not entitled to connect.", "not_entitled");
 
     const clientRequestId = body.client_request_id ?? null;
