@@ -1,6 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
 import { requireAdmin } from "../../../lib/admin-auth.js";
-import { writeAdminAudit } from "../../../lib/admin-audit.js";
 import { getEffectiveEntitlement } from "../../../lib/accounts.js";
 import { syncAccountProvisioningToEntitlement } from "../../../lib/provision-entitlement.js";
 
@@ -20,38 +19,31 @@ export async function onRequestDelete({ env, request, params }) {
   if (admin.role === "readonly") return json({ error: "Read-only admins cannot revoke access." }, 403);
 
   try {
-    const { data: grant, error: lookupError } = await supabaseAdmin
-      .from("admin_entitlements")
-      .select("id, account_id, status")
-      .eq("id", params.id)
-      .maybeSingle();
-    if (lookupError) throw new Error(`grant lookup failed: ${lookupError.message}`);
-    if (!grant) return json({ error: "Grant not found." }, 404);
-    if (grant.status === "revoked") return json({ ok: true, duplicate: true });
-
-    const revokedAt = new Date().toISOString();
-    const { error: revokeError } = await supabaseAdmin
-      .from("admin_entitlements")
-      .update({ status: "revoked", revoked_at: revokedAt })
-      .eq("id", grant.id);
+    // F-39 round 2: the admin_entitlements revoke and its admin_audit_log
+    // row commit together in a single RPC (see
+    // 20261010000000_admin_audit_transactional_round2.sql), so a crash
+    // between them can no longer leave an unaudited revoke or an audit row
+    // for a revoke that never happened.
+    const { data: rpcResult, error: revokeError } = await supabaseAdmin.rpc(
+      "admin_revoke_entitlement_with_audit",
+      {
+        p_grant_id: params.id,
+        p_admin_user_id: admin.userId,
+        p_audit_metadata: {},
+      }
+    );
     if (revokeError) throw new Error(`grant revoke failed: ${revokeError.message}`);
+    if (rpcResult?.status === "not_found") return json({ error: "Grant not found." }, 404);
+    if (rpcResult?.status === "duplicate") return json({ ok: true, duplicate: true });
 
-    const entitlement = await getEffectiveEntitlement(supabaseAdmin, grant.account_id);
+    const entitlement = await getEffectiveEntitlement(supabaseAdmin, rpcResult.account_id);
     await syncAccountProvisioningToEntitlement(
       supabaseAdmin,
-      grant.account_id,
+      rpcResult.account_id,
       entitlement,
-      `admin-revoke:${grant.id}`,
+      `admin-revoke:${params.id}`,
       env
     );
-
-    await writeAdminAudit(supabaseAdmin, {
-      adminUserId: admin.userId,
-      action: "admin.revoke_entitlement",
-      targetType: "customer_account",
-      targetId: grant.account_id,
-      metadata: { grant_id: grant.id },
-    });
 
     return json({ ok: true });
   } catch (err) {

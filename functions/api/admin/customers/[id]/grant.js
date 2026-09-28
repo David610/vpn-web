@@ -1,6 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
 import { requireAdmin } from "../../../../lib/admin-auth.js";
-import { writeAdminAudit } from "../../../../lib/admin-audit.js";
 import {
   getAccountForUser,
   getEffectiveEntitlement,
@@ -64,17 +63,22 @@ export async function onRequestPost({ env, request, params }) {
       return json({ error: `This account already uses ${seatsUsed} seats.` }, 409);
     }
 
-    const { data: grant, error: grantError } = await supabaseAdmin
-      .from("admin_entitlements")
-      .insert({
-        account_id: account.accountId,
-        expires_at: expiresAt,
-        seat_limit: seatLimit,
-        reason,
-        created_by_admin: admin.userId,
-      })
-      .select("id, account_id, status, starts_at, expires_at, seat_limit, reason, created_at")
-      .single();
+    // F-39 round 2: the admin_entitlements insert and its admin_audit_log
+    // row commit together in a single RPC (see
+    // 20261010000000_admin_audit_transactional_round2.sql), so a crash
+    // between them can no longer leave an unaudited grant or an audit row
+    // for a grant that never happened.
+    const { data: grant, error: grantError } = await supabaseAdmin.rpc(
+      "admin_grant_entitlement_with_audit",
+      {
+        p_account_id: account.accountId,
+        p_expires_at: expiresAt,
+        p_seat_limit: seatLimit,
+        p_reason: reason,
+        p_admin_user_id: admin.userId,
+        p_audit_metadata: { target_user_id: params.id },
+      }
+    );
     if (grantError) throw new Error(`admin entitlement insert failed: ${grantError.message}`);
 
     // Recompute from all trusted sources after the insert. This preserves a
@@ -91,20 +95,6 @@ export async function onRequestPost({ env, request, params }) {
       `admin-grant:${grant.id}`,
       env
     );
-
-    await writeAdminAudit(supabaseAdmin, {
-      adminUserId: admin.userId,
-      action: "admin.grant_entitlement",
-      targetType: "customer_account",
-      targetId: account.accountId,
-      metadata: {
-        grant_id: grant.id,
-        target_user_id: params.id,
-        expires_at: expiresAt,
-        seat_limit: seatLimit,
-        reason,
-      },
-    });
 
     return json({ grant }, 201);
   } catch (err) {

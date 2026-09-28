@@ -3,17 +3,16 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const getClaims = vi.fn();
 const adminMaybeSingle = vi.fn();
 const nodeMaybeSingle = vi.fn();
-const nodeUpdateMaybeSingle = vi.fn();
-const nodeUpdateChain = {
-  eq: vi.fn().mockReturnThis(),
-  select: vi.fn().mockReturnThis(),
-  maybeSingle: nodeUpdateMaybeSingle,
-};
-const nodeUpdate = vi.fn(() => nodeUpdateChain);
 const auditInsert = vi.fn();
 const credDeleteEq = vi.fn(async () => ({ error: null }));
 const credDelete = vi.fn(() => ({ eq: credDeleteEq }));
-const rpc = vi.fn();
+const revokeRpc = vi.fn();
+const lifecycleUpdateRpc = vi.fn();
+const rpc = vi.fn((fn, args) => {
+  if (fn === "revoke_node_key_and_transition") return revokeRpc(args);
+  if (fn === "admin_update_node_lifecycle_with_audit") return lifecycleUpdateRpc(args);
+  throw new Error(`unexpected rpc ${fn}`);
+});
 // F-20/B-03: the RETIRED path now counts live device_node_assignments
 // before calling the revoke RPC. Defaults to zero live assignments so
 // every pre-existing test (which predates this check) keeps passing
@@ -29,12 +28,7 @@ vi.mock("@supabase/supabase-js", () => ({
         return { select: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(), maybeSingle: adminMaybeSingle };
       }
       if (table === "nodes") {
-        return {
-          select: vi.fn().mockReturnThis(),
-          eq: vi.fn().mockReturnThis(),
-          maybeSingle: nodeMaybeSingle,
-          update: nodeUpdate,
-        };
+        return { select: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(), maybeSingle: nodeMaybeSingle };
       }
       if (table === "admin_audit_log") return { insert: auditInsert };
       if (table === "node_probe_credentials") return { delete: credDelete };
@@ -61,13 +55,12 @@ beforeEach(() => {
   getClaims.mockReset().mockResolvedValue({ data: { claims: { sub: "admin-1", aal: "aal2" } }, error: null });
   adminMaybeSingle.mockReset().mockResolvedValue({ data: { role: "owner" }, error: null });
   nodeMaybeSingle.mockReset().mockResolvedValue({ data: { node_id: "node-1", lifecycle_state: "READY" }, error: null });
-  nodeUpdateMaybeSingle.mockReset().mockResolvedValue({ data: { node_id: "node-1" }, error: null });
-  nodeUpdate.mockClear();
   credDelete.mockClear();
   credDeleteEq.mockClear();
-  nodeUpdateChain.eq.mockClear();
   auditInsert.mockReset().mockResolvedValue({ error: null });
-  rpc.mockReset().mockResolvedValue({ data: { status: "ok", jobs_cancelled: 0, lease_slots_deleted: 0 }, error: null });
+  revokeRpc.mockReset().mockResolvedValue({ data: { status: "ok", jobs_cancelled: 0, lease_slots_deleted: 0 }, error: null });
+  lifecycleUpdateRpc.mockReset().mockResolvedValue({ data: { status: "ok" }, error: null });
+  rpc.mockClear();
   assignmentsCount.mockReset().mockResolvedValue({ count: 0, error: null });
 });
 
@@ -75,14 +68,14 @@ describe("PATCH /api/admin/nodes/:id/lifecycle", () => {
   it("returns 400 for an unknown state", async () => {
     const res = await onRequestPatch({ env, request: makeRequest({ state: "BOGUS" }), params: { id: "node-1" } });
     expect(res.status).toBe(400);
-    expect(nodeUpdate).not.toHaveBeenCalled();
+    expect(rpc).not.toHaveBeenCalled();
   });
 
   it("returns 403 for a readonly admin and does not mutate the node", async () => {
     adminMaybeSingle.mockResolvedValue({ data: { role: "readonly" }, error: null });
     const res = await onRequestPatch({ env, request: makeRequest({ state: "DRAINING" }), params: { id: "node-1" } });
     expect(res.status).toBe(403);
-    expect(nodeUpdate).not.toHaveBeenCalled();
+    expect(rpc).not.toHaveBeenCalled();
   });
 
   it("returns 404 when the node does not exist", async () => {
@@ -95,31 +88,32 @@ describe("PATCH /api/admin/nodes/:id/lifecycle", () => {
     nodeMaybeSingle.mockResolvedValue({ data: { node_id: "node-1", lifecycle_state: "RETIRED" }, error: null });
     const res = await onRequestPatch({ env, request: makeRequest({ state: "READY" }), params: { id: "node-1" } });
     expect(res.status).toBe(409);
-    expect(nodeUpdate).not.toHaveBeenCalled();
+    expect(rpc).not.toHaveBeenCalled();
     expect(auditInsert).not.toHaveBeenCalled();
   });
 
-  it("applies an allowed transition, guards the write on the read state, and writes an audit row", async () => {
-    const before = Date.now();
+  // F-39 round 2: the plain-UPDATE path (any transition other than into
+  // QUARANTINED/RETIRED) now goes through admin_update_node_lifecycle_with_
+  // audit — one RPC that commits the nodes UPDATE and the admin_audit_log
+  // row in the same transaction (see
+  // 20261010000000_admin_audit_transactional_round2.sql) — instead of a
+  // plain nodes.update() followed by a separate writeAdminAudit() call.
+  it("applies an allowed transition via the atomic lifecycle-update RPC", async () => {
     const res = await onRequestPatch({ env, request: makeRequest({ state: "DRAINING" }), params: { id: "node-1" } });
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body).toEqual({ ok: true, lifecycleState: "DRAINING" });
-    expect(nodeUpdate).toHaveBeenCalledWith(expect.objectContaining({ lifecycle_state: "DRAINING" }));
-    expect(nodeUpdate.mock.calls[0][0]).not.toHaveProperty("retired_at");
-    // The UPDATE must be guarded by the lifecycle_state this request
-    // actually read (READY), not just node_id — see lifecycle.js's
-    // comment on the concurrent-transition race this closes.
-    expect(nodeUpdateChain.eq).toHaveBeenCalledWith("lifecycle_state", "READY");
-    expect(auditInsert).toHaveBeenCalledWith(
+    expect(lifecycleUpdateRpc).toHaveBeenCalledWith(
       expect.objectContaining({
-        action: "admin.node_lifecycle_transition",
-        target_type: "node",
-        target_id: "node-1",
-        metadata: { from: "READY", to: "DRAINING", reissued_enrollment_token: false },
+        p_node_id: "node-1",
+        p_to_state: "DRAINING",
+        p_expected_from_state: "READY",
+        p_admin_user_id: "admin-1",
+        p_audit_metadata: { reissued_enrollment_token: false },
       })
     );
-    expect(new Date(nodeUpdate.mock.calls[0][0].lifecycle_state_changed_at).getTime()).toBeGreaterThan(before - 1);
+    // No separate admin_audit_log insert — the RPC wrote it atomically.
+    expect(auditInsert).not.toHaveBeenCalled();
   });
 
   // F-05/C-09: RETIRED (and QUARANTINED) go through the atomic
@@ -127,13 +121,13 @@ describe("PATCH /api/admin/nodes/:id/lifecycle", () => {
   // key revocation, job cancellation, lease-slot cleanup and the route-
   // directory version bump all happen in that one transaction, never via
   // separate supabase-js calls that could partially fail.
-  it("transitions to RETIRED via the atomic revoke RPC, not the plain UPDATE path", async () => {
+  it("transitions to RETIRED via the atomic revoke RPC, not the lifecycle-update RPC", async () => {
     nodeMaybeSingle.mockResolvedValue({ data: { node_id: "node-1", lifecycle_state: "DRAINING" }, error: null });
-    rpc.mockResolvedValue({ data: { status: "ok", jobs_cancelled: 2, lease_slots_deleted: 3 }, error: null });
+    revokeRpc.mockResolvedValue({ data: { status: "ok", jobs_cancelled: 2, lease_slots_deleted: 3 }, error: null });
     const res = await onRequestPatch({ env, request: makeRequest({ state: "RETIRED" }), params: { id: "node-1" } });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true, lifecycleState: "RETIRED" });
-    expect(rpc).toHaveBeenCalledWith("revoke_node_key_and_transition", {
+    expect(revokeRpc).toHaveBeenCalledWith({
       p_node_id: "node-1",
       p_to_state: "RETIRED",
       p_expected_from_state: "DRAINING",
@@ -141,7 +135,7 @@ describe("PATCH /api/admin/nodes/:id/lifecycle", () => {
       p_admin_user_id: "admin-1",
       p_audit_metadata: { reissued_enrollment_token: false },
     });
-    expect(nodeUpdate).not.toHaveBeenCalled();
+    expect(lifecycleUpdateRpc).not.toHaveBeenCalled();
     // F-39: the audit row for QUARANTINED/RETIRED now commits inside the
     // RPC's own transaction (see 20261008000000_admin_audit_transactional
     // .sql) — this route no longer makes a separate admin_audit_log insert
@@ -152,7 +146,7 @@ describe("PATCH /api/admin/nodes/:id/lifecycle", () => {
   it("transitions to QUARANTINED via the atomic revoke RPC", async () => {
     const res = await onRequestPatch({ env, request: makeRequest({ state: "QUARANTINED" }), params: { id: "node-1" } });
     expect(res.status).toBe(200);
-    expect(rpc).toHaveBeenCalledWith("revoke_node_key_and_transition", {
+    expect(revokeRpc).toHaveBeenCalledWith({
       p_node_id: "node-1",
       p_to_state: "QUARANTINED",
       p_expected_from_state: "READY",
@@ -164,7 +158,7 @@ describe("PATCH /api/admin/nodes/:id/lifecycle", () => {
   });
 
   it("returns 409 when the revoke RPC reports the node's DNS has not been removed", async () => {
-    rpc.mockResolvedValue({ data: { status: "dns_not_removed" }, error: null });
+    revokeRpc.mockResolvedValue({ data: { status: "dns_not_removed" }, error: null });
     const res = await onRequestPatch({ env, request: makeRequest({ state: "RETIRED" }), params: { id: "node-1" } });
     expect(res.status).toBe(409);
     expect(auditInsert).not.toHaveBeenCalled();
@@ -178,8 +172,7 @@ describe("PATCH /api/admin/nodes/:id/lifecycle", () => {
       params: { id: "node-1" },
     });
     expect(res.status).toBe(200);
-    expect(rpc).toHaveBeenCalledWith(
-      "revoke_node_key_and_transition",
+    expect(revokeRpc).toHaveBeenCalledWith(
       expect.objectContaining({
         p_override_dns_check: true,
         p_audit_metadata: expect.objectContaining({ dns_check_overridden: true }),
@@ -208,8 +201,7 @@ describe("PATCH /api/admin/nodes/:id/lifecycle", () => {
       params: { id: "node-1" },
     });
     expect(res.status).toBe(200);
-    expect(rpc).toHaveBeenCalledWith(
-      "revoke_node_key_and_transition",
+    expect(revokeRpc).toHaveBeenCalledWith(
       expect.objectContaining({
         p_to_state: "RETIRED",
         p_audit_metadata: expect.objectContaining({ assignments_check_overridden: true }),
@@ -219,14 +211,14 @@ describe("PATCH /api/admin/nodes/:id/lifecycle", () => {
   });
 
   it("returns 409 without a false ok when the revoke RPC reports a stale lifecycle_state", async () => {
-    rpc.mockResolvedValue({ data: { status: "stale", lifecycle_state: "QUARANTINED" }, error: null });
+    revokeRpc.mockResolvedValue({ data: { status: "stale", lifecycle_state: "QUARANTINED" }, error: null });
     const res = await onRequestPatch({ env, request: makeRequest({ state: "RETIRED" }), params: { id: "node-1" } });
     expect(res.status).toBe(409);
     expect(auditInsert).not.toHaveBeenCalled();
   });
 
   it("propagates an error from the revoke RPC as a 500 instead of a false ok", async () => {
-    rpc.mockResolvedValue({ data: null, error: { message: "db down" } });
+    revokeRpc.mockResolvedValue({ data: null, error: { message: "db down" } });
     vi.spyOn(console, "error").mockImplementation(() => {});
     const res = await onRequestPatch({ env, request: makeRequest({ state: "QUARANTINED" }), params: { id: "node-1" } });
     expect(res.status).toBe(500);
@@ -245,13 +237,11 @@ describe("PATCH /api/admin/nodes/:id/lifecycle", () => {
     expect(typeof body.enrollmentToken).toBe("string");
     expect(typeof body.expiresAt).toBe("string");
 
-    const update = nodeUpdate.mock.calls[0][0];
-    expect(update.enrollment_token_hash).toMatch(/^[0-9a-f]{64}$/);
+    const call = lifecycleUpdateRpc.mock.calls[0][0];
+    expect(call.p_enrollment_token_hash).toMatch(/^[0-9a-f]{64}$/);
     // Only the hash is stored — never the raw token.
-    expect(update.enrollment_token_hash).not.toBe(body.enrollmentToken);
-    expect(auditInsert).toHaveBeenCalledWith(
-      expect.objectContaining({ metadata: expect.objectContaining({ reissued_enrollment_token: true }) })
-    );
+    expect(call.p_enrollment_token_hash).not.toBe(body.enrollmentToken);
+    expect(call.p_audit_metadata).toEqual(expect.objectContaining({ reissued_enrollment_token: true }));
   });
 
   // failed_reason precondition (Phase 12a/12b specs): an admin-forced FAILED
@@ -261,31 +251,43 @@ describe("PATCH /api/admin/nodes/:id/lifecycle", () => {
     nodeMaybeSingle.mockResolvedValue({ data: { node_id: "node-1", lifecycle_state: "READY" }, error: null });
     const res = await onRequestPatch({ env, request: makeRequest({ state: "FAILED" }), params: { id: "node-1" } });
     expect(res.status).toBe(200);
-    expect(nodeUpdate).toHaveBeenCalledWith(expect.objectContaining({ failed_reason: "ADMIN" }));
+    expect(lifecycleUpdateRpc).toHaveBeenCalledWith(expect.objectContaining({ p_failed_reason: "ADMIN" }));
   });
 
   it("clears failed_reason when transitioning a node away from FAILED", async () => {
     nodeMaybeSingle.mockResolvedValue({ data: { node_id: "node-1", lifecycle_state: "FAILED" }, error: null });
     const res = await onRequestPatch({ env, request: makeRequest({ state: "PROVISIONING" }), params: { id: "node-1" } });
     expect(res.status).toBe(200);
-    expect(nodeUpdate).toHaveBeenCalledWith(expect.objectContaining({ failed_reason: null }));
+    expect(lifecycleUpdateRpc).toHaveBeenCalledWith(expect.objectContaining({ p_failed_reason: null }));
   });
 
   it("does not include an enrollment token for a non-PROVISIONING transition", async () => {
     const res = await onRequestPatch({ env, request: makeRequest({ state: "DRAINING" }), params: { id: "node-1" } });
     const body = await res.json();
     expect(body.enrollmentToken).toBeUndefined();
-    expect(nodeUpdate.mock.calls[0][0]).not.toHaveProperty("enrollment_token_hash");
+    expect(lifecycleUpdateRpc).toHaveBeenCalledWith(expect.objectContaining({ p_enrollment_token_hash: null }));
   });
 
   it("returns 409 without a false ok when another request's transition wins the race", async () => {
     // The read saw READY, canTransitionLifecycle allows READY->DRAINING,
     // but by the time the guarded UPDATE runs, another request has
-    // already moved the node to QUARANTINED — zero rows match the
-    // lifecycle_state guard.
-    nodeUpdateMaybeSingle.mockResolvedValue({ data: null, error: null });
+    // already moved the node to QUARANTINED — the RPC's own guarded UPDATE
+    // matches zero rows and reports "stale".
+    lifecycleUpdateRpc.mockResolvedValue({ data: { status: "stale" }, error: null });
     const res = await onRequestPatch({ env, request: makeRequest({ state: "DRAINING" }), params: { id: "node-1" } });
     expect(res.status).toBe(409);
+    expect(auditInsert).not.toHaveBeenCalled();
+  });
+
+  // F-39 round 2 atomicity: the plain-UPDATE path's mutation and its audit
+  // row are written by a single RPC/transaction. If that RPC fails, the
+  // route must not report success and must make no separate mutation or
+  // audit write of its own -- there is no split-brain state to produce.
+  it("propagates an error from the lifecycle-update RPC as a 500 instead of a false ok", async () => {
+    lifecycleUpdateRpc.mockResolvedValue({ data: null, error: { message: "simulated transaction failure" } });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const res = await onRequestPatch({ env, request: makeRequest({ state: "DRAINING" }), params: { id: "node-1" } });
+    expect(res.status).toBe(500);
     expect(auditInsert).not.toHaveBeenCalled();
   });
 });
