@@ -51,15 +51,23 @@ export default function PrivacyPage() {
               deliver your VPN connection details.
             </li>
             <li>
-              <strong>Abuse-prevention signals:</strong> a rolling count of
-              distinct source IPs per account, sampled from the VPN server&apos;s
-              own connection logs, used only to flag accounts that may be
-              shared beyond the personal/couple-of-devices policy in our{" "}
-              <a href="/terms/" className="text-link">
-                Terms
-              </a>
-              . This is a count, not a browsing history — we do not log
-              which sites or services you connect to.
+              <strong>Device metadata:</strong> the name, platform, and last
+              connection time of each device you register, so you can see
+              and revoke them from your account dashboard.
+            </li>
+            <li>
+              <strong>Connection records:</strong> for the managed VPN
+              service, a per-device record of which route and server your
+              device was assigned and when, used to operate and load-balance
+              the network. This is routing metadata, not a browsing
+              history — we do not log which sites or services you connect
+              to.
+            </li>
+            <li>
+              <strong>Telegram data:</strong> if you link a Telegram account
+              to manage your VPN through our Telegram Mini App, we store
+              your Telegram user ID and the link between it and your
+              account.
             </li>
           </ul>
 
@@ -74,9 +82,11 @@ export default function PrivacyPage() {
             We use the following third-party processors to operate the
             service: Stripe (payments), Supabase (authentication and
             database), Cloudflare (hosting and the config-delivery API),
-            Resend (operational email alerts), and [VPS/hosting provider —
-            TBD, spec §9 prerequisite]. Each processes only the data
-            necessary for its function.
+            Resend (operational email alerts), Hetzner (the VPS servers that
+            run the VPN nodes your device connects to), and, if you choose
+            to link your account, Telegram (the Mini App used to manage
+            devices from Telegram). Each processes only the data necessary
+            for its function.
           </p>
 
           <h2>Data retention</h2>
@@ -84,8 +94,12 @@ export default function PrivacyPage() {
             Account and billing data are retained for the duration of your
             subscription plus [retention period — TODO, confirm with legal;
             typically bounded by tax/accounting record-keeping requirements
-            for billing data]. You may request account deletion at any time
-            by contacting us.
+            for billing data]. Connection records (which route/server a
+            device used and when) are deleted after 30 days; raw per-node
+            traffic samples are deleted after 7 days (daily totals are kept
+            for capacity planning); short-lived Telegram linking codes are
+            deleted shortly after they expire. You may request account
+            deletion at any time by contacting us.
           </p>
 
           <h2>Your rights (GDPR)</h2>

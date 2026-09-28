@@ -56,7 +56,17 @@ packs; devices can be moved between the account's subscriptions. Some names
 |---|---|---|---|---|
 | `RESEND_API_KEY` | secret | Resend | Transactional and alert email | TBD |
 | `ALERT_FROM_EMAIL` | runtime | Resend | From address (default `onboarding@resend.dev`; needs a verified domain in prod) | TBD |
+| `ALERT_TO_EMAIL` | runtime | ops | Where job-failure alerts go (functions/lib/resend.js). No hard-coded fallback (F-28) -- if unset, alert emails are skipped and only logged. Should be a team/ops address, not a personal one. | TBD |
 | `TELEGRAM_BOT_TOKEN` | secret | Telegram | Account linking + Mini App `initData` HMAC; Telegram auth fails closed without it | TBD |
+| `RETENTION_TICK_SECRET` | secret | ops | Shared secret for `POST /api/internal/retention-tick` (functions/api/internal/retention-tick.js). Falls back to `FLEET_TICK_SECRET` if unset. | TBD |
+| `VPN_LEASE_RETENTION_DAYS` | runtime | ops | `vpn_leases` rows older than this are deleted (default 30). | TBD |
+| `STRIPE_EVENT_PAYLOAD_RETENTION_DAYS` | runtime | ops | `stripe_events.payload` is trimmed to `{}` after this many days; the event id and `processed_at` are kept for idempotency (default 90). | TBD |
+| `PROVISIONING_JOB_RETENTION_DAYS` | runtime | ops | Terminal (`done`/`failed`) `provisioning_jobs` rows older than this are deleted (default 90). | TBD |
+| `NODE_TRAFFIC_SAMPLE_RETENTION_DAYS` | runtime | ops | Raw `node_traffic_samples` rows older than this are deleted; daily totals in `node_traffic_daily` are unaffected (default 7). | TBD |
+| `TELEGRAM_LINK_CODE_RETENTION_DAYS` | runtime | ops | Expired `telegram_link_codes` rows older than this are deleted (default 1). | TBD |
+| `NODE_REVISIONS_KEEP` | runtime | ops | Number of most-recent `node_revisions` kept per node; older ones are deleted (default 2). | TBD |
+| `REVOKED_DEVICE_RETENTION_DAYS` | runtime | ops | Metadata (name, platform) on `devices` revoked more than this long ago is cleared (default 90). | TBD |
+| `OPERATIONAL_ALERT_RETENTION_DAYS` | runtime | ops | Resolved `operational_alerts` rows older than this are deleted (default 30). | TBD |
 
 ## Fleet provisioning
 
