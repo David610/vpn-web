@@ -1,6 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
 import { requireAdmin } from "../../../../lib/admin-auth.js";
-import { writeAdminAudit } from "../../../../lib/admin-audit.js";
 import { getAccountForUser, getAccountVpnAccounts } from "../../../../lib/accounts.js";
 
 function jsonResponse(body, status = 200) {
@@ -33,37 +32,36 @@ export async function onRequestPost({ env, request, params }) {
     const account = await getAccountForUser(supabaseAdmin, userId);
     if (!account) return jsonResponse({ error: "No account for this user" }, 404);
 
-    const { error: unsuspendError } = await supabaseAdmin
-      .from("customer_accounts")
-      .update({ suspended_at: null })
-      .eq("id", account.accountId);
-    if (unsuspendError) throw new Error(`customer_accounts unsuspend failed: ${unsuspendError.message}`);
-
     const vpnAccounts = await getAccountVpnAccounts(supabaseAdmin, account.accountId);
-    for (const vpnAccount of vpnAccounts) {
-      if (vpnAccount.enabled) continue;
-      const { error: jobError } = await supabaseAdmin.from("provisioning_jobs").insert({
+    const jobs = vpnAccounts
+      .filter((vpnAccount) => !vpnAccount.enabled)
+      .map((vpnAccount) => ({
         idempotency_key: `admin-enable-user:${vpnAccount.id}:${Date.now()}`,
         node_id: vpnAccount.nodeId,
-        job_type: "ENABLE_USER",
         vpn_account_id: vpnAccount.id,
-        payload: { vpn_user_id: vpnAccount.vpnUserId },
-      });
-      if (jobError) throw new Error(`provisioning_jobs insert failed: ${jobError.message}`);
-    }
+        vpn_user_id: vpnAccount.vpnUserId,
+      }));
+
+    // F-07/F-39: see disable.js — same single-transaction coupling of the
+    // suspend flag, the ENABLE_USER job fan-out, and the audit row.
+    const { data: rpcResult, error: rpcError } = await supabaseAdmin.rpc(
+      "admin_set_account_suspension_with_audit",
+      {
+        p_account_id: account.accountId,
+        p_suspended: false,
+        p_jobs: jobs,
+        p_admin_user_id: admin.userId,
+        p_action: "admin.enable_account",
+        p_audit_metadata: { user_id: userId, device_count: vpnAccounts.length },
+      }
+    );
+    if (rpcError) throw new Error(`admin_set_account_suspension_with_audit failed: ${rpcError.message}`);
+    if (rpcResult?.status === "not_found") return jsonResponse({ error: "No account for this user" }, 404);
 
     const { error: unbanError } = await supabaseAdmin.auth.admin.updateUserById(userId, {
       ban_duration: "none",
     });
     if (unbanError) throw new Error(`auth unban failed: ${unbanError.message}`);
-
-    await writeAdminAudit(supabaseAdmin, {
-      adminUserId: admin.userId,
-      action: "admin.enable_account",
-      targetType: "customer_account",
-      targetId: account.accountId,
-      metadata: { user_id: userId, device_count: vpnAccounts.length },
-    });
 
     return jsonResponse({ ok: true, devicesReenabled: vpnAccounts.length });
   } catch (err) {

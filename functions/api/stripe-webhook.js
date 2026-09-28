@@ -7,8 +7,11 @@ import {
   handleSubscriptionDeleted,
   handleSubscriptionTrialing,
 } from "../lib/stripe-events.js";
+import { logger, requestIdFrom } from "../lib/logging.js";
+import { raiseAlert } from "../lib/alerts.js";
 
 export async function onRequestPost({ env, request }) {
+  const log = logger(requestIdFrom(request), { fn: "stripe-webhook" });
   const sig = request.headers.get("Stripe-Signature");
   // Raw text, not request.json() — Stripe's HMAC covers the exact bytes
   // sent; re-serializing parsed JSON would produce a different byte string
@@ -35,7 +38,7 @@ export async function onRequestPost({ env, request }) {
     // Log the real reason; the response body is fixed and generic — never
     // echo Stripe SDK internals (timestamp/signature detail) to an
     // unauthenticated caller.
-    console.error("stripe-webhook: signature verification failed:", err.message);
+    log.warn("stripe_webhook.signature_verification_failed", { error: err.message });
     return new Response("Bad Request", { status: 400 });
   }
 
@@ -54,7 +57,7 @@ export async function onRequestPost({ env, request }) {
     .eq("stripe_event_id", event.id)
     .maybeSingle();
   if (lookupError) {
-    console.error("stripe-webhook: event lookup failed:", lookupError.message);
+    log.error("stripe_webhook.event_lookup_failed", { event_id: event.id, error: lookupError.message });
     return new Response("Internal error", { status: 500 });
   }
   if (existing?.processed_at) {
@@ -78,7 +81,7 @@ export async function onRequestPost({ env, request }) {
           headers: { "Content-Type": "application/json" },
         });
       }
-      console.error("stripe-webhook: failed to record event:", insertError.message);
+      log.error("stripe_webhook.event_insert_failed", { event_id: event.id, error: insertError.message });
       return new Response("Internal error", { status: 500 });
     }
   }
@@ -130,7 +133,21 @@ export async function onRequestPost({ env, request }) {
         break;
     }
   } catch (err) {
-    console.error(`stripe-webhook: failed to handle ${event.type}:`, err.message);
+    log.error("stripe_webhook.handler_failed", {
+      event_id: event.id,
+      event_type: event.type,
+      error: err.message,
+    });
+    // A handler throwing means real money/entitlement state may now be out
+    // of sync with Stripe until the retry succeeds — worth a human's
+    // attention if it keeps happening, not just a 500 in the void.
+    await raiseAlert(supabaseAdmin, {
+      kind: "stripe_webhook_handler_failed",
+      severity: "critical",
+      dedupKey: `stripe-webhook:${event.type}:${event.id}`,
+      message: `stripe-webhook: handler for ${event.type} failed on event ${event.id}: ${err.message}`,
+      requestId: log.requestId,
+    });
     // Leave processed_at unset so Stripe's retry (it retries until 2xx)
     // re-attempts the handler instead of this failure being silently final.
     return new Response("Internal error", { status: 500 });
@@ -141,7 +158,10 @@ export async function onRequestPost({ env, request }) {
     .update({ processed_at: new Date().toISOString() })
     .eq("stripe_event_id", event.id);
   if (markProcessedError) {
-    console.error("stripe-webhook: failed to mark event processed:", markProcessedError.message);
+    log.error("stripe_webhook.mark_processed_failed", {
+      event_id: event.id,
+      error: markProcessedError.message,
+    });
     return new Response("Internal error", { status: 500 });
   }
 

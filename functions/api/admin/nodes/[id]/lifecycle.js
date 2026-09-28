@@ -92,11 +92,22 @@ export async function onRequestPatch({ env, request, params }) {
         }
       }
 
+      // F-39: the audit row for this transition is now written by the RPC
+      // itself, in the same transaction as the lifecycle/key-revocation
+      // writes above — no separate writeAdminAudit call after, so a crash
+      // between "mutation committed" and "audit written" is no longer
+      // possible for this route's highest-risk transitions.
       const { data: rpcResult, error: rpcError } = await supabaseAdmin.rpc("revoke_node_key_and_transition", {
         p_node_id: nodeId,
         p_to_state: body.state,
         p_expected_from_state: node.lifecycle_state,
         p_override_dns_check: overrideDnsCheck,
+        p_admin_user_id: admin.userId,
+        p_audit_metadata: {
+          reissued_enrollment_token: false,
+          ...(overrideDnsCheck ? { dns_check_overridden: true } : {}),
+          ...(assignmentsOverridden ? { assignments_check_overridden: true } : {}),
+        },
       });
       if (rpcError) throw new Error(`revoke_node_key_and_transition failed: ${rpcError.message}`);
       if (rpcResult?.status === "not_found") return jsonResponse({ error: "Node not found" }, 404);
@@ -115,23 +126,6 @@ export async function onRequestPatch({ env, request, params }) {
           409
         );
       }
-
-      await writeAdminAudit(supabaseAdmin, {
-        adminUserId: admin.userId,
-        action: "admin.node_lifecycle_transition",
-        targetType: "node",
-        targetId: nodeId,
-        metadata: {
-          from: node.lifecycle_state,
-          to: body.state,
-          reissued_enrollment_token: false,
-          key_revoked: true,
-          jobs_cancelled: rpcResult?.jobs_cancelled ?? 0,
-          lease_slots_deleted: rpcResult?.lease_slots_deleted ?? 0,
-          ...(overrideDnsCheck ? { dns_check_overridden: true } : {}),
-          ...(assignmentsOverridden ? { assignments_check_overridden: true } : {}),
-        },
-      });
 
       return jsonResponse({ ok: true, lifecycleState: body.state });
     }

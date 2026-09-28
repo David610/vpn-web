@@ -4,6 +4,15 @@ import { canTransitionLifecycle } from "./node-lifecycle.js";
 import { buildNodeBootstrapUserData } from "./node-bootstrap.js";
 import { FAILURE_THRESHOLD, HEARTBEAT_INTERVAL_MS, SILENCE_THRESHOLD_MULTIPLIER } from "./node-health-transition.js";
 import { checkDeviceEntitlement } from "./device-entitlement.js";
+import { logEvent } from "./logging.js";
+import { raiseAlert, resolveAlert } from "./alerts.js";
+
+// F-36: steps whose failure means a DNS create/delete/verify call to the
+// adapter (functions/lib/dns/cloudflare.js) failed -- these get a dedicated
+// alert on top of the generic step-failure log below, since a stuck DNS
+// state can leave a node either unreachable (PUBLISH_DNS) or a retired
+// node's hostname dangling and re-claimable (RETIRE_OLD_NODE, see F-06).
+const DNS_STEPS = new Set(["PUBLISH_DNS", "RETIRE_OLD_NODE"]);
 
 /**
  * Resumable fleet operations (spec §24 sagas), persisted in
@@ -587,6 +596,24 @@ export async function advanceOperation(ctx, op) {
       const attempts = (step.attempts ?? 0) + 1;
       const fatal = err instanceof FatalStepError || attempts >= MAX_STEP_ATTEMPTS;
       const message = truncate(err.message);
+      logEvent(fatal ? "error" : "warn", "fleet_operations.step_failed", {
+        operation_id: op.id,
+        operation_type: op.type,
+        node_id: op.node_id,
+        step: step.name,
+        attempts,
+        fatal,
+        error: message,
+      });
+      if (DNS_STEPS.has(step.name)) {
+        await raiseAlert(supabase, {
+          kind: "dns_adapter_failed",
+          severity: fatal ? "critical" : "warning",
+          dedupKey: `dns-adapter:${op.node_id}:${step.name}`,
+          nodeId: op.node_id,
+          message: `fleet-operations: DNS step ${step.name} failed for node ${op.node_id} (attempt ${attempts}): ${message}`,
+        });
+      }
       await supabase
         .from("operation_steps")
         .update({ attempts, error: message, status: fatal ? "FAILED" : "RUNNING" })
@@ -619,6 +646,9 @@ export async function advanceOperation(ctx, op) {
           error: null,
         })
         .eq("id", step.id);
+      if (DNS_STEPS.has(step.name)) {
+        await resolveAlert(supabase, `dns-adapter:${op.node_id}:${step.name}`);
+      }
       continue;
     }
 

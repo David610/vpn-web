@@ -1,6 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
 import { requireAdmin } from "../../../../lib/admin-auth.js";
-import { writeAdminAudit } from "../../../../lib/admin-audit.js";
 import { getAccountForUser, getAccountVpnAccounts } from "../../../../lib/accounts.js";
 
 function jsonResponse(body, status = 200) {
@@ -35,37 +34,41 @@ export async function onRequestPost({ env, request, params }) {
     const account = await getAccountForUser(supabaseAdmin, userId);
     if (!account) return jsonResponse({ error: "No account for this user" }, 404);
 
-    const { error: suspendError } = await supabaseAdmin
-      .from("customer_accounts")
-      .update({ suspended_at: new Date().toISOString() })
-      .eq("id", account.accountId);
-    if (suspendError) throw new Error(`customer_accounts suspend failed: ${suspendError.message}`);
-
     const vpnAccounts = await getAccountVpnAccounts(supabaseAdmin, account.accountId);
-    for (const vpnAccount of vpnAccounts) {
-      if (!vpnAccount.enabled) continue;
-      const { error: jobError } = await supabaseAdmin.from("provisioning_jobs").insert({
+    const jobs = vpnAccounts
+      .filter((vpnAccount) => vpnAccount.enabled)
+      .map((vpnAccount) => ({
         idempotency_key: `admin-disable-user:${vpnAccount.id}:${Date.now()}`,
         node_id: vpnAccount.nodeId,
-        job_type: "DISABLE_USER",
         vpn_account_id: vpnAccount.id,
-        payload: { vpn_user_id: vpnAccount.vpnUserId },
-      });
-      if (jobError) throw new Error(`provisioning_jobs insert failed: ${jobError.message}`);
-    }
+        vpn_user_id: vpnAccount.vpnUserId,
+      }));
+
+    // F-07/F-39: the account-wide suspend flag, the DISABLE_USER job
+    // fan-out, and the audit row all commit in one transaction (see
+    // admin_set_account_suspension_with_audit,
+    // 20261008000000_admin_audit_transactional.sql) — a crash here can no
+    // longer leave the account suspended with no audit trail, or vice
+    // versa. The Auth ban call below is a separate GoTrue API request and
+    // cannot join this transaction; see that migration's comment for why.
+    const { data: rpcResult, error: rpcError } = await supabaseAdmin.rpc(
+      "admin_set_account_suspension_with_audit",
+      {
+        p_account_id: account.accountId,
+        p_suspended: true,
+        p_jobs: jobs,
+        p_admin_user_id: admin.userId,
+        p_action: "admin.disable_account",
+        p_audit_metadata: { user_id: userId, device_count: vpnAccounts.length },
+      }
+    );
+    if (rpcError) throw new Error(`admin_set_account_suspension_with_audit failed: ${rpcError.message}`);
+    if (rpcResult?.status === "not_found") return jsonResponse({ error: "No account for this user" }, 404);
 
     const { error: banError } = await supabaseAdmin.auth.admin.updateUserById(userId, {
       ban_duration: "876000h", // ~100 years — effectively indefinite, lifted explicitly by enable.js
     });
     if (banError) throw new Error(`auth ban failed: ${banError.message}`);
-
-    await writeAdminAudit(supabaseAdmin, {
-      adminUserId: admin.userId,
-      action: "admin.disable_account",
-      targetType: "customer_account",
-      targetId: account.accountId,
-      metadata: { user_id: userId, device_count: vpnAccounts.length },
-    });
 
     return jsonResponse({ ok: true, devicesRevoked: vpnAccounts.length });
   } catch (err) {

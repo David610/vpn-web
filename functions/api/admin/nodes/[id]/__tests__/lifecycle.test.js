@@ -138,13 +138,15 @@ describe("PATCH /api/admin/nodes/:id/lifecycle", () => {
       p_to_state: "RETIRED",
       p_expected_from_state: "DRAINING",
       p_override_dns_check: false,
+      p_admin_user_id: "admin-1",
+      p_audit_metadata: { reissued_enrollment_token: false },
     });
     expect(nodeUpdate).not.toHaveBeenCalled();
-    expect(auditInsert).toHaveBeenCalledWith(
-      expect.objectContaining({
-        metadata: expect.objectContaining({ key_revoked: true, jobs_cancelled: 2, lease_slots_deleted: 3 }),
-      })
-    );
+    // F-39: the audit row for QUARANTINED/RETIRED now commits inside the
+    // RPC's own transaction (see 20261008000000_admin_audit_transactional
+    // .sql) — this route no longer makes a separate admin_audit_log insert
+    // for that branch at all.
+    expect(auditInsert).not.toHaveBeenCalled();
   });
 
   it("transitions to QUARANTINED via the atomic revoke RPC", async () => {
@@ -155,7 +157,10 @@ describe("PATCH /api/admin/nodes/:id/lifecycle", () => {
       p_to_state: "QUARANTINED",
       p_expected_from_state: "READY",
       p_override_dns_check: false,
+      p_admin_user_id: "admin-1",
+      p_audit_metadata: { reissued_enrollment_token: false },
     });
+    expect(auditInsert).not.toHaveBeenCalled();
   });
 
   it("returns 409 when the revoke RPC reports the node's DNS has not been removed", async () => {
@@ -175,11 +180,12 @@ describe("PATCH /api/admin/nodes/:id/lifecycle", () => {
     expect(res.status).toBe(200);
     expect(rpc).toHaveBeenCalledWith(
       "revoke_node_key_and_transition",
-      expect.objectContaining({ p_override_dns_check: true })
+      expect.objectContaining({
+        p_override_dns_check: true,
+        p_audit_metadata: expect.objectContaining({ dns_check_overridden: true }),
+      })
     );
-    expect(auditInsert).toHaveBeenCalledWith(
-      expect.objectContaining({ metadata: expect.objectContaining({ dns_check_overridden: true }) })
-    );
+    expect(auditInsert).not.toHaveBeenCalled();
   });
 
   // F-20/B-03: RETIRE must refuse while live device assignments remain,
@@ -204,11 +210,12 @@ describe("PATCH /api/admin/nodes/:id/lifecycle", () => {
     expect(res.status).toBe(200);
     expect(rpc).toHaveBeenCalledWith(
       "revoke_node_key_and_transition",
-      expect.objectContaining({ p_to_state: "RETIRED" })
+      expect.objectContaining({
+        p_to_state: "RETIRED",
+        p_audit_metadata: expect.objectContaining({ assignments_check_overridden: true }),
+      })
     );
-    expect(auditInsert).toHaveBeenCalledWith(
-      expect.objectContaining({ metadata: expect.objectContaining({ assignments_check_overridden: true }) })
-    );
+    expect(auditInsert).not.toHaveBeenCalled();
   });
 
   it("returns 409 without a false ok when the revoke RPC reports a stale lifecycle_state", async () => {
