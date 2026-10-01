@@ -7,9 +7,12 @@ export async function onRequestGet({ env, request }) {
   const db = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, { auth: { autoRefreshToken: false, persistSession: false } });
   const nodeId = await authenticateNode(request, db);
   if (!nodeId) return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers });
+  const now = new Date().toISOString();
   const { data, error } = await db.from("compatibility_authorizations")
     .select("principal_id,credential_id,credential_class,logical_route_id,valid_from,valid_until,revoked,credential_ciphertext,credential_nonce")
-    .eq("node_id", nodeId);
+    .eq("node_id", nodeId)
+    .eq("revoked", false)
+    .gt("valid_until", now);
   if (error) return new Response(JSON.stringify({ error: "Internal error" }), { status: 500, headers });
   try {
     const principals = [...new Set((data ?? []).map((row) => row.principal_id))];
