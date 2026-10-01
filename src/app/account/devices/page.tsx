@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { AccountShell, useAccount } from "@/components/account/AccountShell";
 import { ConfirmDialog, InputDialog } from "@/components/Dialog";
 import { api } from "@/lib/api";
+import { ExternalDevicesSection } from "@/components/account/ExternalDevices";
 import type { Device, Subscription } from "@/components/account/types";
 
 type Profile = { id: string; name: string; enabled: boolean };
@@ -230,6 +231,7 @@ function DevicesBody() {
           ))}
         </ul>
       )}
+      <ExternalDevicesSection />
     </>
   );
 }
