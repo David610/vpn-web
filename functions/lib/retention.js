@@ -222,6 +222,15 @@ export async function pruneOperationalAlerts(supabase, env) {
   return { table: "operational_alerts", deleted: count ?? 0, cutoffDays: days };
 }
 
+export async function pruneCompatibilityAuthorizations(supabase, env) {
+  const days = envInt(env, "COMPATIBILITY_AUTH_RETENTION_DAYS", 7);
+  const cutoff = daysAgoIso(days);
+  const { error, count } = await supabase.from("compatibility_authorizations")
+    .delete({ count: "exact" }).eq("revoked", true).lt("updated_at", cutoff);
+  if (error) return { table: "compatibility_authorizations", error: error.message };
+  return { table: "compatibility_authorizations", deleted: count ?? 0, cutoffDays: days };
+}
+
 /**
  * Runs every retention step, each isolated so one table's failure doesn't
  * block the others. Called from functions/api/internal/retention-tick.js.
@@ -236,6 +245,7 @@ export async function runRetention(supabase, env) {
     pruneNodeRevisions,
     clearStaleRevokedDeviceMetadata,
     pruneOperationalAlerts,
+    pruneCompatibilityAuthorizations,
   ];
   const results = [];
   for (const step of steps) {
