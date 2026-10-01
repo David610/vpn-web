@@ -15,6 +15,12 @@ export async function subscriptionTokenHash(token, env) {
   return hmacSha256Hex(token, env.SUBSCRIPTION_TOKEN_HASH_KEY);
 }
 
+export async function rateLimitKeyHash(value, env) {
+  // Keep rate-limit identifiers in a separate HMAC domain without changing
+  // the deployed subscription-token lookup digest format.
+  return hmacSha256Hex("arcana:rate-limit:v1:" + value, env.SUBSCRIPTION_TOKEN_HASH_KEY);
+}
+
 export async function newProtocolCredential(env) {
   const material = {
     vless_uuid: crypto.randomUUID(),
