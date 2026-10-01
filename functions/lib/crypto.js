@@ -74,3 +74,19 @@ export async function sha256Hex(text) {
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
 }
+
+export function randomBase64Url(byteLength = 32) {
+  const bytes = crypto.getRandomValues(new Uint8Array(byteLength));
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+export async function hmacSha256Hex(text, key) {
+  if (!key || key.length < 32) throw new Error("subscription token hash key is missing or too short");
+  const imported = await crypto.subtle.importKey(
+    "raw", new TextEncoder().encode(key), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]
+  );
+  const digest = await crypto.subtle.sign("HMAC", imported, new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, "0")).join("");
+}

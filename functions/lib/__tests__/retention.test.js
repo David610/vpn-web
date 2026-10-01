@@ -141,6 +141,6 @@ describe("retention (F-18 / H-02)", () => {
       }),
     };
     const results = await runRetention(supabase, {});
-    expect(results.length).toBe(8);
+    expect(results.length).toBe(9);
   });
 });
