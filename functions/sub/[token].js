@@ -1,6 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import { decryptSecret } from "../lib/crypto.js";
-import { subscriptionTokenHash } from "../lib/external-credentials.js";
+import { rateLimitKeyHash, subscriptionTokenHash } from "../lib/external-credentials.js";
 import { renderers, UnsupportedClientModeError } from "../lib/subscription-renderers.js";
 import { checkRateLimit, clientIpKey, rateLimitedResponse } from "../lib/rate-limit.js";
 
@@ -24,7 +24,7 @@ export async function onRequestGet({ env, request, params }) {
   if (!/^[A-Za-z0-9_-]{43}$/.test(token)) return reply({ error: "Subscription not found" }, 404);
   const db = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, { auth: { autoRefreshToken: false, persistSession: false } });
   const tokenHash = await subscriptionTokenHash(token, env);
-  const ipHash = await subscriptionTokenHash(clientIpKey(request), env);
+  const ipHash = await rateLimitKeyHash(clientIpKey(request), env);
   if (!(await checkRateLimit(db, `sub:token:${tokenHash}`, { windowSeconds: 60, limit: 30 })) ||
       !(await checkRateLimit(db, `sub:ip:${ipHash}`, { windowSeconds: 60, limit: 120 }))) return rateLimitedResponse();
 
@@ -43,7 +43,8 @@ export async function onRequestGet({ env, request, params }) {
     .eq("id", device.desired_route_id).maybeSingle();
   if (!route?.enabled) return reply({ error: "Route temporarily unavailable" }, 503);
   const { data: targets, error: targetError } = await db.from("logical_route_targets")
-    .select("hop,node_id,priority").eq("route_id", route.id).eq("enabled", true).order("hop").order("priority");
+    .select("hop,node_id,priority").eq("route_id", route.id).eq("enabled", true).eq("published", true)
+    .order("hop").order("priority");
   if (targetError || !targets?.length || (route.privacy_class === "privacy_plus" && !targets.some((t) => t.hop === 2))) {
     return reply({ error: "Route temporarily unavailable" }, 503);
   }
@@ -60,8 +61,25 @@ export async function onRequestGet({ env, request, params }) {
   const { data: credentials, error: credentialError } = await db.from("compatibility_credentials")
     .select("credential_id,credential_ciphertext,credential_nonce,valid_from,valid_until,publish_from,revoked_at")
     .eq("device_id", device.device_id).is("revoked_at", null).order("publish_from", { ascending: false });
-  const credential = (credentials ?? []).find((c) => Date.parse(c.publish_from) <= Date.now() && Date.parse(c.valid_until) > Date.now());
-  if (credentialError || !credential) return reply({ error: "Credential temporarily unavailable" }, 503);
+  if (credentialError) return reply({ error: "Credential temporarily unavailable" }, 503);
+  const nowMs = Date.now();
+  const candidates = (credentials ?? []).filter((c) =>
+    Date.parse(c.publish_from) <= nowMs && Date.parse(c.valid_until) > nowMs);
+  const candidateIds = candidates.map((c) => c.credential_id);
+  const { data: loadedAuthorizations, error: loadedError } = candidateIds.length
+    ? await db.from("compatibility_authorizations")
+      .select("credential_id,loaded_at,revoked,valid_from,valid_until")
+      .eq("node_id", exitTarget.node_id)
+      .in("credential_id", candidateIds)
+    : { data: [], error: null };
+  if (loadedError) return reply({ error: "Credential temporarily unavailable" }, 503);
+  const loadedIds = new Set((loadedAuthorizations ?? [])
+    .filter((a) => a.loaded_at && !a.revoked && Date.parse(a.valid_from) <= nowMs && Date.parse(a.valid_until) > nowMs)
+    .map((a) => a.credential_id));
+  // Prefer the newest published generation only after the selected live node
+  // has explicitly acknowledged that generation. Until then A remains valid.
+  const credential = candidates.find((c) => loadedIds.has(c.credential_id));
+  if (!credential) return reply({ error: "Credential temporarily unavailable" }, 503);
   let material;
   try { material = JSON.parse(await decryptSecret(credential.credential_ciphertext, credential.credential_nonce, env.VPN_SECRETS_ENCRYPTION_KEY)); }
   catch { return reply({ error: "Credential temporarily unavailable" }, 503); }
