@@ -12,11 +12,13 @@ const CAPABILITIES = Object.freeze({
 
 export class UnsupportedClientModeError extends Error {}
 export const clientCapabilities = () => CAPABILITIES;
+export const supportedClientTypes = () => Object.keys(CAPABILITIES);
+export const supportsMode = (format, mode) => Boolean(CAPABILITIES[format]?.[mode]?.length);
 
 function assertSupported(format, mode) {
   const capability = CAPABILITIES[format];
   if (!capability) throw new UnsupportedClientModeError("unsupported subscription format");
-  if (!capability[mode]?.length) {
+  if (!supportsMode(format, mode)) {
     throw new UnsupportedClientModeError(`${format} cannot represent Arcana ${mode === "privacy_plus" ? "Privacy+" : mode}`);
   }
   return capability[mode];
