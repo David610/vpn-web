@@ -1,7 +1,7 @@
 import { getAccountForUser } from "../../lib/accounts.js";
 import { readJson, runAccountAction } from "../../lib/account-http.js";
 import { COMPATIBILITY_LIFETIME_MS, newOpaqueId, newProtocolCredential, newSubscriptionToken, subscriptionTokenHash, subscriptionUrl } from "../../lib/external-credentials.js";
-import { supportedClientTypes, supportsMode } from "../../lib/subscription-renderers.js";
+import { clientCapabilities, supportedClientTypes, supportsMode } from "../../lib/subscription-renderers.js";
 
 const CLIENTS = new Set(supportedClientTypes());
 const NAME = /^[\p{L}\p{N} ._'()-]{1,40}$/u;
@@ -11,10 +11,50 @@ export async function onRequestGet(context) {
     const account = await getAccountForUser(db, user.id);
     if (!account) return { status: 404, body: { error: "Account not found" } };
     const { data, error } = await db.from("external_vpn_devices")
-      .select("device_id,client_type,principal_id,desired_route_id,last_subscription_fetch_at,revoked_at,created_at")
+      .select("device_id,client_type,desired_route_id,last_subscription_fetch_at,revoked_at,created_at")
       .eq("account_id", account.accountId).order("created_at", { ascending: true });
     if (error) throw new Error(`external device lookup failed: ${error.message}`);
-    return { status: 200, body: { devices: data ?? [] } };
+    const ids = (data ?? []).map((device) => device.device_id);
+    const [{ data: baseDevices, error: baseError }, { data: routes, error: routeError }] = await Promise.all([
+      ids.length
+        ? db.from("devices").select("id,name,status,subscription_id").in("id", ids)
+        : Promise.resolve({ data: [], error: null }),
+      db.from("logical_routes")
+        .select("id,region,privacy_class,display_name")
+        .eq("enabled", true)
+        .order("region")
+        .order("privacy_class"),
+    ]);
+    if (baseError) throw new Error(`external base-device lookup failed: ${baseError.message}`);
+    if (routeError) throw new Error(`logical route lookup failed: ${routeError.message}`);
+    const baseById = new Map((baseDevices ?? []).map((device) => [device.id, device]));
+    const devices = (data ?? []).map((device) => {
+      const base = baseById.get(device.device_id);
+      return {
+        deviceId: device.device_id,
+        name: base?.name ?? "External device",
+        status: base?.status ?? (device.revoked_at ? "REVOKED" : "ACTIVE"),
+        subscriptionId: base?.subscription_id ?? null,
+        clientType: device.client_type,
+        desiredRouteId: device.desired_route_id,
+        lastSubscriptionFetchAt: device.last_subscription_fetch_at,
+        revokedAt: device.revoked_at,
+        createdAt: device.created_at,
+      };
+    });
+    return {
+      status: 200,
+      body: {
+        devices,
+        routes: (routes ?? []).map((route) => ({
+          id: route.id,
+          region: route.region,
+          privacyClass: route.privacy_class,
+          displayName: route.display_name,
+        })),
+        capabilities: clientCapabilities(),
+      },
+    };
   }, { recent: false });
 }
 
