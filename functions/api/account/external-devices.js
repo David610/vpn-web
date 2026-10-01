@@ -1,8 +1,9 @@
 import { getAccountForUser } from "../../lib/accounts.js";
 import { readJson, runAccountAction } from "../../lib/account-http.js";
 import { COMPATIBILITY_LIFETIME_MS, newOpaqueId, newProtocolCredential, newSubscriptionToken, subscriptionTokenHash, subscriptionUrl } from "../../lib/external-credentials.js";
+import { supportedClientTypes, supportsMode } from "../../lib/subscription-renderers.js";
 
-const CLIENTS = new Set(["hiddify", "shadowrocket", "incy", "singbox", "xray", "links"]);
+const CLIENTS = new Set(supportedClientTypes());
 const NAME = /^[\p{L}\p{N} ._'()-]{1,40}$/u;
 
 export async function onRequestGet(context) {
@@ -32,8 +33,9 @@ export async function onRequestPost(context) {
       .select("id,privacy_class,enabled").eq("id", routeId).maybeSingle();
     if (routeError) throw new Error(`route lookup failed: ${routeError.message}`);
     if (!route?.enabled) return { status: 404, body: { error: "Logical route not found" } };
-    if (route.privacy_class === "privacy_plus" && clientType !== "singbox") {
-      return { status: 422, body: { error: `${clientType} does not support Arcana Privacy+`, code: "unsupported_client_mode" } };
+    if (!supportsMode(clientType, route.privacy_class)) {
+      const modeName = route.privacy_class === "privacy_plus" ? "Privacy+" : route.privacy_class;
+      return { status: 422, body: { error: clientType + " does not support Arcana " + modeName, code: "unsupported_client_mode" } };
     }
 
     const token = newSubscriptionToken();
