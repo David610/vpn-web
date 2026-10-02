@@ -1,25 +1,15 @@
-const CAPABILITIES = Object.freeze({
-  hiddify: { fast: ["vless", "hysteria2"], privacy_plus: [] },
-  shadowrocket: { fast: ["vless", "hysteria2"], privacy_plus: [] },
-  incy: { fast: ["vless"], privacy_plus: [] },
-  // Privacy+ remains fail-closed until the pinned Phase-1 nested/detour
-  // fixture can be validated cross-repository. Supporting detour syntax in
-  // theory is not qualification of Arcana's exact two-hop topology.
-  singbox: { fast: ["vless", "hysteria2"], privacy_plus: [] },
-  xray: { fast: ["vless"], privacy_plus: [] },
-  links: { fast: ["vless", "hysteria2"], privacy_plus: [] },
-});
+import { clientCapabilities, protocolsForMode, supportsMode } from "./client-capabilities.js";
 
 export class UnsupportedClientModeError extends Error {}
-export const clientCapabilities = () => CAPABILITIES;
+export { clientCapabilities };
 
 function assertSupported(format, mode) {
-  const capability = CAPABILITIES[format];
+  const capability = clientCapabilities()[format];
   if (!capability) throw new UnsupportedClientModeError("unsupported subscription format");
-  if (!capability[mode]?.length) {
+  if (!supportsMode(format, mode)) {
     throw new UnsupportedClientModeError(`${format} cannot represent Arcana ${mode === "privacy_plus" ? "Privacy+" : mode}`);
   }
-  return capability[mode];
+  return protocolsForMode(format, mode);
 }
 
 function safeName(route) {
