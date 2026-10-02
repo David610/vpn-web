@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { renderers, UnsupportedClientModeError } from "../subscription-renderers.js";
 import { clientCapabilities, isSupportedClient, protocolsForMode, supportsMode } from "../client-capabilities.js";
+import { readFileSync } from "node:fs";
 
 const credential = { vless_uuid: "018f4f18-8b5d-7c21-9f2b-0f8a7c6d5e4f", hysteria2_password: "secret-that-is-not-a-subscription-token" };
 const route = { mode: "fast", displayName: "Germany — Fast", server: "edge.example.net", port: 443,
@@ -19,6 +20,7 @@ describe("subscription renderers", () => {
       expect(first).not.toContain("stripe");
       expect(first).not.toContain("supabase");
       if (format === "incy" || format === "xray") expect(first).not.toContain("hysteria2://");
+      expect(first).toBe(readFileSync(new URL(`../../../fixtures/subscriptions/${format}-fast.golden`, import.meta.url), "utf8"));
     }
   });
 

@@ -1,0 +1,30 @@
+{
+  "schema_version": 2,
+  "snapshot_revision": 8,
+  "authorizations": [
+    {
+      "principal_id": "ext_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "credential_id": "cred_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "class": "compatibility",
+      "valid_from": "2026-10-01T00:00:00.000Z",
+      "valid_until": "2026-10-08T00:00:00.000Z",
+      "revoked": false,
+      "protocol": {
+        "vless_uuid": "018f4f18-8b5d-7c21-9f2b-0f8a7c6d5e4f",
+        "hysteria2_password": "opaque-protocol-secret-a"
+      }
+    },
+    {
+      "principal_id": "ext_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "credential_id": "cred_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+      "class": "compatibility",
+      "valid_from": "2026-10-01T00:00:00.000Z",
+      "valid_until": "2026-10-08T00:00:00.000Z",
+      "revoked": false,
+      "protocol": {
+        "vless_uuid": "118f4f18-8b5d-7c21-9f2b-0f8a7c6d5e4f",
+        "hysteria2_password": "opaque-protocol-secret-b"
+      }
+    }
+  ]
+}

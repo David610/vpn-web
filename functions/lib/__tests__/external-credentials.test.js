@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { hmacSha256Hex } from "../crypto.js";
-import { newOpaqueId, newSubscriptionToken } from "../external-credentials.js";
+import { legacySubscriptionTokenHash, newOpaqueId, newSubscriptionToken, rateLimitIpHash, subscriptionTokenHash } from "../external-credentials.js";
 
 describe("external credential identifiers", () => {
   it("uses independent high-entropy opaque identifiers", () => {
@@ -19,5 +19,15 @@ describe("external credential identifiers", () => {
     expect(digest).toMatch(/^[0-9a-f]{64}$/);
     expect(digest).not.toContain(token);
     expect(await hmacSha256Hex(token, "another-test-key-at-least-thirty-two-bytes")).not.toBe(digest);
+  });
+
+  it("domain-separates new token and IP hashes while retaining legacy lookup", async () => {
+    const env = { SUBSCRIPTION_TOKEN_HASH_KEY: "test-key-with-at-least-thirty-two-bytes-long" };
+    const value = "same-input";
+    const legacy = await legacySubscriptionTokenHash(value, env);
+    expect(legacy).toBe(await hmacSha256Hex(value, env.SUBSCRIPTION_TOKEN_HASH_KEY));
+    expect(await subscriptionTokenHash(value, env)).not.toBe(legacy);
+    expect(await rateLimitIpHash(value, env)).not.toBe(legacy);
+    expect(await rateLimitIpHash(value, env)).not.toBe(await subscriptionTokenHash(value, env));
   });
 });

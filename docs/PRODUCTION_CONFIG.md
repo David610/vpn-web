@@ -40,6 +40,8 @@ packs; devices can be moved between the account's subscriptions. Some names
 | `SUPABASE_ANON_KEY` | runtime | Supabase | GoTrue calls from `functions/lib/gotrue.js` (falls back to service role) | TBD |
 | `SITE_URL` | runtime | Cloudflare Pages | Absolute URLs in emails, Stripe success/cancel redirects | TBD |
 | `VPN_SECRETS_ENCRYPTION_KEY` | secret | Cloudflare Pages | 32-byte hex key encrypting VPN credentials at rest | TBD |
+| `SUBSCRIPTION_TOKEN_HASH_KEY` | secret | Cloudflare Pages | Independent HMAC key for domain-separated subscription-token lookup and IP rate-limit pseudonyms | TBD |
+| `EXTERNAL_AUTHORIZATION_ACK_MODE` | runtime | ops | External authorization rollout gate: `legacy` until all nodes ACK schema 2, then deliberately set `enforce`; unknown values fail closed | TBD |
 
 ## Billing — Stripe (test mode for now)
 

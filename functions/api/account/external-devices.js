@@ -2,6 +2,7 @@ import { getAccountForUser } from "../../lib/accounts.js";
 import { readJson, runAccountAction } from "../../lib/account-http.js";
 import { COMPATIBILITY_LIFETIME_MS, newOpaqueId, newProtocolCredential, newSubscriptionToken, subscriptionTokenHash, subscriptionUrl } from "../../lib/external-credentials.js";
 import { isSupportedClient, supportsMode } from "../../lib/client-capabilities.js";
+import { clientCapabilities } from "../../lib/client-capabilities.js";
 
 const NAME = /^[\p{L}\p{N} ._'()-]{1,40}$/u;
 
@@ -13,7 +14,10 @@ export async function onRequestGet(context) {
       .select("device_id,client_type,principal_id,desired_route_id,last_subscription_fetch_at,revoked_at,created_at")
       .eq("account_id", account.accountId).order("created_at", { ascending: true });
     if (error) throw new Error(`external device lookup failed: ${error.message}`);
-    return { status: 200, body: { devices: data ?? [] } };
+    const { data: routes, error: routeError } = await db.from("logical_routes")
+      .select("id,region,privacy_class,display_name").eq("enabled", true).order("display_name");
+    if (routeError) throw new Error(`logical route lookup failed: ${routeError.message}`);
+    return { status: 200, body: { devices: data ?? [], routes: routes ?? [], capabilities: clientCapabilities() } };
   }, { recent: false });
 }
 

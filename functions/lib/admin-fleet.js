@@ -95,6 +95,8 @@ export const CONFIG_VARIABLES = [
   { name: "SUPABASE_ANON_KEY", group: "Core", secret: false, required: false, purpose: "GoTrue calls (falls back to service role)" },
   { name: "SITE_URL", group: "Core", secret: false, required: true, purpose: "Absolute links in email/Stripe redirects" },
   { name: "VPN_SECRETS_ENCRYPTION_KEY", group: "Core", secret: true, required: true, purpose: "Encrypts VPN credentials at rest" },
+  { name: "SUBSCRIPTION_TOKEN_HASH_KEY", group: "Core", secret: true, required: true, purpose: "Domain-separated external token/IP HMACs" },
+  { name: "EXTERNAL_AUTHORIZATION_ACK_MODE", group: "Core", secret: false, required: true, purpose: "Explicit legacy-to-enforced node ACK rollout gate" },
   // Billing
   { name: "STRIPE_API_KEY", group: "Billing", secret: true, required: true, purpose: "Stripe checkout/portal/subscription API" },
   { name: "STRIPE_SIGNING_SECRET", group: "Billing", secret: true, required: true, purpose: "Stripe webhook signature check" },

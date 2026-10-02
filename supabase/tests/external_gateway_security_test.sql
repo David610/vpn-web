@@ -10,7 +10,9 @@ begin
   foreach protected_table in array array[
     'external_vpn_devices',
     'compatibility_credentials',
-    'compatibility_authorizations'
+    'compatibility_authorizations',
+    'compatibility_authorization_node_state',
+    'compatibility_authorization_deployments'
   ] loop
     assert not has_table_privilege('anon', 'public.' || protected_table, 'select'),
       'anon must not read ' || protected_table;
@@ -38,6 +40,15 @@ begin
     'authenticated',
     'public.rotate_compatibility_credential(uuid,uuid,text,text,text,timestamptz,integer)',
     'execute'), 'authenticated must not invoke credential rotation directly';
+  assert not has_function_privilege('authenticated',
+    'public.ack_compatibility_authorization_snapshot(text,bigint)','execute'),
+    'authenticated must not forge node acknowledgement';
+  assert not has_function_privilege('anon',
+    'public.get_compatibility_authorization_snapshot(text)','execute'),
+    'anon must not fetch node snapshots directly';
+  assert not has_function_privilege('authenticated',
+    'public.get_publishable_compatibility_deployments(text[])','execute'),
+    'authenticated must not inspect publication proofs';
 end $$;
 
 -- The data-plane projection must be incapable of acquiring customer identity

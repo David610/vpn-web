@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "remarks": "Germany — Fast",
+  "servers": [
+    "vless://018f4f18-8b5d-7c21-9f2b-0f8a7c6d5e4f@edge.example.net:443?encryption=none&security=reality&sni=cdn.example.net&fp=chrome&pbk=public-key&sid=a1b2c3d4&type=tcp&flow=xtls-rprx-vision#Germany%20%E2%80%94%20Fast"
+  ]
+}
