@@ -103,7 +103,11 @@ begin
   if p_snapshot_revision > v_state.desired_revision then
     raise exception 'future_snapshot_revision';
   end if;
-  if p_snapshot_revision > v_state.applied_revision then
+  -- Equality normally is an idempotent no-op. The one state transition it
+  -- may still perform is pending -> applied when the exact desired snapshot
+  -- has been applied; this makes the initial empty revision 0 ACKable.
+  if p_snapshot_revision > v_state.applied_revision or
+     (p_snapshot_revision = v_state.desired_revision and v_state.state <> 'applied') then
     update public.compatibility_authorization_node_state s set
       applied_revision=p_snapshot_revision,
       state=case when p_snapshot_revision=s.desired_revision then 'applied' else 'pending' end,

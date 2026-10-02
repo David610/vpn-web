@@ -6,6 +6,13 @@ const a = { node_id: "node-a", hop: 1, priority: 100 };
 const b = { node_id: "node-b", hop: 1, priority: 10 };
 
 describe("compatibility publication", () => {
+  it("preserves priority publication in explicit legacy rollout mode", () => {
+    const selected = selectCompatibilityPublication({
+      credentials: [credential], targets: [b, a], proofs: [], mode: "legacy", privacyClass: "fast",
+    });
+    expect(selected.exitTarget.node_id).toBe("node-b");
+  });
+
   it("keeps acknowledged A while higher-priority healthy B is pending", () => {
     const selected = selectCompatibilityPublication({
       credentials: [credential], targets: [b, a], mode: "enforce", privacyClass: "fast",

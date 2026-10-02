@@ -5,7 +5,8 @@ begin;
 -- physical nodes referenced by its logical targets; keep the production FK.
 insert into public.nodes(node_id,api_key_hash,location_id,lifecycle_state,provider,hostname)
 values ('node-1',repeat('1',64),'00000000-0000-4000-8000-000000000000','READY','mock','node-1.example.test'),
-       ('node-2',repeat('2',64),'00000000-0000-4000-8000-000000000000','READY','mock','node-2.example.test');
+       ('node-2',repeat('2',64),'00000000-0000-4000-8000-000000000000','READY','mock','node-2.example.test'),
+       ('node-3',repeat('3',64),'00000000-0000-4000-8000-000000000000','READY','mock','node-3.example.test');
 
 insert into public.logical_routes(id,region,privacy_class,display_name)
 values ('route_test_fast','test','fast','Test — Fast'),
@@ -84,7 +85,8 @@ begin
   exception when others then
     if sqlerrm <> 'compatibility_credential_limit' then raise; end if;
   end;
-  update public.compatibility_credentials set valid_from=now()-interval '1 second',valid_until=now()
+  update public.compatibility_credentials set
+    valid_from=now()-interval '3 seconds',publish_from=now()-interval '2 seconds',valid_until=now()-interval '1 second'
     where device_id=v_device and credential_ciphertext<>'cipher-b';
   prefix := lpad('rotationc',43,'d');
   insert into public.compatibility_credentials(device_id,credential_id,credential_ciphertext,credential_nonce,valid_from,valid_until,publish_from)
@@ -143,5 +145,34 @@ begin
   assert v_count=0;
   perform public.ack_compatibility_authorization_snapshot('node-2',v_revision);
   assert (select applied_revision=desired_revision from public.compatibility_authorization_node_state where node_id='node-2');
+
+  -- Revision zero is the explicit initial empty snapshot. ACK 0 transitions
+  -- pending -> applied and is idempotent. The first projected credential then
+  -- becomes revision 1 and remains non-publishable until exact ACK 1.
+  select snapshot_revision,jsonb_array_length(authorizations) into v_revision,v_count
+    from public.get_compatibility_authorization_snapshot('node-3');
+  assert v_revision=0 and v_count=0;
+  perform public.ack_compatibility_authorization_snapshot('node-3',0);
+  assert (select state='applied' and desired_revision=0 and applied_revision=0
+    from public.compatibility_authorization_node_state where node_id='node-3');
+  perform public.ack_compatibility_authorization_snapshot('node-3',0);
+  assert (select state='applied' from public.compatibility_authorization_node_state where node_id='node-3');
+  insert into public.compatibility_authorizations(principal_id,credential_id,credential_class,logical_route_id,node_id,
+    valid_from,valid_until,revoked,credential_ciphertext,credential_nonce)
+  select principal_id,credential_id,credential_class,logical_route_id,'node-3',valid_from,valid_until,revoked,
+    credential_ciphertext,credential_nonce from public.compatibility_authorizations
+    where node_id='node-1' and not revoked and valid_until>now() limit 1;
+  assert (select desired_revision=1 and applied_revision=0 and state='pending'
+    from public.compatibility_authorization_node_state where node_id='node-3');
+  perform public.ack_compatibility_authorization_snapshot('node-3',0);
+  assert (select state='pending' and applied_revision=0
+    from public.compatibility_authorization_node_state where node_id='node-3');
+  assert not exists(select 1 from public.get_publishable_compatibility_deployments(
+    array[(select credential_id from public.compatibility_authorizations where node_id='node-3')]) where node_id='node-3');
+  perform public.ack_compatibility_authorization_snapshot('node-3',1);
+  assert (select state='applied' and applied_revision=1
+    from public.compatibility_authorization_node_state where node_id='node-3');
+  assert exists(select 1 from public.get_publishable_compatibility_deployments(
+    array[(select credential_id from public.compatibility_authorizations where node_id='node-3')]) where node_id='node-3');
 end $$;
 rollback;

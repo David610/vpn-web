@@ -58,6 +58,25 @@ describe("agent authorization schema negotiation", () => {
     expect(JSON.stringify(body)).not.toMatch(/account|customer|billing|subscription_token/);
   });
 
+  it("returns revision zero as a supported initial empty v2 snapshot", async () => {
+    rpc.mockResolvedValueOnce({ data: [{ snapshot_revision: 0, authorizations: [] }], error: null });
+    const res = await onRequestGet({ env, request: new Request("https://x.test/api/agent/authorizations?schema=2") });
+    expect(await res.json()).toEqual({ schema_version: 2, snapshot_revision: 0, authorizations: [] });
+  });
+
+  it("accepts an exact revision-zero ACK response as applied", async () => {
+    rpc.mockResolvedValueOnce({ data: [{ desired_revision: 0, applied_revision: 0, state: "applied" }], error: null });
+    const request = new Request("https://x.test/api/agent/authorizations?schema=2", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ schema_version: 2, snapshot_revision: 0 }),
+    });
+    const res = await onRequestPost({ env, request });
+    expect(rpc).toHaveBeenCalledWith("ack_compatibility_authorization_snapshot", {
+      p_node_id: "node-1", p_snapshot_revision: 0,
+    });
+    expect(await res.json()).toEqual({ schema_version: 2, desired_revision: 0, applied_revision: 0, state: "applied" });
+  });
+
   it("ACKs exactly the posted snapshot revision, including a stale revision", async () => {
     const request = new Request("https://x.test/api/agent/authorizations?schema=2", {
       method: "POST", headers: { "Content-Type": "application/json" },

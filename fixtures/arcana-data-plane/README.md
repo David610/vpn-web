@@ -8,8 +8,8 @@ cross-repository shape during rollout.
   `logical_route_id`.
 - `v2-active.json`, `v2-overlap.json`, and `v2-empty.json` describe
   `GET /api/agent/authorizations?schema=2`. V2 adds `schema_version` and the
-  node-scoped `snapshot_revision`, and deliberately omits logical-route and
-  customer metadata.
+  node-scoped `snapshot_revision`, including revision 0 for the initial empty
+  snapshot, and deliberately omits logical-route and customer metadata.
 - `invalid-identity-leak.json` is a negative security fixture and must be
   rejected because it contains control-plane identity.
 
