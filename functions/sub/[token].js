@@ -3,6 +3,7 @@ import { decryptSecret } from "../lib/crypto.js";
 import { legacySubscriptionTokenHash, rateLimitIpHash, subscriptionTokenHash } from "../lib/external-credentials.js";
 import { renderers, UnsupportedClientModeError } from "../lib/subscription-renderers.js";
 import { checkRateLimit, clientIpKey, rateLimitedResponse } from "../lib/rate-limit.js";
+import { selectCompatibilityPublication } from "../lib/compatibility-publication.js";
 
 const SECURITY_HEADERS = {
   "Cache-Control": "private, no-store, no-cache, max-age=0, must-revalidate",
@@ -63,26 +64,27 @@ export async function onRequestGet({ env, request, params }) {
     .select("credential_id,credential_ciphertext,credential_nonce,valid_from,valid_until,publish_from,revoked_at")
     .eq("device_id", device.device_id).is("revoked_at", null).order("publish_from", { ascending: false });
   if (credentialError || !credentials?.length) return reply({ error: "Credential temporarily unavailable" }, 503);
-  // A physical endpoint is publishable only after that node has acknowledged
-  // the exact credential revision. This makes route changes make-before-break:
-  // a higher-priority pending B is ignored while acknowledged A stays live.
-  const { data: deployments, error: deploymentError } = await db.from("compatibility_authorization_deployments")
-    .select("node_id,credential_id,state,desired_revision,applied_revision")
-    .in("credential_id", (credentials ?? []).map((c) => c.credential_id)).eq("state", "applied");
-  if (deploymentError) return reply({ error: "Route temporarily unavailable" }, 503);
   const now = Date.now();
   const eligibleCredentials = (credentials ?? []).filter((c) =>
     Date.parse(c.publish_from) <= now && Date.parse(c.valid_until) > now);
-  const exitNodeIds = new Set(selected.filter((t) =>
-    t.hop === (route.privacy_class === "privacy_plus" ? 2 : 1)).map((t) => t.node_id));
-  const credential = eligibleCredentials.find((c) => (deployments ?? []).some((d) =>
-    d.credential_id === c.credential_id && exitNodeIds.has(d.node_id) && d.applied_revision >= d.desired_revision));
-  if (!credential) return reply({ error: "Credential temporarily unavailable" }, 503);
-  const liveNodes = new Set((deployments ?? []).filter((d) =>
-    d.credential_id === credential.credential_id && d.applied_revision >= d.desired_revision).map((d) => d.node_id));
-  const acknowledged = selected.filter((target) => liveNodes.has(target.node_id));
-  const acknowledgedExit = acknowledged.find((t) => t.hop === (route.privacy_class === "privacy_plus" ? 2 : 1));
-  if (!acknowledgedExit) return reply({ error: "Route temporarily unavailable" }, 503);
+  if (!eligibleCredentials.length) return reply({ error: "Credential temporarily unavailable" }, 503);
+  // Explicit two-stage rollout gate: deploy v2-capable agents first in
+  // "legacy", observe ACKs, then deliberately switch to "enforce". Unknown
+  // values fail closed rather than accidentally disabling the security gate.
+  const ackMode = env.EXTERNAL_AUTHORIZATION_ACK_MODE ?? "legacy";
+  if (!new Set(["legacy", "enforce"]).has(ackMode)) return reply({ error: "Route temporarily unavailable" }, 503);
+  let proofs = [];
+  if (ackMode === "enforce") {
+    const { data, error: proofError } = await db.rpc("get_publishable_compatibility_deployments", {
+      p_credential_ids: eligibleCredentials.map((c) => c.credential_id),
+    });
+    if (proofError) return reply({ error: "Route temporarily unavailable" }, 503);
+    proofs = data ?? [];
+  }
+  const publication = selectCompatibilityPublication({ credentials: eligibleCredentials, targets: selected,
+    proofs, mode: ackMode, privacyClass: route.privacy_class });
+  if (!publication) return reply({ error: "Route temporarily unavailable" }, 503);
+  const { credential, liveTargets: acknowledged, exitTarget: acknowledgedExit } = publication;
   let material;
   try { material = JSON.parse(await decryptSecret(credential.credential_ciphertext, credential.credential_nonce, env.VPN_SECRETS_ENCRYPTION_KEY)); }
   catch { return reply({ error: "Credential temporarily unavailable" }, 503); }

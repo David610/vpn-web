@@ -44,3 +44,23 @@ screenshots/exports of every step before live qualification:
 This checklist cannot be declared complete from repository CI. It requires
 live Cloudflare credentials and provider-side inspection; no production change
 or live verification was performed as part of the repository work.
+
+## Authorization-v2 rollout order
+
+Acknowledgement enforcement is intentionally controlled by
+`EXTERNAL_AUTHORIZATION_ACK_MODE`. The only accepted values are `legacy` (the
+default migration mode) and `enforce`; an unknown value fails subscription
+publication closed. Roll out in this order:
+
+1. Merge, release, and deploy the compatible `singbox-vpn` change first.
+2. Verify every target node requests `?schema=2` and successfully ACKs the
+   exact `snapshot_revision` it applied.
+3. Deploy vpn-web with `EXTERNAL_AUTHORIZATION_ACK_MODE=legacy`; confirm node
+   `applied_revision` catches up without changing subscription publication.
+4. Set `EXTERNAL_AUTHORIZATION_ACK_MODE=enforce` only after that evidence is
+   present. From then on, a target is publishable only when its required
+   revision is proven applied.
+
+Never enable enforcement before the compatible agent rollout. Existing rows
+start pending by design; the explicit legacy stage prevents a fleet-wide 503
+while preserving a deliberate, auditable switch to strict enforcement.

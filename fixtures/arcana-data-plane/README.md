@@ -1,8 +1,18 @@
-# Arcana data-plane contract fixtures
+# Arcana data-plane authorization contract fixtures
 
-Canonical, identity-free examples of `GET /api/agent/authorizations`. The
-`singbox-vpn` repository should consume these files in contract tests rather
-than inventing a second payload. `active.json`, `overlap.json`, `revoked.json`,
-and `empty.json` are valid snapshots. Files prefixed `invalid-` are negative
-security fixtures and **must** be rejected (the example leaks control-plane
-identity). Bearer subscription tokens are never part of this contract.
+These fixtures are explicitly versioned; there is no single unversioned
+cross-repository shape during rollout.
+
+- `legacy-active.json` and `legacy-revoked.json` describe the frozen response
+  from unversioned `GET /api/agent/authorizations`. Legacy entries include
+  `logical_route_id`.
+- `v2-active.json`, `v2-overlap.json`, and `v2-empty.json` describe
+  `GET /api/agent/authorizations?schema=2`. V2 adds `schema_version` and the
+  node-scoped `snapshot_revision`, and deliberately omits logical-route and
+  customer metadata.
+- `invalid-identity-leak.json` is a negative security fixture and must be
+  rejected because it contains control-plane identity.
+
+The `singbox-vpn` repository should consume both legacy and v2 fixtures in its
+transition contract tests. No response may contain account, customer, billing,
+or subscription-token data.

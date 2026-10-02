@@ -22,6 +22,10 @@ SITE_URL=http://127.0.0.1:8788
 
 # VPS provisioning agent (docs/superpowers/specs/2026-09-21-vpn-provisioning-agent-design.md)
 VPN_SECRETS_ENCRYPTION_KEY=<64 hex chars — generate with `openssl rand -hex 32`, real value only in production>
+# HMAC lookup key for external subscription bearer tokens and privacy-safe rate-limit keys.
+SUBSCRIPTION_TOKEN_HASH_KEY=<64 hex chars — generate independently with `openssl rand -hex 32`>
+# Rollout gate: keep legacy until every node supports schema 2 and ACKs snapshots.
+EXTERNAL_AUTHORIZATION_ACK_MODE=legacy
 RESEND_API_KEY=<paste from Resend dashboard>
 # onboarding@resend.dev works without a verified domain, for local/test
 # sends only — replace with a real from-address once a domain exists.
