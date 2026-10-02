@@ -39,3 +39,19 @@ export async function onRequestGet({ env, request }) {
     return new Response(JSON.stringify({ error: "Internal error" }), { status: 500, headers });
   }
 }
+
+export async function onRequestPost({ env, request }) {
+  const headers = { "Content-Type": "application/json", "Cache-Control": "no-store" };
+  const db = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, { auth: { autoRefreshToken: false, persistSession: false } });
+  const nodeId = await authenticateNode(request, db);
+  if (!nodeId) return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers });
+  let body;
+  try { body = await request.json(); } catch { return new Response(JSON.stringify({ error: "Invalid JSON" }), { status: 400, headers }); }
+  const credentialIds = body?.credential_ids;
+  if (!Array.isArray(credentialIds) || credentialIds.length > 500 || credentialIds.some((id) => !/^cred_[A-Za-z0-9_-]{32,80}$/.test(id))) {
+    return new Response(JSON.stringify({ error: "Invalid acknowledgement" }), { status: 400, headers });
+  }
+  const { data, error } = await db.rpc("ack_compatibility_authorizations", { p_node_id: nodeId, p_credential_ids: credentialIds });
+  if (error) return new Response(JSON.stringify({ error: "Internal error" }), { status: 500, headers });
+  return new Response(JSON.stringify({ acknowledged: data }), { status: 200, headers });
+}

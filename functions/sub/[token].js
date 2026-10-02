@@ -1,6 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import { decryptSecret } from "../lib/crypto.js";
-import { subscriptionTokenHash } from "../lib/external-credentials.js";
+import { legacySubscriptionTokenHash, rateLimitIpHash, subscriptionTokenHash } from "../lib/external-credentials.js";
 import { renderers, UnsupportedClientModeError } from "../lib/subscription-renderers.js";
 import { checkRateLimit, clientIpKey, rateLimitedResponse } from "../lib/rate-limit.js";
 
@@ -24,13 +24,14 @@ export async function onRequestGet({ env, request, params }) {
   if (!/^[A-Za-z0-9_-]{43}$/.test(token)) return reply({ error: "Subscription not found" }, 404);
   const db = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, { auth: { autoRefreshToken: false, persistSession: false } });
   const tokenHash = await subscriptionTokenHash(token, env);
-  const ipHash = await subscriptionTokenHash(clientIpKey(request), env);
+  const legacyTokenHash = await legacySubscriptionTokenHash(token, env);
+  const ipHash = await rateLimitIpHash(clientIpKey(request), env);
   if (!(await checkRateLimit(db, `sub:token:${tokenHash}`, { windowSeconds: 60, limit: 30 })) ||
       !(await checkRateLimit(db, `sub:ip:${ipHash}`, { windowSeconds: 60, limit: 120 }))) return rateLimitedResponse();
 
   const { data: device, error } = await db.from("external_vpn_devices")
     .select("device_id,client_type,principal_id,desired_route_id,revoked_at,subscription_expires_at")
-    .eq("subscription_token_hash", tokenHash).maybeSingle();
+    .in("subscription_token_hash", [tokenHash, legacyTokenHash]).maybeSingle();
   if (error) return reply({ error: "Temporarily unavailable" }, 503);
   if (!device || device.revoked_at || (device.subscription_expires_at && Date.parse(device.subscription_expires_at) <= Date.now())) {
     return reply({ error: "Subscription not found" }, 404);
@@ -54,14 +55,34 @@ export async function onRequestGet({ env, request, params }) {
   if (nodesError) return reply({ error: "Route temporarily unavailable" }, 503);
   const byId = new Map((nodes ?? []).map((n) => [n.node_id, n]));
   const selected = targets.map((t) => ({ ...t, node: byId.get(t.node_id) })).filter((t) => t.node);
-  const exitTarget = selected.find((t) => t.hop === (route.privacy_class === "privacy_plus" ? 2 : 1));
-  if (!exitTarget) return reply({ error: "Route temporarily unavailable" }, 503);
+  if (!selected.find((t) => t.hop === (route.privacy_class === "privacy_plus" ? 2 : 1))) {
+    return reply({ error: "Route temporarily unavailable" }, 503);
+  }
 
   const { data: credentials, error: credentialError } = await db.from("compatibility_credentials")
     .select("credential_id,credential_ciphertext,credential_nonce,valid_from,valid_until,publish_from,revoked_at")
     .eq("device_id", device.device_id).is("revoked_at", null).order("publish_from", { ascending: false });
-  const credential = (credentials ?? []).find((c) => Date.parse(c.publish_from) <= Date.now() && Date.parse(c.valid_until) > Date.now());
-  if (credentialError || !credential) return reply({ error: "Credential temporarily unavailable" }, 503);
+  if (credentialError || !credentials?.length) return reply({ error: "Credential temporarily unavailable" }, 503);
+  // A physical endpoint is publishable only after that node has acknowledged
+  // the exact credential revision. This makes route changes make-before-break:
+  // a higher-priority pending B is ignored while acknowledged A stays live.
+  const { data: deployments, error: deploymentError } = await db.from("compatibility_authorization_deployments")
+    .select("node_id,credential_id,state,desired_revision,applied_revision")
+    .in("credential_id", (credentials ?? []).map((c) => c.credential_id)).eq("state", "applied");
+  if (deploymentError) return reply({ error: "Route temporarily unavailable" }, 503);
+  const now = Date.now();
+  const eligibleCredentials = (credentials ?? []).filter((c) =>
+    Date.parse(c.publish_from) <= now && Date.parse(c.valid_until) > now);
+  const exitNodeIds = new Set(selected.filter((t) =>
+    t.hop === (route.privacy_class === "privacy_plus" ? 2 : 1)).map((t) => t.node_id));
+  const credential = eligibleCredentials.find((c) => (deployments ?? []).some((d) =>
+    d.credential_id === c.credential_id && exitNodeIds.has(d.node_id) && d.applied_revision >= d.desired_revision));
+  if (!credential) return reply({ error: "Credential temporarily unavailable" }, 503);
+  const liveNodes = new Set((deployments ?? []).filter((d) =>
+    d.credential_id === credential.credential_id && d.applied_revision >= d.desired_revision).map((d) => d.node_id));
+  const acknowledged = selected.filter((target) => liveNodes.has(target.node_id));
+  const acknowledgedExit = acknowledged.find((t) => t.hop === (route.privacy_class === "privacy_plus" ? 2 : 1));
+  if (!acknowledgedExit) return reply({ error: "Route temporarily unavailable" }, 503);
   let material;
   try { material = JSON.parse(await decryptSecret(credential.credential_ciphertext, credential.credential_nonce, env.VPN_SECRETS_ENCRYPTION_KEY)); }
   catch { return reply({ error: "Credential temporarily unavailable" }, 503); }
@@ -69,12 +90,12 @@ export async function onRequestGet({ env, request, params }) {
   const routeMaterial = (n) => ({ server: n.hostname || n.ip_address, port: n.transport_port,
     tlsServerName: n.tls_server_name, realityPublicKey: n.reality_public_key,
     realityShortId: n.reality_short_id, realityFingerprint: n.reality_fingerprint, vlessFlow: n.vless_flow });
-  const publicRoute = { ...routeMaterial(exitTarget.node), displayName: route.display_name,
-    mode: route.privacy_class, entry: route.privacy_class === "privacy_plus" ? routeMaterial(selected.find((t) => t.hop === 1)?.node) : null };
+  const publicRoute = { ...routeMaterial(acknowledgedExit.node), displayName: route.display_name,
+    mode: route.privacy_class, entry: route.privacy_class === "privacy_plus" ? routeMaterial(acknowledged.find((t) => t.hop === 1)?.node) : null };
   try {
     const rendered = renderers[format]({ route: publicRoute, credential: material });
     await db.from("external_vpn_devices").update({ last_subscription_fetch_at: new Date().toISOString() })
-      .eq("device_id", device.device_id).eq("subscription_token_hash", tokenHash);
+      .eq("device_id", device.device_id).in("subscription_token_hash", [tokenHash, legacyTokenHash]);
     return reply(rendered, 200, format === "singbox" || format === "xray" ? "application/json; charset=utf-8" : "text/plain; charset=utf-8");
   } catch (err) {
     if (err instanceof UnsupportedClientModeError) return reply({ error: err.message, code: "unsupported_client_mode" }, 422);

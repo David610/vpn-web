@@ -1,0 +1,1 @@
+{"authorizations":[{"principal_id":"ext_DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD","credential_id":"cred_DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD","class":"compatibility","logical_route_id":"route_de_fast","valid_from":"2026-10-01T00:00:00.000Z","valid_until":"2026-10-08T00:00:00.000Z","revoked":false,"account_id":"MUST_BE_REJECTED","protocol":{}}]}
