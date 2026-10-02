@@ -1,8 +1,8 @@
 import { getAccountForUser } from "../../lib/accounts.js";
 import { readJson, runAccountAction } from "../../lib/account-http.js";
 import { COMPATIBILITY_LIFETIME_MS, newOpaqueId, newProtocolCredential, newSubscriptionToken, subscriptionTokenHash, subscriptionUrl } from "../../lib/external-credentials.js";
+import { isSupportedClient, supportsMode } from "../../lib/client-capabilities.js";
 
-const CLIENTS = new Set(["hiddify", "shadowrocket", "incy", "singbox", "xray", "links"]);
 const NAME = /^[\p{L}\p{N} ._'()-]{1,40}$/u;
 
 export async function onRequestGet(context) {
@@ -22,7 +22,7 @@ export async function onRequestPost(context) {
     const parsed = await readJson(context.request);
     if (parsed.error) return { status: 400, body: { error: "Invalid JSON body" } };
     const { name, clientType, routeId, subscriptionId } = parsed.body;
-    if (!NAME.test(String(name ?? "").trim()) || !CLIENTS.has(clientType) ||
+    if (!NAME.test(String(name ?? "").trim()) || !isSupportedClient(clientType) ||
         !/^route_[a-z0-9_]{3,60}$/.test(routeId ?? "") || !/^[0-9]{1,18}$/.test(String(subscriptionId ?? ""))) {
       return { status: 400, body: { error: "Invalid external device request" } };
     }
@@ -32,7 +32,7 @@ export async function onRequestPost(context) {
       .select("id,privacy_class,enabled").eq("id", routeId).maybeSingle();
     if (routeError) throw new Error(`route lookup failed: ${routeError.message}`);
     if (!route?.enabled) return { status: 404, body: { error: "Logical route not found" } };
-    if (route.privacy_class === "privacy_plus" && clientType !== "singbox") {
+    if (!supportsMode(clientType, route.privacy_class)) {
       return { status: 422, body: { error: `${clientType} does not support Arcana Privacy+`, code: "unsupported_client_mode" } };
     }
 

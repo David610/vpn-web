@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { clientCapabilities, renderers, UnsupportedClientModeError } from "../subscription-renderers.js";
+import { renderers, UnsupportedClientModeError } from "../subscription-renderers.js";
+import { clientCapabilities, isSupportedClient, protocolsForMode, supportsMode } from "../client-capabilities.js";
 
 const credential = { vless_uuid: "018f4f18-8b5d-7c21-9f2b-0f8a7c6d5e4f", hysteria2_password: "secret-that-is-not-a-subscription-token" };
 const route = { mode: "fast", displayName: "Germany — Fast", server: "edge.example.net", port: 443,
@@ -27,6 +28,10 @@ describe("subscription renderers", () => {
         .toThrow(UnsupportedClientModeError);
     }
     expect(Object.values(clientCapabilities()).every((c) => c.privacy_plus.length === 0)).toBe(true);
+    expect(supportsMode("singbox", "privacy_plus")).toBe(false);
+    expect(supportsMode("hiddify", "fast")).toBe(true);
+    expect(protocolsForMode("incy", "fast")).toEqual(["vless"]);
+    expect(isSupportedClient("unknown-client")).toBe(false);
   });
 
   it("publishes a rotated B credential without changing the logical name", () => {
