@@ -11,6 +11,7 @@
     "lint": "next lint && eslint functions scripts --ext .js,.mjs",
     "test": "vitest run",
     "check-log-secrets": "node scripts/check-log-secrets.mjs",
+    "check-migration-versions": "node scripts/check-migration-versions.mjs",
     "check-production-config": "ARCANA_PRODUCTION_DEPLOY=1 node scripts/check-production-config.mjs",
     "preflight-release": "bash scripts/preflight-release.sh"
   },

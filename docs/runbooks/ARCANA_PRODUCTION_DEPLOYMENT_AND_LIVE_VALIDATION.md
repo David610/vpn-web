@@ -89,23 +89,27 @@ Expected: all migrations and SQL assertions pass, including RLS, entitlement, ac
 
 ### Claim-token rollout precheck
 
-Prerequisite: inventory of every live node and SSH access. Keep `REQUIRE_CLAIM_TOKEN=false` until every row is proved.
+Keep `REQUIRE_CLAIM_TOKEN=false`. The authoritative precondition is the normalized, fresh capability evidence reported by every operationally eligible node (PROVISIONING, WARMING_UP, CANARY, READY, DEGRADED, or DRAINING). Intentionally offline/security/terminal states are excluded.
 
 ```bash
-# Run against every node from the authoritative inventory, replacing placeholders.
-ssh root@'<node>' 'systemctl is-active vpn-provisioning-agent && vpn-provisioning-agent --version'
-journalctl -u vpn-provisioning-agent --since '24 hours ago' --no-pager | grep -E 'claim_token|lease_expires_at|terminal'
+SUPABASE_URL='https://<project-ref>.supabase.co' \
+SUPABASE_SERVICE_ROLE_KEY='<operator-supplied>' \
+ARCANA_PROJECT_REF='<project-ref>' \
+ARCANA_EXPECTED_COMMIT='<reviewed-vpn-web-commit>' \
+node scripts/check-claim-token-fleet.mjs --evidence=claim-token-fleet-evidence.json
 ```
 
-Expected: service active; version is the pinned release containing singbox-vpn PR #128; recent claims demonstrate token/lease handling and terminal responses. Any unreachable, older, unknown, or tokenless node is a stop condition. Save node/version matrix and redacted journal excerpts.
+Expected: the target project ref is printed, every eligible node has capability evidence no older than the fleet liveness threshold, every version is compatible, and the final line is `CLAIM TOKEN FLEET READINESS: PASS`. A zero-node fleet is not proof and fails. The evidence file contains no credentials; retain it with the release record. A failure or uncertain project identity is a stop condition.
 
-After all nodes pass, set `CLAIM_TOKEN_FLEET_VERIFIED=true` first and run:
+`CLAIM_TOKEN_FLEET_VERIFIED=true` is an explicit operator acknowledgement of that saved machine result, never a substitute for it. After PASS and review, set the acknowledgement and run:
 
 ```bash
 CLAIM_TOKEN_FLEET_VERIFIED=true REQUIRE_CLAIM_TOKEN=true ARCANA_PRODUCTION_DEPLOY=1 node scripts/check-production-config.mjs
 ```
 
-Expected: gate passes. Then change `REQUIRE_CLAIM_TOKEN=true` in a separately approved Pages deployment, canary one node/job, and verify claim/complete. Roll back immediately to `false` if valid jobs are rejected, claims expire unexpectedly, stale completions rise, or nodes stop completing work. Evidence: version matrix, config audit, canary claim correlation ID, terminal result, stale-claim metric before/after.
+Expected: gate passes. In a separately approved deployment: enable a canary, observe claims/leases and capability-regression alerts, then expand. Only that separately approved deployment may change `REQUIRE_CLAIM_TOKEN=true`. Roll back immediately to `false` if valid jobs are rejected, claims expire unexpectedly, stale completions rise, or nodes stop completing work. The required sequence is **machine check → save evidence → operator acknowledgement → config gate → canary → observe → expand**.
+
+If heartbeat evidence is missing or disputed during an incident, direct SSH remains a fallback: check `systemctl is-active vpn-provisioning-agent`, the pinned agent version, and redacted recent claim/lease logs on that node. SSH evidence does not turn a failing fleet preflight into PASS; repair reporting and rerun the command.
 
 ### Node/data-plane smoke
 
