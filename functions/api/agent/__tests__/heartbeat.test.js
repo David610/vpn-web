@@ -124,6 +124,25 @@ describe("POST /api/agent/heartbeat observed_revision", () => {
   });
 });
 
+describe("POST /api/agent/heartbeat capability evidence", () => {
+  const capability = {
+    capability_contract: "arcana.node.capabilities.v1", provisioning_protocol: 2,
+    capabilities: { claim_token: { version: 1, minimum_lease_seconds: 300 }, external_authorization_snapshot: { version: 2 } },
+    singbox_alive: true,
+  };
+  it("stores only normalized fields from the v1 contract", async () => {
+    await onRequestPost({ env, request: makeRequest({ ...capability, capabilities: { ...capability.capabilities, future_blob: "ignored" } }) });
+    expect(nodesUpdate.mock.calls[0][0]).toMatchObject({ capability_contract: "arcana.node.capabilities.v1", provisioning_protocol: 2, claim_token_version: 1, claim_token_minimum_lease_seconds: 300, external_authorization_snapshot_version: 2, singbox_alive: true, capabilities_reported_at: expect.any(String) });
+    expect(nodesUpdate.mock.calls[0][0]).not.toHaveProperty("capabilities");
+  });
+  it("accepts basic telemetry but does not overwrite valid evidence for malformed capabilities", async () => {
+    await onRequestPost({ env, request: makeRequest({ cpu_percent: 4, capability_contract: "arcana.node.capabilities.v1", provisioning_protocol: 2, capabilities: { claim_token: { version: "1" } } }) });
+    expect(nodesUpdate.mock.calls[0][0]).toMatchObject({ cpu_percent: 4, capability_report_error: "invalid bounded capability fields", capability_report_error_at: expect.any(String) });
+    expect(nodesUpdate.mock.calls[0][0]).not.toHaveProperty("capability_contract");
+    expect(nodesUpdate.mock.calls[0][0]).not.toHaveProperty("capabilities_reported_at");
+  });
+});
+
 describe("POST /api/agent/heartbeat — Phase 8 health transitions", () => {
   const autoEnv = { ...env, FEATURE_AUTO_NODE_HEALTH: "true" };
 
