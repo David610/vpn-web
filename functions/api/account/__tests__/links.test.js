@@ -3,7 +3,7 @@ import { makeFakeSupabase } from "../../../lib/__tests__/fake-supabase.js";
 
 let db;
 vi.mock("@supabase/supabase-js", () => ({ createClient: vi.fn(() => db) }));
-const { onRequestGet: listLinks } = await import("../links/index.js");
+const { onRequestGet: listLinks, onRequestPost: createLink } = await import("../links/index.js");
 const { onRequestGet: getLink, onRequestPatch: updateLink } = await import("../links/[id]/index.js");
 const { onRequestGet: listClients } = await import("../links/[id]/clients.js");
 const { onRequestPost: createClient } = await import("../links/[id]/clients.js");
@@ -28,6 +28,7 @@ function seed() {
     logical_routes: [
       { id: "route_one", privacy_class: "fast", enabled: true },
       { id: "route_two", privacy_class: "fast", enabled: true },
+      { id: "route_private", privacy_class: "privacy_plus", enabled: true },
     ],
     external_vpn_devices: [
       { device_id: "device-1", account_id: "acct-1", link_id: "link-1", client_type: "singbox", desired_route_id: "route_one", created_at: "2026-01-01", revoked_at: null, subscription_token_hash: "not-public", credential_ciphertext: "not-public" },
@@ -65,6 +66,16 @@ beforeEach(() => { db = seed(); vi.spyOn(console, "error").mockImplementation(()
 afterEach(() => vi.restoreAllMocks());
 
 describe("Link ownership boundary", () => {
+  it("rejects an incompatible browser Link route server-side", async () => {
+    const response = await createLink({ env, request: new Request("https://example.test/api/account/links", {
+      method: "POST", headers: { Authorization: "Bearer good", "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Private", routeId: "route_private", maxClients: 2 }),
+    }) });
+    expect(response.status).toBe(422);
+    expect(await response.json()).toEqual({ error: "Route is unsupported for compatible Link clients", code: "unsupported_route" });
+    expect(db.rpc).not.toHaveBeenCalledWith("create_vpn_link", expect.anything());
+  });
+
   it("lists only the caller's Links and does not expose secrets", async () => {
     const response = await listLinks({ env, request });
     const body = await response.json();
@@ -108,7 +119,7 @@ function clientRequest(key) {
   return new Request("https://example.test/api/account/links/link-1/clients", {
     method: "POST",
     headers: { Authorization: "Bearer good", "Content-Type": "application/json", "Idempotency-Key": key },
-    body: JSON.stringify({ name: "Laptop", clientType: "singbox", subscriptionId: "123" }),
+    body: JSON.stringify({ name: "Laptop", clientType: "links", subscriptionId: "123" }),
   });
 }
 

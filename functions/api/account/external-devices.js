@@ -3,6 +3,7 @@ import { readJson, runAccountAction } from "../../lib/account-http.js";
 import { COMPATIBILITY_LIFETIME_MS, newOpaqueId, newProtocolCredential, newSubscriptionToken, subscriptionTokenHash, subscriptionUrl } from "../../lib/external-credentials.js";
 import { isSupportedClient, supportsMode } from "../../lib/client-capabilities.js";
 import { clientCapabilities } from "../../lib/client-capabilities.js";
+import { compatibleLinkRoutes } from "../../lib/links-service.js";
 
 const NAME = /^[\p{L}\p{N} ._'()-]{1,40}$/u;
 
@@ -17,7 +18,8 @@ export async function onRequestGet(context) {
     const { data: routes, error: routeError } = await db.from("logical_routes")
       .select("id,region,privacy_class,display_name").eq("enabled", true).order("display_name");
     if (routeError) throw new Error(`logical route lookup failed: ${routeError.message}`);
-    return { status: 200, body: { devices: data ?? [], routes: routes ?? [], capabilities: clientCapabilities() } };
+    const linkRoutes = await compatibleLinkRoutes(db);
+    return { status: 200, body: { devices: data ?? [], routes: routes ?? [], link_routes: linkRoutes, capabilities: clientCapabilities() } };
   }, { recent: false });
 }
 
