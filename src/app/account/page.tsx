@@ -1,12 +1,27 @@
 "use client";
 
 import Link from "next/link";
+import { useEffect, useState } from "react";
 import { AccountShell, useAccount } from "@/components/account/AccountShell";
-import { euro } from "@/lib/api";
+import { bytes } from "@/components/account/links";
+import { api, euro } from "@/lib/api";
 import { monthlyCents, statusLabel } from "@/components/account/types";
 
 function OverviewBody() {
-  const { overview, error } = useAccount();
+  const { overview, error, session } = useAccount();
+  const [linkSummary, setLinkSummary] = useState<{ count: number; usageBytes: number | null; failed?: boolean } | null>(null);
+  useEffect(() => {
+    let live = true;
+    Promise.all([
+      api<{ links: unknown[] }>(session, "/api/account/links"),
+      api<{ usage: Array<{ rx_bytes: number | string; tx_bytes: number | string }> }>(session, "/api/account/links/usage"),
+    ]).then(([links, usage]) => {
+      if (!live) return;
+      const total = usage.usage.length ? usage.usage.reduce((sum, row) => sum + Number(row.rx_bytes) + Number(row.tx_bytes), 0) : null;
+      setLinkSummary({ count: links.links.length, usageBytes: total });
+    }).catch(() => { if (live) setLinkSummary({ count: 0, usageBytes: null, failed: true }); });
+    return () => { live = false; };
+  }, [session]);
   if (error && !overview) return null;
   if (!overview) return <p className="muted">Loading…</p>;
 
@@ -31,8 +46,23 @@ function OverviewBody() {
 
       <div className="block">
         <div className="block__head">
+          <h2 className="block__title">Links</h2>
+          <Link href="/account/links/" className="text-link">Manage</Link>
+        </div>
+        <p className="muted" style={{ marginTop: "var(--space-4)" }}>
+          {linkSummary?.failed ? "Links are temporarily unavailable." : linkSummary ? `${linkSummary.count} ${linkSummary.count === 1 ? "Link" : "Links"} · compatible VPN apps with independently revocable configurations.` : "Loading Links…"}
+        </p>
+      </div>
+
+      <div className="block">
+        <div className="block__head"><h2 className="block__title">Usage</h2></div>
+        <p className="muted" style={{ marginTop: "var(--space-4)" }}>{linkSummary?.failed ? "Usage is temporarily unavailable." : linkSummary?.usageBytes != null ? `${bytes(linkSummary.usageBytes)} aggregate transfer` : "No usage data yet"}</p>
+      </div>
+
+      <div className="block">
+        <div className="block__head">
           <h2 className="block__title">Subscriptions</h2>
-          <Link href="/account/subscriptions/" className="text-link">Manage</Link>
+          <Link href="/account/subscription/" className="text-link">Manage</Link>
         </div>
         {subscriptions.length === 0 ? (
           <p className="muted" style={{ marginTop: "var(--space-4)" }}>No subscriptions yet.</p>

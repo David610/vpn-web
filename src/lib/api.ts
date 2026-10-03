@@ -17,13 +17,14 @@ export class ApiError extends Error {
 export async function api<T = unknown>(
   session: Session,
   path: string,
-  init: { method?: string; body?: unknown } = {}
+  init: { method?: string; body?: unknown; headers?: Record<string, string> } = {}
 ): Promise<T> {
   const res = await fetch(path, {
     method: init.method ?? (init.body === undefined ? "GET" : "POST"),
     headers: {
       Authorization: `Bearer ${session.access_token}`,
       ...(init.body === undefined ? {} : { "Content-Type": "application/json" }),
+      ...init.headers,
     },
     body: init.body === undefined ? undefined : JSON.stringify(init.body),
   });
@@ -33,8 +34,19 @@ export async function api<T = unknown>(
     window.location.href = `/login/?next=${encodeURIComponent(back)}&reauth=1`;
     throw new ApiError("Please sign in again to continue.", 403, "reauth_required");
   }
+  if (res.status === 401) {
+    const back = window.location.pathname;
+    window.location.href = `/login/?next=${encodeURIComponent(back)}&expired=1`;
+    throw new ApiError("Your session expired. Please sign in again.", 401, "session_expired");
+  }
   if (!res.ok) throw new ApiError(data?.error ?? "Something went wrong.", res.status, data?.code);
   return data as T;
+}
+
+/** A fresh key for one logical mutation. Keep it in memory only for retries. */
+export function newIdempotencyKey(): string {
+  if (!globalThis.crypto?.randomUUID) throw new Error("Secure randomness is unavailable.");
+  return globalThis.crypto.randomUUID();
 }
 
 export function euro(cents: number) {

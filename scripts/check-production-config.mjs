@@ -61,6 +61,17 @@ export const PLACEHOLDER_MARKERS = [
   "[contact email]",
 ];
 
+export const REQUIRED_PRODUCTION_BINDINGS = [
+  "SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY", "NEXT_PUBLIC_SUPABASE_URL",
+  "NEXT_PUBLIC_SUPABASE_ANON_KEY", "STRIPE_API_KEY", "STRIPE_SIGNING_SECRET",
+  "STRIPE_PRICE_ID", "STRIPE_SEAT_PRICE_ID", "VPN_SECRETS_ENCRYPTION_KEY",
+  "SUBSCRIPTION_TOKEN_HASH_KEY", "ADMIN_ORIGIN", "RESEND_API_KEY",
+  "ALERT_TO_EMAIL", "ALERT_FROM_EMAIL", "ROUTE_SIGNING_PRIVATE_KEY",
+  "ROUTE_SIGNING_KEY_ID", "FLEET_TICK_SECRET",
+];
+
+const looksPlaceholder = (value) => !value || /placeholder|example|paste|<|xxx|not[_ -]?real/i.test(value);
+
 /**
  * Runs the placeholder gate against a given environment/root and returns
  * the list of problems found (empty when clean). Does not touch
@@ -81,6 +92,16 @@ export function checkProductionConfig({ env = process.env, root, readFile = read
     problems.push(
       `NEXT_PUBLIC_SUPPORT_EMAIL is missing or still the placeholder address (got: "${supportEmail || "(unset)"}").`
     );
+  }
+
+  for (const name of REQUIRED_PRODUCTION_BINDINGS) {
+    if (looksPlaceholder(env[name])) problems.push(`${name} is missing or contains a placeholder.`);
+  }
+  if (env.REQUIRE_CLAIM_TOKEN === "true" && env.CLAIM_TOKEN_FLEET_VERIFIED !== "true") {
+    problems.push("REQUIRE_CLAIM_TOKEN cannot be enabled until CLAIM_TOKEN_FLEET_VERIFIED=true explicitly confirms every live node is claim-capable.");
+  }
+  if (env.REQUIRE_CLAIM_TOKEN !== "true") {
+    // Deliberately not a blocker before the fleet rollout. Printed separately by main.
   }
 
   for (const file of LEGAL_FILES) {
@@ -114,8 +135,10 @@ function main() {
   const problems = checkProductionConfig({ env: process.env, root });
 
   if (problems.length > 0) {
-    console.error("check-production-config: refusing production build — placeholder values remain:\n");
-    for (const problem of problems) console.error(`  - ${problem}`);
+    console.error("check-production-config: refusing production build.\n");
+    for (const problem of problems) console.error(`  BLOCKER: ${problem}`);
+    if (process.env.REQUIRE_CLAIM_TOKEN !== "true") console.error("  WARNING: claim-token enforcement remains disabled pending verified fleet rollout.");
+    console.error("  INFORMATIONAL: secret values were not printed.");
     console.error(
       "\nSet real NEXT_PUBLIC_SITE_URL / NEXT_PUBLIC_SUPPORT_EMAIL and complete legal review of terms/privacy/impressum before deploying to production."
     );
