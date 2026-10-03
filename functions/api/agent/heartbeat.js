@@ -121,6 +121,16 @@ export async function onRequestPost({ env, request }) {
     .eq("node_id", nodeId)
     .maybeSingle();
 
+  let serverClaimLeaseSeconds = null;
+  if (capabilityReport.kind === "valid") {
+    const { data: leaseSeconds, error: leaseError } = await supabaseAdmin.rpc("claim_token_lease_seconds");
+    if (!leaseError && Number.isSafeInteger(leaseSeconds) && leaseSeconds > 0) {
+      serverClaimLeaseSeconds = leaseSeconds;
+    } else {
+      log.error("heartbeat.claim_lease_contract_unavailable", { node_id: nodeId, error: leaseError?.message ?? "invalid value" });
+    }
+  }
+
   let nextState = null;
   if (currentNode) {
     const evalResult = evaluateProbeResult({
@@ -254,11 +264,12 @@ export async function onRequestPost({ env, request }) {
 
   // Only a syntactically valid report can change regression alert state.
   // Malformed/legacy packets preserve both the last good evidence and alert.
-  const wasCompatible = currentNode && capabilityReasons(currentNode).length === 0;
-  const newCapabilityReasons = capabilityReport.kind === "valid"
-    ? capabilityReasons({ ...capabilityReport.values, capabilities_reported_at: new Date().toISOString() })
+  const wasCompatible = currentNode && serverClaimLeaseSeconds != null &&
+    capabilityReasons(currentNode, Date.now(), serverClaimLeaseSeconds).length === 0;
+  const newCapabilityReasons = capabilityReport.kind === "valid" && serverClaimLeaseSeconds != null
+    ? capabilityReasons({ ...capabilityReport.values, capabilities_reported_at: new Date().toISOString() }, Date.now(), serverClaimLeaseSeconds)
     : [];
-  const capabilityAlerts = capabilityReport.kind === "valid" && CLAIM_TOKEN_FLEET_STATES.includes(resultingState)
+  const capabilityAlerts = capabilityReport.kind === "valid" && serverClaimLeaseSeconds != null && CLAIM_TOKEN_FLEET_STATES.includes(resultingState)
     ? [reconcileAlert(
         "node_capability_regression",
         wasCompatible && newCapabilityReasons.length > 0,

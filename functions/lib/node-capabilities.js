@@ -4,13 +4,15 @@ export const NODE_CAPABILITY_CONTRACT = "arcana.node.capabilities.v1";
 export const PROVISIONING_PROTOCOL_VERSION = 2;
 export const CLAIM_TOKEN_CAPABILITY_VERSION = 1;
 export const AUTHORIZATION_SNAPSHOT_VERSION = 2;
-export const SERVER_CLAIM_LEASE_SECONDS = 10 * 60;
 
 // This is the union of states that can still poll provisioning work or carry
 // traffic. Intentionally-offline/security/terminal states are excluded.
 export const CLAIM_TOKEN_FLEET_STATES = Object.freeze([
   "PROVISIONING", "WARMING_UP", "CANARY", "READY", "DEGRADED", "DRAINING",
 ]);
+export function isClaimTokenFleetState(state) {
+  return CLAIM_TOKEN_FLEET_STATES.includes(state);
+}
 
 const uint = (v, max) => Number.isSafeInteger(v) && v >= 0 && v <= max;
 export function normalizeNodeCapabilities(body) {
@@ -39,7 +41,9 @@ export function normalizeNodeCapabilities(body) {
   };
 }
 
-export function capabilityReasons(node, nowMs = Date.now(), serverLeaseSeconds = SERVER_CLAIM_LEASE_SECONDS) {
+export function capabilityReasons(node, nowMs = Date.now(), serverLeaseSeconds) {
+  if (!Number.isSafeInteger(serverLeaseSeconds) || serverLeaseSeconds <= 0)
+    throw new Error("canonical server claim lease is required");
   if (!node.capabilities_reported_at) return ["no capability heartbeat"];
   const seen = Date.parse(node.capabilities_reported_at);
   if (!Number.isFinite(seen) || nowMs - seen > HEARTBEAT_INTERVAL_MS * SILENCE_THRESHOLD_MULTIPLIER)
@@ -82,6 +86,7 @@ export async function fleetClaimTokenReadiness(supabase, { nowMs = Date.now() } 
     eligible_nodes: nodes.length,
     compatible_nodes: nodes.length - incompatible.length,
     eligible_node_ids: nodes.map((n) => n.node_id),
+    eligible_node_versions: nodes.map((n) => ({ node_id: n.node_id, agent_version: n.agent_version ?? null })),
     incompatible_nodes: incompatible,
   };
 }
