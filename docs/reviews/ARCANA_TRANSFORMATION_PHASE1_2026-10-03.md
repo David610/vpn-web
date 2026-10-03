@@ -74,6 +74,50 @@ corrective migration; do not drop tables with live customer state.
 No production service was contacted or mutated. The GitHub fetch restriction
 was not retried.
 
+## PR #64 hardening review
+
+GitHub Actions subsequently provided PostgreSQL 16 evidence that the complete
+migration smoke/replay job passed. Its SQL-suite job reached the new Link test
+after every pre-existing SQL test passed, then exposed an invalid test fixture:
+`customer_accounts` has no `name` column. The fixture now uses the real schema.
+
+The hostile-code review also found and fixed three gaps before requesting a CI
+rerun:
+
+- usage originally proved account ownership independently for its Link and
+  client but did not prove that the client belonged to that Link; the composite
+  usage FK now enforces account **and** Link/client association;
+- historical credential rows received deterministic generations but not
+  deterministic `rotated_from` lineage; the backfill now records it and a
+  same-device composite FK prevents cross-client lineage while allowing old
+  generations to be pruned;
+- the service-role Link-client RPC trusted `p_user_id`; it now requires an
+  existing account membership before delegating to the established
+  subscription-owned external-device allocator.
+
+Real two-session SQL races now cover Link capacity, identical-key idempotency,
+and subscription final-seat capacity through `create_vpn_link_client()`. The
+lifecycle SQL test additionally covers foreign subscriptions, cross-account
+and non-member client creation, credential lineage, node snapshot advancement,
+zero/multiple/already-revoked children, idempotent Link revocation, and an
+unrelated external client. HTTP tests cover first delivery, response-loss
+retry, concurrent identical retry, key scoping, and the rule that a replay
+never receives either the original secret or newly generated unpersisted
+material.
+
+The local Cloud image still has no PostgreSQL binaries, and package installation
+was blocked by its outbound proxy. Accordingly, the revised SQL has **not**
+been represented as locally passing: PostgreSQL-backed CI must rerun it. The
+earlier migration-replay pass applies to the pre-hardening revision; the final
+head requires a new pass.
+
+Local validation of the hardened revision passed `npm ci`, all 1,098 tests in
+112 files, lint (zero errors; the same 11 pre-existing warnings), standalone
+TypeScript checking, the production build, the 249-file secret scan, and
+`git diff --check`. `bash scripts/test-supabase-sql.sh` was attempted and
+stopped immediately at the missing `createdb` executable; it did not execute
+or validate any SQL assertion.
+
 ## Next session
 
 Phase 2 should (1) validate the migration against real disposable PostgreSQL,

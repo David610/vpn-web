@@ -26,7 +26,8 @@ alter table public.external_vpn_devices
     foreign key (link_id, account_id) references public.vpn_links(id, account_id) on delete restrict,
   add constraint external_vpn_devices_idempotency_format
     check (idempotency_key is null or idempotency_key ~ '^[0-9a-f]{64}$'),
-  add constraint external_vpn_devices_device_account_unique unique (device_id, account_id);
+  add constraint external_vpn_devices_device_account_unique unique (device_id, account_id),
+  add constraint external_vpn_devices_link_identity_unique unique (device_id, link_id, account_id);
 
 create unique index external_vpn_devices_link_idempotency_unique
   on public.external_vpn_devices(link_id, idempotency_key)
@@ -42,11 +43,22 @@ with numbered as (
   from public.compatibility_credentials
 )
 update public.compatibility_credentials c set generation=n.generation from numbered n where n.id=c.id;
+with lineage as (
+  select id, lag(id) over (partition by device_id order by generation) as rotated_from
+  from public.compatibility_credentials
+)
+update public.compatibility_credentials c set rotated_from=l.rotated_from
+  from lineage l where l.id=c.id;
 alter table public.compatibility_credentials alter column generation set not null;
 alter table public.compatibility_credentials add constraint compatibility_credentials_generation_positive
   check (generation > 0);
 alter table public.compatibility_credentials add constraint compatibility_credentials_device_generation_unique
   unique (device_id, generation);
+alter table public.compatibility_credentials add constraint compatibility_credentials_device_id_unique
+  unique (device_id, id);
+alter table public.compatibility_credentials add constraint compatibility_credentials_same_device_lineage
+  foreign key (device_id, rotated_from)
+  references public.compatibility_credentials(device_id, id) on delete set null (rotated_from);
 
 -- Daily aggregate counters only. Deliberately no domain, URL, DNS,
 -- destination address, packet, or free-form metadata columns exist.
@@ -62,7 +74,8 @@ create table public.vpn_link_usage_daily (
   updated_at timestamptz not null default now(),
   primary key (link_id, device_id, bucket_date),
   foreign key (link_id, account_id) references public.vpn_links(id, account_id) on delete cascade,
-  foreign key (device_id, account_id) references public.external_vpn_devices(device_id, account_id) on delete cascade
+  foreign key (device_id, link_id, account_id)
+    references public.external_vpn_devices(device_id, link_id, account_id) on delete cascade
 );
 
 alter table public.vpn_links enable row level security;
@@ -76,7 +89,8 @@ create function public.create_vpn_link(
 ) returns uuid language plpgsql security definer set search_path = '' as $$
 declare v_id uuid;
 begin
-  if not exists(select 1 from public.logical_routes where id=p_route_id and enabled) then
+  perform 1 from public.logical_routes where id=p_route_id and enabled for share;
+  if not found then
     raise exception 'route_unavailable';
   end if;
   insert into public.vpn_links(account_id,name,desired_route_id,max_clients)
@@ -98,6 +112,10 @@ begin
   select * into v_link from public.vpn_links
     where id=p_link_id and account_id=p_account_id for update;
   if not found or v_link.status <> 'active' then raise exception 'link_not_active'; end if;
+  if not exists(select 1 from public.account_members
+      where account_id=p_account_id and user_id=p_user_id) then
+    raise exception 'user_not_in_account';
+  end if;
 
   select device_id into v_existing from public.external_vpn_devices
     where link_id=p_link_id and idempotency_key=p_idempotency_key;

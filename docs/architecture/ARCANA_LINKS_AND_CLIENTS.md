@@ -102,8 +102,9 @@ credential requires an acknowledged, make-before-break data-plane operation.
 
 `vpn_link_usage_daily` is a service-role-only daily aggregate keyed by account,
 Link, client, and date. It can hold RX/TX bytes, optional connection count, and
-a coarse last-seen bucket. Composite foreign keys prevent cross-account
-attribution. It has no free-form metadata or columns for URL, domain, DNS
+a coarse last-seen bucket. A composite foreign key requires the client to
+belong to both the recorded account and the recorded Link, preventing
+cross-account or cross-Link attribution. It has no free-form metadata or columns for URL, domain, DNS
 query, destination address, payload, browsing history, or search terms.
 
 The existing node traffic endpoint reports node-wide totals only; official
