@@ -13,8 +13,8 @@ function NewLinkBody() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const submitted = useRef(false);
-  useEffect(() => { api<{ routes: RouteOption[] }>(session, "/api/account/external-devices")
-    .then(data => setRoutes(data.routes ?? [])).catch(() => setError("Routes are temporarily unavailable.")); }, [session]);
+  useEffect(() => { api<{ link_routes: RouteOption[] }>(session, "/api/account/external-devices")
+    .then(data => setRoutes(data.link_routes ?? [])).catch(() => setError("Routes are temporarily unavailable.")); }, [session]);
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (busy || submitted.current) return;

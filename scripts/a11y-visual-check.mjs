@@ -113,9 +113,11 @@ const DEVICES_BODY = {
 };
 const ROUTES_BODY = { devices: [], capabilities: {}, routes: [
   { id: "route_de_fast", region: "de", privacy_class: "fast", display_name: "Germany — Fast" },
+], link_routes: [
+  { id: "route_de_fast", region: "de", privacy_class: "fast", display_name: "Germany — Fast" },
 ] };
 const LINKS_BODY = { links: [
-  { id: "11111111-1111-4111-8111-111111111111", name: "Travel", configurationFamily: "compatibility", routeId: "route_de_fast", maxClients: 3, clientCount: 1, status: "active", createdAt: new Date().toISOString(), revokedAt: null },
+  { id: "11111111-1111-4111-8111-111111111111", name: "Travel", configurationFamily: "compatibility", routeId: "route_de_fast", routeLabel: "Germany — Fast", maxClients: 3, clientCount: 1, status: "active", createdAt: new Date().toISOString(), revokedAt: null },
 ] };
 const LINK_DETAIL_BODY = { link: LINKS_BODY.links[0], clients: [
   { id: "22222222-2222-4222-8222-222222222222", linkId: LINKS_BODY.links[0].id, name: "Tablet", clientType: "links", routeId: "route_de_fast", status: "active", createdAt: new Date().toISOString(), lastSeenAt: null, revokedAt: null },

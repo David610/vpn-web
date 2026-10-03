@@ -3,6 +3,7 @@ export type VpnLink = {
   name: string;
   configurationFamily: string;
   routeId: string;
+  routeLabel?: string;
   maxClients: number;
   clientCount: number;
   status: string;
