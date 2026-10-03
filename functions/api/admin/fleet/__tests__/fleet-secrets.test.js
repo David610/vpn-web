@@ -57,6 +57,7 @@ vi.mock("@supabase/supabase-js", () => ({
     from: (t) => query(t),
     rpc: (name) => {
       if (name === "device_node_assignment_counts") return Promise.resolve(deviceNodeAssignmentCounts());
+      if (name === "claim_token_lease_seconds") return Promise.resolve({ data: 600, error: null });
       return Promise.resolve({ data: null, error: null });
     },
   })),

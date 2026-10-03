@@ -1,0 +1,9 @@
+{
+  "capability_contract": "arcana.node.capabilities.v1",
+  "provisioning_protocol": 2,
+  "capabilities": {
+    "claim_token": { "version": 1, "minimum_lease_seconds": 300 },
+    "external_authorization_snapshot": { "version": 2 }
+  },
+  "singbox_alive": true
+}

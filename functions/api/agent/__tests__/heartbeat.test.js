@@ -4,6 +4,7 @@ const nodeMaybeSingle = vi.fn();
 const nodesUpdate = vi.fn();
 const alertsInsert = vi.fn();
 const nodesListSelect = vi.fn();
+const rpc = vi.fn();
 
 vi.mock("@supabase/supabase-js", () => ({
   createClient: vi.fn(() => ({
@@ -26,6 +27,7 @@ vi.mock("@supabase/supabase-js", () => ({
       }
       throw new Error(`unexpected table ${table}`);
     }),
+    rpc,
   })),
 }));
 
@@ -89,6 +91,7 @@ beforeEach(() => {
   nodesUpdate.mockReset().mockImplementation(() => updateChain());
   alertsInsert.mockReset().mockResolvedValue({ error: null });
   nodesListSelect.mockReset().mockResolvedValue({ data: [], error: null });
+  rpc.mockReset().mockResolvedValue({ data: 600, error: null });
   updateChains.length = 0;
   alertResolveChains.length = 0;
   casMatches = true;
@@ -121,6 +124,67 @@ describe("POST /api/agent/heartbeat observed_revision", () => {
   it("accepts observed_revision of 0 (a node's initial state)", async () => {
     await onRequestPost({ env, request: makeRequest({ observed_revision: 0 }) });
     expect(nodesUpdate.mock.calls[0][0]).toMatchObject({ observed_revision: 0 });
+  });
+});
+
+describe("POST /api/agent/heartbeat capability evidence", () => {
+  const capability = {
+    capability_contract: "arcana.node.capabilities.v1", provisioning_protocol: 2,
+    capabilities: { claim_token: { version: 1, minimum_lease_seconds: 300 }, external_authorization_snapshot: { version: 2 } },
+    singbox_alive: true,
+  };
+  it("stores only normalized fields from the v1 contract", async () => {
+    await onRequestPost({ env, request: makeRequest({ ...capability, capabilities: { ...capability.capabilities, future_blob: "ignored" } }) });
+    expect(nodesUpdate.mock.calls[0][0]).toMatchObject({ capability_contract: "arcana.node.capabilities.v1", provisioning_protocol: 2, claim_token_version: 1, claim_token_minimum_lease_seconds: 300, external_authorization_snapshot_version: 2, singbox_alive: true, capabilities_reported_at: expect.any(String) });
+    expect(nodesUpdate.mock.calls[0][0]).not.toHaveProperty("capabilities");
+  });
+  it("accepts basic telemetry but does not overwrite valid evidence for malformed capabilities", async () => {
+    await onRequestPost({ env, request: makeRequest({ cpu_percent: 4, capability_contract: "arcana.node.capabilities.v1", provisioning_protocol: 2, capabilities: { claim_token: { version: "1" } } }) });
+    expect(nodesUpdate.mock.calls[0][0]).toMatchObject({ cpu_percent: 4, capability_report_error: "invalid bounded capability fields", capability_report_error_at: expect.any(String) });
+    expect(nodesUpdate.mock.calls[0][0]).not.toHaveProperty("capability_contract");
+    expect(nodesUpdate.mock.calls[0][0]).not.toHaveProperty("capabilities_reported_at");
+  });
+  it("accepts a legacy heartbeat without refreshing or inventing capability proof", async () => {
+    await onRequestPost({ env, request: makeRequest({ cpu_percent: 7, singbox_alive: true }) });
+    expect(nodesUpdate.mock.calls[0][0]).toMatchObject({ cpu_percent: 7, singbox_alive: true });
+    for (const field of ["capability_contract", "provisioning_protocol", "claim_token_version", "capabilities_reported_at", "capability_report_error_at"]) {
+      expect(nodesUpdate.mock.calls[0][0]).not.toHaveProperty(field);
+    }
+    expect(rpc).not.toHaveBeenCalledWith("claim_token_lease_seconds");
+  });
+
+  it("raises on compatible to valid-incompatible and resolves on a later valid-compatible report", async () => {
+    const compatibleStored = {
+      lifecycle_state: "READY", consecutive_probe_failures: 0, consecutive_probe_successes: 0,
+      capability_contract: capability.capability_contract, provisioning_protocol: 2,
+      claim_token_version: 1, claim_token_minimum_lease_seconds: 300,
+      external_authorization_snapshot_version: 2, capabilities_reported_at: new Date().toISOString(),
+    };
+    nodeMaybeSingle
+      .mockResolvedValueOnce({ data: { node_id: "node-1", revoked_at: null, lifecycle_state: "READY" }, error: null })
+      .mockResolvedValueOnce({ data: compatibleStored, error: null })
+      .mockResolvedValueOnce({ data: { node_id: "node-1", revoked_at: null, lifecycle_state: "READY" }, error: null })
+      .mockResolvedValue({ data: compatibleStored, error: null });
+    await onRequestPost({ env, request: makeRequest({ ...capability, provisioning_protocol: 1 }) });
+    expect(insertedDedupKeys()).toContain("node:node-1:node_capability_regression");
+
+    alertsInsert.mockClear();
+    await onRequestPost({ env, request: makeRequest(capability) });
+    expect(resolvedDedupKeys()).toContain("node:node-1:node_capability_regression");
+  });
+
+  it("does not resolve or fabricate regression state for compatible to malformed", async () => {
+    nodeMaybeSingle
+      .mockResolvedValueOnce({ data: { node_id: "node-1", revoked_at: null, lifecycle_state: "READY" }, error: null })
+      .mockResolvedValue({ data: {
+      lifecycle_state: "READY", consecutive_probe_failures: 0, consecutive_probe_successes: 0,
+      capability_contract: capability.capability_contract, provisioning_protocol: 2,
+      claim_token_version: 1, claim_token_minimum_lease_seconds: 300,
+      external_authorization_snapshot_version: 2, capabilities_reported_at: new Date().toISOString(),
+    }, error: null });
+    await onRequestPost({ env, request: makeRequest({ capability_contract: capability.capability_contract, provisioning_protocol: 2, capabilities: {} }) });
+    expect(insertedDedupKeys()).not.toContain("node:node-1:node_capability_regression");
+    expect(resolvedDedupKeys()).not.toContain("node:node-1:node_capability_regression");
   });
 });
 

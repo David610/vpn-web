@@ -131,6 +131,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Reject duplicate migration versions
+        run: node scripts/check-migration-versions.mjs
+
       - name: Set up Supabase CLI
         uses: supabase/setup-cli@v1
         with:

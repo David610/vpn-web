@@ -6,6 +6,7 @@ import { protocolAllowsRecovery, sanitizeProtocolReport } from "../../lib/protoc
 import { applyProtocolReport } from "../../lib/protocol-health-store.js";
 import { logger, requestIdFrom } from "../../lib/logging.js";
 import { reconcileAlert as reconcileAlertShared } from "../../lib/alerts.js";
+import { CLAIM_TOKEN_FLEET_STATES, capabilityReasons, normalizeNodeCapabilities } from "../../lib/node-capabilities.js";
 
 const MAX_HEARTBEAT_BYTES = 64 * 1024;
 
@@ -65,6 +66,21 @@ export async function onRequestPost({ env, request }) {
     active_users_recent:
       body.active_users_recent == null ? null : nonNegativeInteger(body.active_users_recent),
   };
+  if (typeof body.singbox_alive === "boolean") update.singbox_alive = body.singbox_alive;
+  const capabilityReport = normalizeNodeCapabilities(body);
+  if (capabilityReport.kind === "valid") {
+    Object.assign(update, capabilityReport.values, {
+      capabilities_reported_at: new Date().toISOString(),
+      capability_report_error: null,
+      capability_report_error_at: null,
+    });
+  } else if (capabilityReport.kind === "malformed") {
+    // Keep the last valid evidence intact, but make this packet visible. A
+    // malformed packet can never refresh (or fabricate) rollout proof.
+    update.capability_report_error = capabilityReport.error;
+    update.capability_report_error_at = new Date().toISOString();
+    log.warn("heartbeat.capability_malformed", { node_id: nodeId, reason: capabilityReport.error });
+  }
   // observed_revision (spec 54 Phase 6): the agent reports the revision it
   // last successfully applied via vpn-admin apply-revision. Absent/invalid
   // is left out of the update entirely, not coerced to 0 -- an agent still
@@ -101,9 +117,19 @@ export async function onRequestPost({ env, request }) {
 
   const { data: currentNode } = await supabaseAdmin
     .from("nodes")
-    .select("lifecycle_state, consecutive_probe_failures, consecutive_probe_successes, failed_reason, protocol_probe_failures")
+    .select("lifecycle_state, consecutive_probe_failures, consecutive_probe_successes, failed_reason, protocol_probe_failures, capability_contract, provisioning_protocol, claim_token_version, claim_token_minimum_lease_seconds, external_authorization_snapshot_version, capabilities_reported_at")
     .eq("node_id", nodeId)
     .maybeSingle();
+
+  let serverClaimLeaseSeconds = null;
+  if (capabilityReport.kind === "valid") {
+    const { data: leaseSeconds, error: leaseError } = await supabaseAdmin.rpc("claim_token_lease_seconds");
+    if (!leaseError && Number.isSafeInteger(leaseSeconds) && leaseSeconds > 0) {
+      serverClaimLeaseSeconds = leaseSeconds;
+    } else {
+      log.error("heartbeat.claim_lease_contract_unavailable", { node_id: nodeId, error: leaseError?.message ?? "invalid value" });
+    }
+  }
 
   let nextState = null;
   if (currentNode) {
@@ -236,6 +262,22 @@ export async function onRequestPost({ env, request }) {
           ),
         ];
 
+  // Only a syntactically valid report can change regression alert state.
+  // Malformed/legacy packets preserve both the last good evidence and alert.
+  const wasCompatible = currentNode && serverClaimLeaseSeconds != null &&
+    capabilityReasons(currentNode, Date.now(), serverClaimLeaseSeconds).length === 0;
+  const newCapabilityReasons = capabilityReport.kind === "valid" && serverClaimLeaseSeconds != null
+    ? capabilityReasons({ ...capabilityReport.values, capabilities_reported_at: new Date().toISOString() }, Date.now(), serverClaimLeaseSeconds)
+    : [];
+  const capabilityAlerts = capabilityReport.kind === "valid" && serverClaimLeaseSeconds != null && CLAIM_TOKEN_FLEET_STATES.includes(resultingState)
+    ? [reconcileAlert(
+        "node_capability_regression",
+        wasCompatible && newCapabilityReasons.length > 0,
+        "warning",
+        `Node ${nodeId} regressed from verified claim-token capabilities: ${newCapabilityReasons.join(", ")}`
+      )]
+    : [];
+
   await Promise.all([
     reconcileAlert(
       "disk_high",
@@ -243,6 +285,7 @@ export async function onRequestPost({ env, request }) {
       "critical",
       `Node ${nodeId} disk usage is at or above 90%`
     ),
+    ...capabilityAlerts,
     reconcileAlert(
       "memory_high",
       update.memory_percent != null && update.memory_percent >= 95,
