@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { AccountShell, useAccount } from "@/components/account/AccountShell";
 import { ConfirmDialog, InputDialog } from "@/components/Dialog";
-import { api } from "@/lib/api";
+import { api, relative } from "@/lib/api";
 import type { Device, Subscription } from "@/components/account/types";
 
 type Profile = { id: string; name: string; enabled: boolean };
@@ -94,8 +94,9 @@ function DeviceRow({
           <div>
             <p className="row__title">{device.name}</p>
             <p className="row__sub">
-              {device.platform} · {revoked ? "Revoked" : "Active"}
+              {device.platform === "external" ? "Compatible external client" : `Arcana-managed · ${device.platform}`} · {revoked ? "Revoked" : "Active"}
             </p>
+            <p className="row__sub">Last seen {relative(device.lastSeenAt)}{device.current ? " · Current device" : ""}</p>
           </div>
         </div>
 
@@ -141,7 +142,7 @@ function DeviceRow({
         <div className="row__actions" style={{ justifyContent: "flex-start", marginTop: "var(--space-3)" }}>
           {!revoked && (
             <>
-              <button type="button" className="btn-link" disabled={busy !== null} onClick={() => setRenaming(true)}>Rename</button>
+              <button type="button" className="btn-link" disabled={busy !== null} onClick={() => setRenaming(true)}>Inspect / rename</button>
               <button type="button" className="btn-link text-danger" disabled={busy !== null} onClick={() => setRevoking(true)}>
                 Revoke
               </button>

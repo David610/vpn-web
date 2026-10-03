@@ -1,0 +1,5 @@
+# Admin origin separation decision record
+
+Today the admin and customer applications share one static Pages artifact. Application controls remain mandatory: separate Supabase browser storage keys, AAL2, server-side admin RBAC, strict admin CSP, service-role use only inside Functions, and audited privileged mutations. Ordinary admin reads must not select or return compatibility credential ciphertext, nonce, subscription tokens, or configuration URLs.
+
+The target is `admin.<production-domain>` on a distinct Cloudflare Pages project, DNS name, deployment credentials, environment binding set, CSP, and browser storage origin. This is preparation, not permission to rush a split. Follow the exact staged Cloudflare procedure and rollback criteria in `docs/runbooks/ARCANA_PRODUCTION_DEPLOYMENT_AND_LIVE_VALIDATION.md`. Customer and admin CORS allowlists must use exact HTTPS origins; never use `*` with authenticated requests. State-changing APIs continue to require bearer authentication, recent authentication where configured, AAL2 for admin, and explicit destructive confirmation in the UI.

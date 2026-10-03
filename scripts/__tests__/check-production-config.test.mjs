@@ -49,6 +49,15 @@ describe("checkProductionConfig", () => {
   const goodEnv = {
     NEXT_PUBLIC_SITE_URL: "https://arcanavpn.io",
     NEXT_PUBLIC_SUPPORT_EMAIL: "support@arcanavpn.io",
+    SUPABASE_URL: "https://project.supabase.co", SUPABASE_SERVICE_ROLE_KEY: "service-key",
+    NEXT_PUBLIC_SUPABASE_URL: "https://project.supabase.co", NEXT_PUBLIC_SUPABASE_ANON_KEY: "anon-key",
+    STRIPE_API_KEY: "sk_live_valid", STRIPE_SIGNING_SECRET: "whsec_valid",
+    STRIPE_PRICE_ID: "price_base", STRIPE_SEAT_PRICE_ID: "price_pack",
+    VPN_SECRETS_ENCRYPTION_KEY: "a".repeat(64), SUBSCRIPTION_TOKEN_HASH_KEY: "b".repeat(64),
+    ADMIN_ORIGIN: "https://admin.arcanavpn.io", RESEND_API_KEY: "re_valid",
+    ALERT_TO_EMAIL: "ops@arcanavpn.io", ALERT_FROM_EMAIL: "alerts@arcanavpn.io",
+    ROUTE_SIGNING_PRIVATE_KEY: "c".repeat(64), ROUTE_SIGNING_KEY_ID: "production-2026",
+    FLEET_TICK_SECRET: "d".repeat(64), REQUIRE_CLAIM_TOKEN: "false",
   };
 
   function fakeReadFile(cleanContent) {
@@ -104,5 +113,11 @@ describe("checkProductionConfig", () => {
         "src/app/impressum/page.tsx",
       ])
     );
+  });
+
+  it("never permits claim-token enforcement without explicit fleet verification", () => {
+    const problems = checkProductionConfig({ env: { ...goodEnv, REQUIRE_CLAIM_TOKEN: "true" }, root: "/repo", readFile: fakeReadFile("final legal text") });
+    expect(problems.some((p) => p.includes("CLAIM_TOKEN_FLEET_VERIFIED"))).toBe(true);
+    expect(checkProductionConfig({ env: { ...goodEnv, REQUIRE_CLAIM_TOKEN: "true", CLAIM_TOKEN_FLEET_VERIFIED: "true" }, root: "/repo", readFile: fakeReadFile("final legal text") })).toEqual([]);
   });
 });

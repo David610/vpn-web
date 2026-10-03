@@ -12,11 +12,11 @@ import type { Overview } from "./types";
 
 const LINKS = [
   { href: "/account/", label: "Overview" },
-  { href: "/account/subscriptions/", label: "Subscriptions" },
   { href: "/account/devices/", label: "Devices" },
-  { href: "/account/connections/", label: "Configurations" },
+  { href: "/account/links/", label: "Links" },
+  { href: "/account/subscription/", label: "Subscription" },
   { href: "/account/billing/", label: "Billing" },
-  { href: "/account/security/", label: "Security" },
+  { href: "/account/settings/", label: "Settings" },
   { href: "/account/help/", label: "Help" },
 ];
 

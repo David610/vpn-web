@@ -22,6 +22,13 @@ export async function readJson(request) {
  * { status, body } into a response.
  */
 export async function runAccountAction(context, label, action, { recent = true } = {}) {
+  // Reject an obviously unauthenticated request before constructing the
+  // Supabase client. Besides being cheaper, this preserves the auth boundary
+  // when a backend binding is temporarily unavailable: callers get 401,
+  // never a configuration exception or an accidental fail-open response.
+  if (!context.request.headers.get("Authorization")?.startsWith("Bearer ")) {
+    return jsonResponse({ error: "Authorization required" }, 401);
+  }
   const supabaseAdmin = adminClient(context.env);
   const auth = recent
     ? await requireRecentUser(context.request, supabaseAdmin)

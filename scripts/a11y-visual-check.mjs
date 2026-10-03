@@ -111,6 +111,15 @@ const DEVICES_BODY = {
     assignment: d.status === "ACTIVE" ? { profileId: "p1", assignedAt: new Date().toISOString(), profile: { id: "p1", name: "Everyday", enabled: true, routingMode: "AUTO" } } : null,
   })),
 };
+const ROUTES_BODY = { devices: [], capabilities: {}, routes: [
+  { id: "route_de_fast", region: "de", privacy_class: "fast", display_name: "Germany — Fast" },
+] };
+const LINKS_BODY = { links: [
+  { id: "11111111-1111-4111-8111-111111111111", name: "Travel", configurationFamily: "compatibility", routeId: "route_de_fast", maxClients: 3, clientCount: 1, status: "active", createdAt: new Date().toISOString(), revokedAt: null },
+] };
+const LINK_DETAIL_BODY = { link: LINKS_BODY.links[0], clients: [
+  { id: "22222222-2222-4222-8222-222222222222", linkId: LINKS_BODY.links[0].id, name: "Tablet", clientType: "links", routeId: "route_de_fast", status: "active", createdAt: new Date().toISOString(), lastSeenAt: null, revokedAt: null },
+] };
 
 const ADMIN_OVERVIEW_BODY = {
   customers: { total: 128, active: 96, trialing: 14, past_due: 3, canceled: 15 },
@@ -209,6 +218,10 @@ const PAGES = [
   { path: "/account/", label: "account-overview" },
   { path: "/account/subscriptions/", label: "account-subscriptions" },
   { path: "/account/devices/", label: "account-devices" },
+  { path: "/account/links/", label: "account-links" },
+  { path: "/account/links/new/", label: "account-links-new" },
+  { path: "/account/links/detail/?id=11111111-1111-4111-8111-111111111111", label: "account-link-detail" },
+  { path: "/account/subscription/", label: "account-subscription" },
   { path: "/account/connections/", label: "account-connections" },
   { path: "/account/billing/", label: "account-billing" },
   { path: "/account/security/", label: "account-security" },
@@ -232,6 +245,10 @@ async function setupMocks(page) {
   await page.route("**/api/account/overview", jsonRoute(OVERVIEW_BODY));
   await page.route("**/api/account/connection-profiles", jsonRoute(CONNECTION_PROFILES_BODY));
   await page.route("**/api/account/devices", jsonRoute(DEVICES_BODY));
+  await page.route("**/api/account/external-devices", jsonRoute(ROUTES_BODY));
+  await page.route("**/api/account/links", jsonRoute(LINKS_BODY));
+  await page.route("**/api/account/links/usage", jsonRoute({ usage: [], attribution: "client_daily_aggregate" }));
+  await page.route("**/api/account/links/*", jsonRoute(LINK_DETAIL_BODY));
   await page.route("**/api/locations", jsonRoute(LOCATIONS_BODY));
   await page.route("**/api/vpn/config**", (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ preferred_setup_url: "https://arcana.example/s/abc123", subscription_url: "https://arcana.example/s/abc123" }) })
