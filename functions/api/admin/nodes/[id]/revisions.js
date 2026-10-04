@@ -3,6 +3,7 @@ import { requireAdmin } from "../../../../lib/admin-auth.js";
 import { writeAdminAudit } from "../../../../lib/admin-audit.js";
 import { createNodeRevision } from "../../../../lib/node-revisions.js";
 import { isStaticRevisionConfig, validateStaticRevisionConfig } from "../../../../lib/static-revision.js";
+import { validateDynamicRevisionConfig } from "../../../../lib/dynamic-revision.js";
 
 function jsonResponse(body, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -51,6 +52,16 @@ export async function onRequestPost({ env, request, params }) {
   const isStatic = isStaticRevisionConfig(body.config);
   if (isStatic) {
     const verdict = validateStaticRevisionConfig(body.config);
+    if (!verdict.ok) return jsonResponse({ error: verdict.error }, 400);
+  } else {
+    // Not a static revision -- the node will parse this as a full
+    // users-store snapshot and atomically REPLACE its entire local user
+    // list with it (see functions/lib/dynamic-revision.js). Refuse a body
+    // that isn't even well-shaped for that before it can become a
+    // desired_revision the node will never converge on. This cannot
+    // verify the user list is actually complete -- see that module's doc
+    // comment.
+    const verdict = validateDynamicRevisionConfig(body.config);
     if (!verdict.ok) return jsonResponse({ error: verdict.error }, 400);
   }
   const reason = typeof body?.reason === "string" && body.reason ? body.reason : null;
