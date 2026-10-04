@@ -1,6 +1,6 @@
 import { getAccountForUser } from "../../lib/accounts.js";
 import { readJson, runAccountAction } from "../../lib/account-http.js";
-import { COMPATIBILITY_LIFETIME_MS, newOpaqueId, newProtocolCredential, newSubscriptionToken, subscriptionTokenHash, subscriptionUrl } from "../../lib/external-credentials.js";
+import { COMPATIBILITY_LIFETIME_MS, mintCompatibilityCredentials, newOpaqueId, newSubscriptionToken, subscriptionTokenHash, subscriptionUrl } from "../../lib/external-credentials.js";
 import { isSupportedClient, supportsMode } from "../../lib/client-capabilities.js";
 import { clientCapabilities } from "../../lib/client-capabilities.js";
 import { compatibleLinkRoutes } from "../../lib/links-service.js";
@@ -44,15 +44,13 @@ export async function onRequestPost(context) {
 
     const token = newSubscriptionToken();
     const principalId = newOpaqueId("ext");
-    const credentialId = newOpaqueId("cred");
     const tokenHash = await subscriptionTokenHash(token, context.env);
-    const protocol = await newProtocolCredential(context.env);
+    const credentials = await mintCompatibilityCredentials(context.env, route.privacy_class);
     const validUntil = new Date(Date.now() + COMPATIBILITY_LIFETIME_MS).toISOString();
     const { data: deviceId, error } = await db.rpc("create_external_vpn_device", {
       p_account_id: account.accountId, p_user_id: user.id, p_subscription_id: Number(subscriptionId),
       p_name: String(name).trim(), p_client_type: clientType, p_principal_id: principalId,
-      p_token_hash: tokenHash, p_route_id: routeId, p_credential_id: credentialId,
-      p_credential_ciphertext: protocol.ciphertext, p_credential_nonce: protocol.nonce,
+      p_token_hash: tokenHash, p_route_id: routeId, p_credentials: credentials,
       p_valid_until: validUntil,
     });
     if (error) {

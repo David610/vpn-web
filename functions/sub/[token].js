@@ -61,7 +61,7 @@ export async function onRequestGet({ env, request, params }) {
   }
 
   const { data: credentials, error: credentialError } = await db.from("compatibility_credentials")
-    .select("credential_id,credential_ciphertext,credential_nonce,valid_from,valid_until,publish_from,revoked_at")
+    .select("hop,credential_id,credential_ciphertext,credential_nonce,valid_from,valid_until,publish_from,revoked_at")
     .eq("device_id", device.device_id).is("revoked_at", null).order("publish_from", { ascending: false });
   if (credentialError || !credentials?.length) return reply({ error: "Credential temporarily unavailable" }, 503);
   const now = Date.now();
@@ -84,18 +84,23 @@ export async function onRequestGet({ env, request, params }) {
   const publication = selectCompatibilityPublication({ credentials: eligibleCredentials, targets: selected,
     proofs, mode: ackMode, privacyClass: route.privacy_class });
   if (!publication) return reply({ error: "Route temporarily unavailable" }, 503);
-  const { credential, liveTargets: acknowledged, exitTarget: acknowledgedExit } = publication;
-  let material;
-  try { material = JSON.parse(await decryptSecret(credential.credential_ciphertext, credential.credential_nonce, env.VPN_SECRETS_ENCRYPTION_KEY)); }
-  catch { return reply({ error: "Credential temporarily unavailable" }, 503); }
+  const { exitCredential, entryCredential, exitTarget, entryTarget } = publication;
+  let exitMaterial, entryMaterial;
+  try {
+    exitMaterial = JSON.parse(await decryptSecret(exitCredential.credential_ciphertext, exitCredential.credential_nonce, env.VPN_SECRETS_ENCRYPTION_KEY));
+    entryMaterial = entryCredential
+      ? JSON.parse(await decryptSecret(entryCredential.credential_ciphertext, entryCredential.credential_nonce, env.VPN_SECRETS_ENCRYPTION_KEY))
+      : null;
+  } catch { return reply({ error: "Credential temporarily unavailable" }, 503); }
 
   const routeMaterial = (n) => ({ server: n.hostname || n.ip_address, port: n.transport_port,
     tlsServerName: n.tls_server_name, realityPublicKey: n.reality_public_key,
     realityShortId: n.reality_short_id, realityFingerprint: n.reality_fingerprint, vlessFlow: n.vless_flow });
-  const publicRoute = { ...routeMaterial(acknowledgedExit.node), displayName: route.display_name,
-    mode: route.privacy_class, entry: route.privacy_class === "privacy_plus" ? routeMaterial(acknowledged.find((t) => t.hop === 1)?.node) : null };
+  const publicRoute = { ...routeMaterial(exitTarget.node), displayName: route.display_name,
+    mode: route.privacy_class,
+    entry: entryTarget ? { ...routeMaterial(entryTarget.node), vlessUuid: entryMaterial.vless_uuid } : null };
   try {
-    const rendered = renderers[format]({ route: publicRoute, credential: material });
+    const rendered = renderers[format]({ route: publicRoute, credential: exitMaterial });
     await db.from("external_vpn_devices").update({ last_subscription_fetch_at: new Date().toISOString() })
       .eq("device_id", device.device_id).in("subscription_token_hash", [tokenHash, legacyTokenHash]);
     return reply(rendered, 200, format === "singbox" || format === "xray" ? "application/json; charset=utf-8" : "text/plain; charset=utf-8");

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { hmacSha256Hex } from "../crypto.js";
-import { legacySubscriptionTokenHash, newOpaqueId, newSubscriptionToken, rateLimitIpHash, subscriptionTokenHash } from "../external-credentials.js";
+import { legacySubscriptionTokenHash, mintCompatibilityCredentials, newOpaqueId, newSubscriptionToken, rateLimitIpHash, subscriptionTokenHash } from "../external-credentials.js";
+
+const env = { VPN_SECRETS_ENCRYPTION_KEY: "22".repeat(32) };
 
 describe("external credential identifiers", () => {
   it("uses independent high-entropy opaque identifiers", () => {
@@ -29,5 +31,25 @@ describe("external credential identifiers", () => {
     expect(await subscriptionTokenHash(value, env)).not.toBe(legacy);
     expect(await rateLimitIpHash(value, env)).not.toBe(legacy);
     expect(await rateLimitIpHash(value, env)).not.toBe(await subscriptionTokenHash(value, env));
+  });
+});
+
+// Entry and exit must use independently scoped credential material
+// (ARCANA_PRODUCT_V1.md §4b) -- never the same credential shared across
+// hops, which is exactly the bug this function exists to avoid repeating.
+describe("mintCompatibilityCredentials", () => {
+  it("mints exactly one hop-1 credential for a fast route", async () => {
+    const credentials = await mintCompatibilityCredentials(env, "fast");
+    expect(credentials).toHaveLength(1);
+    expect(credentials[0].hop).toBe(1);
+    expect(credentials[0].credential_id).toMatch(/^cred_[A-Za-z0-9_-]{43}$/);
+  });
+
+  it("mints two independently-scoped credentials, one per hop, for privacy_plus", async () => {
+    const credentials = await mintCompatibilityCredentials(env, "privacy_plus");
+    expect(credentials.map((c) => c.hop).sort()).toEqual([1, 2]);
+    const [a, b] = credentials;
+    expect(a.credential_id).not.toBe(b.credential_id);
+    expect(a.credential_ciphertext).not.toBe(b.credential_ciphertext);
   });
 });

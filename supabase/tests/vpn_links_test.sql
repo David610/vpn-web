@@ -65,8 +65,10 @@ begin
   select credential_id into v_credential_b from public.compatibility_credentials where device_id=v_device_b;
   assert v_credential_a<>v_credential_b, 'clients shared a credential identity';
   select id into v_credential_row_a from public.compatibility_credentials where device_id=v_device_a;
-  assert public.rotate_compatibility_credential(v_device_a,v_account,'cred_'||repeat('r',43),
-    'cipher-rotated','nonce-rotated',now()+interval '7 days',3600);
+  assert public.rotate_compatibility_credential(v_device_a,v_account,
+    jsonb_build_array(jsonb_build_object('hop',1,'credential_id','cred_'||repeat('r',43),
+      'credential_ciphertext','cipher-rotated','credential_nonce','nonce-rotated')),
+    now()+interval '7 days',3600);
   assert (select generation=2 and rotated_from=v_credential_row_a from public.compatibility_credentials
     where device_id=v_device_a and credential_id='cred_'||repeat('r',43)),
     'rotation generation or lineage is incorrect';
@@ -88,8 +90,10 @@ begin
   v_device_a := public.create_vpn_link_client(v_link,v_account,v_user,v_sub,'Router C','singbox',repeat('8',64),
     'ext_'||repeat('c',43),repeat('9',64),'cred_'||repeat('c',43),'cipher-c','nonce-c',now()+interval '7 days');
   v_unrelated := public.create_external_vpn_device(v_account,v_user,v_sub,'Unrelated','singbox',
-    'ext_'||repeat('u',43),repeat('a',64),'route_links_fast','cred_'||repeat('u',43),
-    'cipher-u','nonce-u',now()+interval '7 days');
+    'ext_'||repeat('u',43),repeat('a',64),'route_links_fast',
+    jsonb_build_array(jsonb_build_object('hop',1,'credential_id','cred_'||repeat('u',43),
+      'credential_ciphertext','cipher-u','credential_nonce','nonce-u')),
+    now()+interval '7 days');
   select desired_revision into v_revision_before
     from public.compatibility_authorization_node_state where node_id='link-node';
   assert public.revoke_vpn_link(v_link,v_account);

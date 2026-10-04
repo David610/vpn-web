@@ -90,6 +90,12 @@ Returns `204` with no body. The transaction-safe existing Link revocation functi
 
 Compatibility comes exclusively from `functions/lib/client-capabilities.js`; there is no second support list. At publication time canonical type `links` supports only `fast` routes. `privacy_plus` is fail-closed with `422 unsupported_route`. Browser route choices are generated from that same capability table. This contract makes no assertion of two-server support.
 
+This is permanent for `links`, `hiddify`, `shadowrocket` and `incy`, not a pending qualification: their formats are bare connection URIs (`vless://`, `hysteria2://`), a single-endpoint shape with no field that can express a second hop. `xray`'s format is a thin wrapper around the same bare URIs and has the same limit.
+
+`singbox`'s format (a real sing-box JSON config) expresses `privacy_plus` via sing-box's own `detour` outbound-chaining — the same mechanism `singbox-vpn`'s own, separate renderer already proves end-to-end against a real sing-box binary over real two-provider infrastructure. `functions/lib/subscription-renderers.js`'s `renderSingBox` now builds this correctly, and the per-hop credential model it needs (an independently-scoped credential per hop, per `ARCANA_PRODUCT_V1.md` §4b, not one credential shared across both) now exists end-to-end: `compatibility_credentials.hop`, and `create_external_vpn_device`/`rotate_compatibility_credential` both take a `p_credentials` array (one element per hop) that's authorized only against its own hop's node — see `supabase/migrations/20261016000000_compatibility_two_hop_credentials.sql`. Covered by SQL tests (`supabase/tests/external_device_lifecycle_test.sql`) and unit tests (`compatibility-publication.test.js`, `subscription-renderers.test.js`, `external-credentials.test.js`).
+
+The capability table still refuses `privacy_plus` for `singbox` regardless: this is a deliberate, separate decision from "is the code correct," not a leftover gap — nothing has yet verified a real sing-box-based compatibility client actually honors the rendered `detour` chain against this pipeline's real, deployed node infrastructure (as opposed to `singbox-vpn`'s own proven, but separate, implementation). Flipping it is its own explicit follow-up once that verification exists, not a side effect of this one.
+
 ## Errors
 
 Errors use `{"error":"user-safe text","code":"stable_code"}` after successful authentication. Authentication retains the shared v1 shape described above.
