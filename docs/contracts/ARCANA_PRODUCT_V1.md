@@ -322,6 +322,22 @@ singbox-vpn   node install/runtime, node-local credential application,
 
 - Links supporting `"privacy_plus"` routes (§5) — currently fail-closed
   with `422 unsupported_route`; two-hop is Arcana-app-only today.
+  **Investigated 2026-10-04, still open, scope now precise** (see
+  `ARCANA_LINKS_V1.md`'s "Route compatibility" section): permanently
+  impossible for `links`/`hiddify`/`shadowrocket`/`incy`/`xray` — their
+  formats are bare connection URIs with no field that can express a
+  second hop, not a qualification gap. Possible in principle for
+  `singbox`'s format via sing-box's own `detour` chaining (`singbox-vpn`
+  has already proven that exact mechanism end-to-end against a real
+  binary over real two-provider infrastructure), but
+  `subscription-renderers.js`'s `renderSingBox` has no per-hop credential
+  model and refuses `privacy_plus` unconditionally as of this
+  investigation — a prior version of it silently built a malformed,
+  uncredentialed entry-hop outbound that only looked complete because the
+  capability gate made it unreachable; that latent bug is fixed (refuse
+  loudly, not fabricate), but building real two-hop Links still needs a
+  second, per-hop credential issued and stored, which is its own scoped
+  follow-up, not done by this investigation.
 - ~~Reconciling `routing_mode` with the `Automatic`-location vs. hop-count
   two-axis model (§4).~~ **Resolved 2026-10-04** — see §4. `routing_mode`
   stays at rest unmigrated; API responses now also carry derived
