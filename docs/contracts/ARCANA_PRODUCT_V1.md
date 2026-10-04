@@ -325,7 +325,7 @@ singbox-vpn   node install/runtime, node-local credential application,
   **Investigated 2026-10-04, implementation now complete and tested,
   capability deliberately still closed** (see `ARCANA_LINKS_V1.md`'s
   "Route compatibility" section): permanently impossible for
-  `links`/`hiddify`/`shadowrocket`/`incy`/`xray` — their formats are bare
+  every bare-connection-URI client format (listed in `ARCANA_LINKS_V1.md`) — their formats are bare
   connection URIs with no field that can express a second hop, not a
   qualification gap. For `singbox`'s format: the per-hop credential model
   (`compatibility_credentials.hop`, hop-aware `create_external_vpn_device`/
