@@ -11,6 +11,7 @@ import {
 import { deviceCapacity } from "../../lib/seat-constants.js";
 import { checkNodeMutationBudget } from "../../lib/node-mutation-budget.js";
 import { rateLimitedResponse } from "../../lib/rate-limit.js";
+import { routingAxes } from "../../lib/connection-profiles.js";
 
 /**
  * Lists the caller's account's devices, each annotated with its current
@@ -90,6 +91,7 @@ export async function onRequestGet({ env, request }) {
                     name: profile.name,
                     enabled: profile.enabled,
                     routingMode: profile.routing_mode,
+                    ...routingAxes(profile.routing_mode),
                   }
                 : null,
             },

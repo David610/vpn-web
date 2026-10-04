@@ -12,6 +12,29 @@ const NAME = /^[^\u0000-\u001f]{1,40}$/u;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const MAX_PROFILES = 20;
 
+/**
+ * `routing_mode` (AUTO|DIRECT|DOUBLE_HOP) conflates two independent axes:
+ * hop count, and who picks the location. AUTO and DIRECT are both one hop
+ * -- AUTO just also lets the scheduler pick the location instead of the
+ * user. See docs/contracts/ARCANA_PRODUCT_V1.md §4/§10.
+ *
+ * This derives the clean two-axis read model from the one stored column,
+ * without migrating it: `hopMode` reuses "fast"/"privacy_plus", the
+ * already-shipped, schema-validated wire vocabulary from tamara-next's
+ * managed-control-plane-v1.md, rather than inventing a fourth name for the
+ * same concept. `locationMode` is new and orthogonal.
+ *
+ * Deliberately NOT the write-side vocabulary: `toRow()` below still only
+ * accepts AUTO/DIRECT/DOUBLE_HOP, and this never writes to the database --
+ * read-model sugar only, additive to every existing consumer.
+ */
+export function routingAxes(routingMode) {
+  return {
+    hopMode: routingMode === "DOUBLE_HOP" ? "privacy_plus" : "fast",
+    locationMode: routingMode === "AUTO" ? "AUTO" : "PINNED",
+  };
+}
+
 const ok = (body = { ok: true }, status = 200) => ({ status, body });
 const fail = (status, error) => ({ status, body: { error } });
 

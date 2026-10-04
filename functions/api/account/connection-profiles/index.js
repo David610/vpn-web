@@ -2,7 +2,7 @@ import { createClient } from "@supabase/supabase-js";
 import { requireUser, jsonResponse } from "../../../lib/user-auth.js";
 import { getAccountForUser } from "../../../lib/accounts.js";
 import { readJson, runAccountAction } from "../../../lib/account-http.js";
-import { createProfile } from "../../../lib/connection-profiles.js";
+import { createProfile, routingAxes } from "../../../lib/connection-profiles.js";
 
 /**
  * Lists the caller's account's connection profiles, for the device
@@ -36,6 +36,7 @@ export async function onRequestGet({ env, request }) {
         name: p.name,
         enabled: p.enabled,
         routingMode: p.routing_mode,
+        ...routingAxes(p.routing_mode),
         preferredEntryLocationId: p.preferred_entry_location_id,
         preferredExitLocationId: p.preferred_exit_location_id,
         autoFailover: p.auto_failover,

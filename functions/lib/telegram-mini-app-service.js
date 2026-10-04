@@ -10,6 +10,7 @@
  */
 import { getOverview } from "./account-service.js";
 import { getAccountForUser } from "./accounts.js";
+import { routingAxes } from "./connection-profiles.js";
 
 function profileView(p) {
   return {
@@ -17,6 +18,7 @@ function profileView(p) {
     name: p.name,
     enabled: p.enabled,
     routingMode: p.routing_mode,
+    ...routingAxes(p.routing_mode),
     entryLocationId: p.preferred_entry_location_id ?? null,
     exitLocationId: p.preferred_exit_location_id ?? null,
   };
