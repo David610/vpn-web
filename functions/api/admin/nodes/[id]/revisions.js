@@ -2,6 +2,7 @@ import { createClient } from "@supabase/supabase-js";
 import { requireAdmin } from "../../../../lib/admin-auth.js";
 import { writeAdminAudit } from "../../../../lib/admin-audit.js";
 import { createNodeRevision } from "../../../../lib/node-revisions.js";
+import { isStaticRevisionConfig, validateStaticRevisionConfig } from "../../../../lib/static-revision.js";
 
 function jsonResponse(body, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -42,6 +43,16 @@ export async function onRequestPost({ env, request, params }) {
   ) {
     return jsonResponse({ error: "config must be a JSON object" }, 400);
   }
+  // Static-config revisions (revision_schema 1) are validated against the
+  // node-side allowlist here, before they can become desired state: a
+  // forbidden field (role, node_id, trust root, ...) or an unknown one is
+  // refused outright rather than stored as a desired_revision the node
+  // would reject forever. See functions/lib/static-revision.js.
+  const isStatic = isStaticRevisionConfig(body.config);
+  if (isStatic) {
+    const verdict = validateStaticRevisionConfig(body.config);
+    if (!verdict.ok) return jsonResponse({ error: verdict.error }, 400);
+  }
   const reason = typeof body?.reason === "string" && body.reason ? body.reason : null;
 
   try {
@@ -65,7 +76,7 @@ export async function onRequestPost({ env, request, params }) {
       action: "admin.push_node_revision",
       targetType: "node",
       targetId: nodeId,
-      metadata: { revision, reason },
+      metadata: isStatic ? { revision, reason, kind: "static", static_config: body.config.static_config } : { revision, reason },
     });
 
     return jsonResponse({ ok: true, revision }, 201);

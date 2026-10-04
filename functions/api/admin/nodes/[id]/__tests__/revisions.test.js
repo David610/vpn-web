@@ -109,6 +109,59 @@ describe("POST /api/admin/nodes/:id/revisions", () => {
     expect(createNodeRevision).not.toHaveBeenCalled();
   });
 
+  it("accepts a valid static-config revision and records it as desired state", async () => {
+    const config = { revision_schema: 1, static_config: { hysteria2: { up_mbps: 200, down_mbps: 200 } } };
+    const res = await onRequestPost({ env, request: makeRequest({ config }), params: { id: "node-1" } });
+    expect(res.status).toBe(201);
+    expect(await res.json()).toEqual({ ok: true, revision: 4 });
+    expect(createNodeRevision).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ nodeId: "node-1", config })
+    );
+    expect(auditInsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: { revision: 4, reason: null, kind: "static", static_config: config.static_config },
+      })
+    );
+  });
+
+  it("refuses a static revision that tries to change the node role (fail closed)", async () => {
+    const res = await onRequestPost({
+      env,
+      request: makeRequest({
+        config: { revision_schema: 1, static_config: { role: "relay", udp_probe: { retries: 3 } } },
+      }),
+      params: { id: "node-1" },
+    });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/security-sensitive/);
+    expect(createNodeRevision).not.toHaveBeenCalled();
+    expect(auditInsert).not.toHaveBeenCalled();
+  });
+
+  it("refuses a static revision with an unknown field instead of dropping it", async () => {
+    const res = await onRequestPost({
+      env,
+      request: makeRequest({
+        config: { revision_schema: 1, static_config: { udp_probe: { retries: 3, surprise: true } } },
+      }),
+      params: { id: "node-1" },
+    });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/unknown field udp_probe\.surprise/);
+    expect(createNodeRevision).not.toHaveBeenCalled();
+  });
+
+  it("refuses an unsupported revision_schema", async () => {
+    const res = await onRequestPost({
+      env,
+      request: makeRequest({ config: { revision_schema: 2, static_config: { udp_probe: { retries: 3 } } } }),
+      params: { id: "node-1" },
+    });
+    expect(res.status).toBe(400);
+    expect(createNodeRevision).not.toHaveBeenCalled();
+  });
+
   it("returns 404 when the node does not exist", async () => {
     nodeMaybeSingle.mockResolvedValue({ data: null, error: null });
     const res = await onRequestPost({ env, request: makeRequest({ config: {} }), params: { id: "missing" } });
