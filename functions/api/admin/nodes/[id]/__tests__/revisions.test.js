@@ -45,9 +45,10 @@ beforeEach(() => {
 
 describe("POST /api/admin/nodes/:id/revisions", () => {
   it("pushes a new revision and returns it", async () => {
+    const config = { schema_version: 1, users: [] };
     const res = await onRequestPost({
       env,
-      request: makeRequest({ config: { role: "EXIT" }, reason: "manual test" }),
+      request: makeRequest({ config, reason: "manual test" }),
       params: { id: "node-1" },
     });
     expect(res.status).toBe(201);
@@ -56,7 +57,7 @@ describe("POST /api/admin/nodes/:id/revisions", () => {
       expect.anything(),
       expect.objectContaining({
         nodeId: "node-1",
-        config: { role: "EXIT" },
+        config,
         reason: "manual test",
         createdBy: "admin-1",
       })
@@ -68,6 +69,18 @@ describe("POST /api/admin/nodes/:id/revisions", () => {
         metadata: { revision: 4, reason: "manual test" },
       })
     );
+  });
+
+  it("returns 400 for a dynamic-revision body that isn't a well-shaped users snapshot", async () => {
+    const res = await onRequestPost({
+      env,
+      request: makeRequest({ config: { role: "EXIT" } }),
+      params: { id: "node-1" },
+    });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/well-shaped users snapshot/);
+    expect(createNodeRevision).not.toHaveBeenCalled();
+    expect(auditInsert).not.toHaveBeenCalled();
   });
 
   it("returns 400 when config is missing", async () => {
@@ -104,7 +117,11 @@ describe("POST /api/admin/nodes/:id/revisions", () => {
 
   it("returns 403 for a readonly admin and does not push a revision", async () => {
     adminMaybeSingle.mockResolvedValue({ data: { role: "readonly" }, error: null });
-    const res = await onRequestPost({ env, request: makeRequest({ config: {} }), params: { id: "node-1" } });
+    const res = await onRequestPost({
+      env,
+      request: makeRequest({ config: { schema_version: 1, users: [] } }),
+      params: { id: "node-1" },
+    });
     expect(res.status).toBe(403);
     expect(createNodeRevision).not.toHaveBeenCalled();
   });
@@ -164,7 +181,11 @@ describe("POST /api/admin/nodes/:id/revisions", () => {
 
   it("returns 404 when the node does not exist", async () => {
     nodeMaybeSingle.mockResolvedValue({ data: null, error: null });
-    const res = await onRequestPost({ env, request: makeRequest({ config: {} }), params: { id: "missing" } });
+    const res = await onRequestPost({
+      env,
+      request: makeRequest({ config: { schema_version: 1, users: [] } }),
+      params: { id: "missing" },
+    });
     expect(res.status).toBe(404);
     expect(createNodeRevision).not.toHaveBeenCalled();
   });
