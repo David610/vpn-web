@@ -26,11 +26,11 @@ begin
 
   assert not has_function_privilege(
     'anon',
-    'public.create_external_vpn_device(uuid,uuid,bigint,text,text,text,text,text,text,text,text,timestamptz)',
+    'public.create_external_vpn_device(uuid,uuid,bigint,text,text,text,text,text,jsonb,timestamptz)',
     'execute'), 'anon must not allocate an external device';
   assert not has_function_privilege(
     'authenticated',
-    'public.create_external_vpn_device(uuid,uuid,bigint,text,text,text,text,text,text,text,text,timestamptz)',
+    'public.create_external_vpn_device(uuid,uuid,bigint,text,text,text,text,text,jsonb,timestamptz)',
     'execute'), 'authenticated must not allocate an external device directly';
   assert not has_function_privilege(
     'authenticated',
@@ -38,7 +38,7 @@ begin
     'execute'), 'authenticated must not invoke external revocation directly';
   assert not has_function_privilege(
     'authenticated',
-    'public.rotate_compatibility_credential(uuid,uuid,text,text,text,timestamptz,integer)',
+    'public.rotate_compatibility_credential(uuid,uuid,jsonb,timestamptz,integer)',
     'execute'), 'authenticated must not invoke credential rotation directly';
   assert not has_function_privilege('authenticated',
     'public.ack_compatibility_authorization_snapshot(text,bigint)','execute'),

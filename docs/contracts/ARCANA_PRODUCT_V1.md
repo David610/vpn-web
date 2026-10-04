@@ -322,22 +322,25 @@ singbox-vpn   node install/runtime, node-local credential application,
 
 - Links supporting `"privacy_plus"` routes (§5) — currently fail-closed
   with `422 unsupported_route`; two-hop is Arcana-app-only today.
-  **Investigated 2026-10-04, still open, scope now precise** (see
-  `ARCANA_LINKS_V1.md`'s "Route compatibility" section): permanently
-  impossible for `links`/`hiddify`/`shadowrocket`/`incy`/`xray` — their
-  formats are bare connection URIs with no field that can express a
-  second hop, not a qualification gap. Possible in principle for
-  `singbox`'s format via sing-box's own `detour` chaining (`singbox-vpn`
-  has already proven that exact mechanism end-to-end against a real
-  binary over real two-provider infrastructure), but
-  `subscription-renderers.js`'s `renderSingBox` has no per-hop credential
-  model and refuses `privacy_plus` unconditionally as of this
-  investigation — a prior version of it silently built a malformed,
-  uncredentialed entry-hop outbound that only looked complete because the
-  capability gate made it unreachable; that latent bug is fixed (refuse
-  loudly, not fabricate), but building real two-hop Links still needs a
-  second, per-hop credential issued and stored, which is its own scoped
-  follow-up, not done by this investigation.
+  **Investigated 2026-10-04, implementation now complete and tested,
+  capability deliberately still closed** (see `ARCANA_LINKS_V1.md`'s
+  "Route compatibility" section): permanently impossible for
+  `links`/`hiddify`/`shadowrocket`/`incy`/`xray` — their formats are bare
+  connection URIs with no field that can express a second hop, not a
+  qualification gap. For `singbox`'s format: the per-hop credential model
+  (`compatibility_credentials.hop`, hop-aware `create_external_vpn_device`/
+  `rotate_compatibility_credential`) and the renderer
+  (`subscription-renderers.js`'s `renderSingBox`, now building a correct
+  `detour` chain with its own entry-hop credential rather than the
+  malformed, uncredentialed outbound an earlier version silently built)
+  both exist now, covered by SQL and unit tests. `client-capabilities.js`
+  still refuses `privacy_plus` for every client including `singbox`: that
+  is a deliberate, separate decision, not a leftover implementation gap —
+  nothing has verified a real sing-box-based compatibility client actually
+  honors the rendered chain against this pipeline's own real, deployed
+  node infrastructure (as opposed to `singbox-vpn`'s own proven, but
+  separate, implementation). Flipping it is its own explicit follow-up
+  once that verification exists.
 - ~~Reconciling `routing_mode` with the `Automatic`-location vs. hop-count
   two-axis model (§4).~~ **Resolved 2026-10-04** — see §4. `routing_mode`
   stays at rest unmigrated; API responses now also carry derived

@@ -7,19 +7,22 @@ const CAPABILITIES = Object.freeze({
   hiddify: Object.freeze({ fast: Object.freeze(["vless", "hysteria2"]), privacy_plus: Object.freeze([]) }),
   shadowrocket: Object.freeze({ fast: Object.freeze(["vless", "hysteria2"]), privacy_plus: Object.freeze([]) }),
   incy: Object.freeze({ fast: Object.freeze(["vless"]), privacy_plus: Object.freeze([]) }),
-  // singbox's format (a real sing-box JSON config) COULD express Privacy+
-  // via sing-box's own `detour` outbound-chaining -- singbox-vpn's own,
-  // separate Rust renderer already proves that mechanism end-to-end with a
+  // singbox's format (a real sing-box JSON config) expresses Privacy+ via
+  // sing-box's own `detour` outbound-chaining -- the same mechanism
+  // singbox-vpn's own, separate Rust renderer proves end-to-end with a
   // real sing-box binary over real two-provider infrastructure (see
-  // singbox-vpn/docs/DEVICE_ACCEPTANCE_TESTS.md, 2026-09-22 entry). But
-  // THIS renderer (subscription-renderers.js's renderSingBox) cannot build
-  // it correctly today: it has no per-hop credential model -- only one
-  // credential is ever issued/fetched per compatibility device, and a real
-  // two-hop relay needs an independently-scoped credential for the entry
-  // hop too (ARCANA_PRODUCT_V1.md §4b). renderSingBox refuses Privacy+ on
-  // its own even if this flag were flipped (see its own comment) --
-  // fixing this for real needs a second, per-hop credential issued and
-  // stored, which is scoped follow-up work, not a flag flip.
+  // singbox-vpn/docs/DEVICE_ACCEPTANCE_TESTS.md, 2026-09-22 entry).
+  // renderSingBox now builds a correct two-hop config, and the per-hop
+  // credential model exists end-to-end (compatibility_credentials.hop,
+  // create_external_vpn_device/rotate_compatibility_credential's
+  // p_credentials -- see supabase/migrations/
+  // 20261015000000_compatibility_two_hop_credentials.sql) and is covered
+  // by SQL + unit tests. This flag stays closed anyway: nothing has yet
+  // verified real sing-box-based compat clients actually honor the
+  // rendered `detour` chain against this specific pipeline's real,
+  // deployed node infrastructure, as opposed to singbox-vpn's own proven
+  // (but separate) implementation. Flip deliberately, not as a side
+  // effect of another change, once that verification exists.
   singbox: Object.freeze({ fast: Object.freeze(["vless", "hysteria2"]), privacy_plus: Object.freeze([]) }),
   xray: Object.freeze({ fast: Object.freeze(["vless"]), privacy_plus: Object.freeze([]) }),
   links: Object.freeze({ fast: Object.freeze(["vless", "hysteria2"]), privacy_plus: Object.freeze([]) }),

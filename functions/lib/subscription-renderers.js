@@ -43,45 +43,44 @@ export function renderShadowrocket(input) { return linksFor("shadowrocket", inpu
 export function renderIncy(input) { return linksFor("incy", input.route, input.credential).join("\n") + "\n"; }
 export function renderXray(input) { return JSON.stringify({ version: 1, remarks: safeName(input.route), servers: linksFor("xray", input.route, input.credential) }, null, 2) + "\n"; }
 
+function vlessOutbound(tag, route, vlessUuid) {
+  return {
+    type: "vless", tag, server: route.server, server_port: route.port,
+    uuid: vlessUuid, flow: route.vlessFlow || "xtls-rprx-vision",
+    tls: { enabled: true, server_name: route.tlsServerName, reality: { enabled: true, public_key: route.realityPublicKey, short_id: route.realityShortId }, utls: { enabled: true, fingerprint: route.realityFingerprint || "chrome" } },
+  };
+}
+
 /**
- * Privacy+ (two-hop) is refused here unconditionally, not just by the
- * `assertSupported` capability gate above. This function has no way to
- * build a correct two-hop config: a second, independently-scoped
- * credential for the entry hop (required per
- * docs/contracts/ARCANA_PRODUCT_V1.md §4b -- "Entry and exit use
- * independently scoped credential material") is not modeled anywhere in
- * this data path. `compatibility_credentials` holds one credential per
- * device for rotation, not one per hop, and this function's only input is
- * a single `credential`.
+ * Privacy+ (two-hop) via sing-box's own `detour` outbound chaining --
+ * entry hop first, `detour`-ed into by the exit hop, `route.final` pointed
+ * at the exit's own tag so nothing else is reachable. This is the same
+ * mechanism `singbox-vpn` proves end-to-end against a real binary over
+ * real two-provider infrastructure (see ARCANA_PRODUCT_V1.md §10).
  *
- * An earlier version of this function built an `outbounds` array with a
- * `detour`-chained entry hop assembled by spreading `route.entry`'s flat
- * fields directly as an outbound object -- which is missing `type`,
- * `server_port` (it had `port`), and a full `tls` block, and carries no
- * credential at all for that hop. It only ever looked complete because the
- * capability gate made it unreachable. Caught during the investigation for
- * reconciling `vpn-web`'s Links feature with `singbox-vpn`'s own, separate
- * and real-device-verified two-hop `detour` mechanism (see
- * ARCANA_PRODUCT_V1.md §10) -- that mechanism is sound in principle, but
- * this specific implementation never carried it out correctly, and silently
- * shipping it on a future capability-gate flip would serve a broken,
- * unauthenticated entry hop to a paying customer. Building it correctly is
- * its own scoped follow-up: it needs a second credential issued and stored
- * per two-hop device, not a local fix to this function alone.
+ * `route.entry` must carry its OWN independently-scoped `vlessUuid` (per
+ * §4b) alongside the entry node's public material -- an earlier version of
+ * this function instead spread `route.entry`'s flat fields directly as an
+ * outbound object, which produced a malformed, uncredentialed entry hop
+ * that only looked complete because the capability gate (still closed
+ * today -- see client-capabilities.js) made it unreachable. Fixed as part
+ * of also fixing the credential-issuance side that was supposed to supply
+ * `vlessUuid` (ARCANA_LINKS_V1.md's "Route compatibility" section).
+ * Refusing explicitly when it's still missing, rather than building a
+ * partial chain, is deliberate defense in depth independent of that gate.
  */
 export function renderSingBox({ route, credential }) {
   assertSupported("singbox", route.mode);
-  if (route.mode === "privacy_plus") {
-    throw new UnsupportedClientModeError(
-      "singbox cannot represent Arcana Privacy+ yet -- no per-hop credential model exists for compatibility clients"
-    );
-  }
   const exitTag = safeName(route);
-  const outbound = {
-    type: "vless", tag: exitTag, server: route.server, server_port: route.port,
-    uuid: credential.vless_uuid, flow: route.vlessFlow || "xtls-rprx-vision",
-    tls: { enabled: true, server_name: route.tlsServerName, reality: { enabled: true, public_key: route.realityPublicKey, short_id: route.realityShortId }, utls: { enabled: true, fingerprint: route.realityFingerprint || "chrome" } },
-  };
+  const outbound = vlessOutbound(exitTag, route, credential.vless_uuid);
+  if (route.mode === "privacy_plus") {
+    if (!route.entry?.vlessUuid) {
+      throw new UnsupportedClientModeError("Privacy+ route topology is incomplete -- missing entry hop credential");
+    }
+    outbound.detour = "arcana-entry";
+    const entryOutbound = vlessOutbound("arcana-entry", route.entry, route.entry.vlessUuid);
+    return JSON.stringify({ log: { level: "warn" }, outbounds: [entryOutbound, outbound], route: { final: exitTag } }, null, 2) + "\n";
+  }
   return JSON.stringify({ log: { level: "warn" }, outbounds: [outbound], route: { final: exitTag } }, null, 2) + "\n";
 }
 

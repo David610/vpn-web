@@ -34,6 +34,21 @@ export async function newProtocolCredential(env) {
   return { material, ...(await encryptSecret(JSON.stringify(material), env.VPN_SECRETS_ENCRYPTION_KEY)) };
 }
 
+/**
+ * One independently-scoped credential per hop the route needs: one (hop 1)
+ * for 'fast', two (hop 1 entry, hop 2 exit) for 'privacy_plus' -- never the
+ * same credential shared across hops (ARCANA_PRODUCT_V1.md §4b). Shaped
+ * for direct use as the `p_credentials` jsonb array
+ * `create_external_vpn_device`/`rotate_compatibility_credential` take.
+ */
+export async function mintCompatibilityCredentials(env, privacyClass) {
+  const hops = privacyClass === "privacy_plus" ? [1, 2] : [1];
+  return Promise.all(hops.map(async (hop) => {
+    const protocol = await newProtocolCredential(env);
+    return { hop, credential_id: newOpaqueId("cred"), credential_ciphertext: protocol.ciphertext, credential_nonce: protocol.nonce };
+  }));
+}
+
 export function subscriptionUrl(request, token, format) {
   const origin = new URL(request.url).origin;
   return `${origin}/sub/${encodeURIComponent(token)}?format=${encodeURIComponent(format)}`;
