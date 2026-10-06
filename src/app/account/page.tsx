@@ -1,106 +1,132 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AccountShell, useAccount } from "@/components/account/AccountShell";
-import { bytes } from "@/components/account/links";
-import { api, euro } from "@/lib/api";
-import { monthlyCents, statusLabel } from "@/components/account/types";
+import { bytes, type VpnLink } from "@/components/account/links";
+import UsageChart, { dailyTotals, type UsageRow } from "@/components/account/UsageChart";
+import { api, euro, relative } from "@/lib/api";
+import { LIVE, monthlyCents } from "@/components/account/types";
+
+type LinkSummary = { links: VpnLink[]; usage: UsageRow[]; failed?: boolean };
+
+function dateLabel(iso: string | null) {
+  return iso ? new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : null;
+}
 
 function OverviewBody() {
   const { overview, error, session } = useAccount();
-  const [linkSummary, setLinkSummary] = useState<{ count: number; usageBytes: number | null; failed?: boolean } | null>(null);
+  const [summary, setSummary] = useState<LinkSummary | null>(null);
   useEffect(() => {
     let live = true;
     Promise.all([
-      api<{ links: unknown[] }>(session, "/api/account/links"),
-      api<{ usage: Array<{ rx_bytes: number | string; tx_bytes: number | string }> }>(session, "/api/account/links/usage"),
-    ]).then(([links, usage]) => {
-      if (!live) return;
-      const total = usage.usage.length ? usage.usage.reduce((sum, row) => sum + Number(row.rx_bytes) + Number(row.tx_bytes), 0) : null;
-      setLinkSummary({ count: links.links.length, usageBytes: total });
-    }).catch(() => { if (live) setLinkSummary({ count: 0, usageBytes: null, failed: true }); });
+      api<{ links: VpnLink[] }>(session, "/api/account/links"),
+      api<{ usage: UsageRow[] }>(session, "/api/account/links/usage"),
+    ])
+      .then(([l, u]) => { if (live) setSummary({ links: l.links, usage: u.usage }); })
+      .catch(() => { if (live) setSummary({ links: [], usage: [], failed: true }); });
     return () => { live = false; };
   }, [session]);
+
+  const days = useMemo(() => dailyTotals(summary?.usage ?? []), [summary]);
+  const total = days.reduce((sum, d) => sum + d.bytes, 0);
+  const perLink = useMemo(() => {
+    const totals = new Map<string, number>();
+    for (const r of summary?.usage ?? []) totals.set(String(r.link_id), (totals.get(String(r.link_id)) ?? 0) + Number(r.rx_bytes) + Number(r.tx_bytes));
+    return totals;
+  }, [summary]);
+
   if (error && !overview) return null;
   if (!overview) return <p className="muted">Loading…</p>;
 
   const { subscriptions, devices, capacity, plan } = overview;
+  const sub = subscriptions.find((s) => LIVE.has(s.status)) ?? subscriptions[0] ?? null;
+  const activeDevices = devices.filter((d) => d.status !== "REVOKED");
+  const activeLinks = (summary?.links ?? []).filter((l) => l.status === "active");
 
   return (
     <>
-      <div className="stats" style={{ marginBottom: "var(--space-12)" }}>
-        <div className="stats__cell">
-          <p className="stats__value">{capacity.used} / {capacity.total}</p>
-          <p className="stats__label">Devices used</p>
-        </div>
-        <div className="stats__cell">
-          <p className="stats__value">{subscriptions.length}</p>
-          <p className="stats__label">Subscriptions</p>
-        </div>
-        <div className="stats__cell">
-          <p className="stats__value">{devices.length}</p>
-          <p className="stats__label">Registered devices</p>
-        </div>
+      <div className="cards">
+        <section className="card">
+          <p className="card__label">Subscription</p>
+          {sub ? (
+            <>
+              <p className="card__value">
+                {euro(monthlyCents(plan, sub.extraPacks))} <span className="card__unit">/ month</span>
+              </p>
+              <p className="card__note">
+                {sub.cancelAtPeriodEnd ? "Ends" : "Renews"} on {dateLabel(sub.currentPeriodEnd) ?? "—"}
+              </p>
+            </>
+          ) : (
+            <p className="card__note">No subscription yet.</p>
+          )}
+          <Link className="btn btn-secondary btn-block" href="/account/subscription/">Manage</Link>
+        </section>
+        <section className="card">
+          <p className="card__label">Devices</p>
+          <p className="card__value">{capacity.used} / {capacity.total}</p>
+          <p className="card__note">Places in use</p>
+          <Link className="btn btn-secondary btn-block" href="/account/devices/">Manage</Link>
+        </section>
+        <section className="card">
+          <p className="card__label">Links</p>
+          <p className="card__value">{summary?.failed ? "—" : summary ? activeLinks.length : "…"}</p>
+          <p className="card__note">{summary?.failed ? "Temporarily unavailable" : "Active Links"}</p>
+          <Link className="btn btn-secondary btn-block" href="/account/links/">Manage</Link>
+        </section>
       </div>
 
-      <div className="block">
-        <div className="block__head">
-          <h2 className="block__title">Links</h2>
-          <Link href="/account/links/" className="text-link">Manage</Link>
+      <section className="panel-lite">
+        <div className="panel-lite__head">
+          <h2>Usage (30 days)</h2>
+          <span className="muted">Links only</span>
         </div>
-        <p className="muted" style={{ marginTop: "var(--space-4)" }}>
-          {linkSummary?.failed ? "Links are temporarily unavailable." : linkSummary ? `${linkSummary.count} ${linkSummary.count === 1 ? "Link" : "Links"} · compatible VPN apps with independently revocable configurations.` : "Loading Links…"}
-        </p>
-      </div>
-
-      <div className="block">
-        <div className="block__head"><h2 className="block__title">Usage</h2></div>
-        <p className="muted" style={{ marginTop: "var(--space-4)" }}>{linkSummary?.failed ? "Usage is temporarily unavailable." : linkSummary?.usageBytes != null ? `${bytes(linkSummary.usageBytes)} aggregate transfer` : "No usage data yet"}</p>
-      </div>
-
-      <div className="block">
-        <div className="block__head">
-          <h2 className="block__title">Subscriptions</h2>
-          <Link href="/account/subscription/" className="text-link">Manage</Link>
-        </div>
-        {subscriptions.length === 0 ? (
-          <p className="muted" style={{ marginTop: "var(--space-4)" }}>No subscriptions yet.</p>
+        {summary?.failed ? (
+          <p className="muted">Usage is temporarily unavailable.</p>
         ) : (
-          <ul className="rows">
-            {subscriptions.map((s) => (
-              <li key={s.id} className="row">
-                <div>
-                  <p className="row__title">{s.name}</p>
-                  <p className="row__sub">
-                    {statusLabel(s)} · {s.used}/{s.capacity} devices · {euro(monthlyCents(plan, s.extraPacks))}/mo
-                  </p>
-                </div>
-              </li>
-            ))}
-          </ul>
+          <>
+            <p className="card__value">{total > 0 ? bytes(total) : "No usage yet"}</p>
+            <UsageChart days={days} />
+          </>
         )}
-      </div>
+      </section>
 
-      <div className="block">
-        <div className="block__head">
-          <h2 className="block__title">Devices</h2>
-          <Link href="/account/devices/" className="text-link">Manage</Link>
-        </div>
-        {devices.length === 0 ? (
-          <p className="muted" style={{ marginTop: "var(--space-4)" }}>No devices registered yet.</p>
-        ) : (
-          <ul className="rows">
-            {devices.slice(0, 5).map((d) => (
-              <li key={d.id} className="row">
-                <div>
-                  <p className="row__title">{d.name}</p>
-                  <p className="row__sub">{d.platform} · {d.status === "REVOKED" ? "Revoked" : "Active"}</p>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
+      <div className="split">
+        <section className="panel-lite">
+          <h2>Active devices</h2>
+          {activeDevices.length === 0 ? (
+            <p className="muted">No devices registered yet.</p>
+          ) : (
+            <ul className="mini-rows">
+              {activeDevices.slice(0, 3).map((d) => (
+                <li key={d.id}>
+                  <span className="mini-rows__name">{d.name}</span>
+                  <span className="muted">{d.platform}</span>
+                  <span className="muted mini-rows__end">{d.lastSeenAt ? relative(d.lastSeenAt) : "Not connected yet"}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          <Link className="text-link" href="/account/devices/">View all devices →</Link>
+        </section>
+        <section className="panel-lite">
+          <h2>Active links</h2>
+          {activeLinks.length === 0 ? (
+            <p className="muted">{summary?.failed ? "Links are temporarily unavailable." : "No Links yet."}</p>
+          ) : (
+            <ul className="mini-rows">
+              {activeLinks.slice(0, 3).map((l) => (
+                <li key={l.id}>
+                  <span className="mini-rows__name">{l.name}</span>
+                  <span className="muted">{l.clientCount} {l.clientCount === 1 ? "client" : "clients"}</span>
+                  <span className="muted mini-rows__end">{bytes(perLink.get(l.id) ?? 0)}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          <Link className="text-link" href="/account/links/">View all links →</Link>
+        </section>
       </div>
     </>
   );
@@ -108,7 +134,7 @@ function OverviewBody() {
 
 export default function AccountOverviewPage() {
   return (
-    <AccountShell eyebrow="Account" title="Overview" sub="Your subscriptions, devices and capacity at a glance.">
+    <AccountShell eyebrow="Account" title="Overview" sub="Your VPN, on your terms.">
       <OverviewBody />
     </AccountShell>
   );

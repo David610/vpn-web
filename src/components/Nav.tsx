@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { SITE_NAME } from "@/lib/site-config";
@@ -13,12 +13,25 @@ const LINKS = [
   { href: "/help", label: "Help" },
 ];
 
+// Same localStorage entry useLocalSessionFlag reads; only the email is taken from it, for the avatar chip.
+function readEmail(): string | null {
+  try {
+    const raw = window.localStorage.getItem("arcana-auth-v1");
+    const email = raw ? JSON.parse(raw)?.user?.email : null;
+    return typeof email === "string" ? email : null;
+  } catch {
+    return null;
+  }
+}
+
 export default function Nav() {
   // Reads localStorage directly instead of useSession()/the Supabase client
   // (F-44/K-04) — this component renders on every public page, and the only
   // thing it needs auth state for is which nav link to show.
   const { hasSession: session, loading } = useLocalSessionFlag();
   const [open, setOpen] = useState(false);
+  const [email, setEmail] = useState<string | null>(null);
+  useEffect(() => setEmail(readEmail()), [session]);
   const pathname = usePathname() ?? "";
 
   async function handleLogout() {
@@ -70,10 +83,13 @@ export default function Nav() {
         <div className="dm-nav__actions">
           {loading ? null : session ? (
             <>
-              <Link href="/account/" className="dm-nav__link" onClick={close}>
-                Account
+              <Link href="/account/" className="dm-nav__account" onClick={close}>
+                <span className="dm-nav__avatar" aria-hidden="true">
+                  {(email ?? "A").charAt(0).toUpperCase()}
+                </span>
+                <span className="dm-nav__email">{email ?? "Account"}</span>
               </Link>
-              <button type="button" onClick={handleLogout} className="btn btn-primary dm-nav__cta">
+              <button type="button" onClick={handleLogout} className="dm-nav__link dm-nav__logout">
                 Log out
               </button>
             </>
