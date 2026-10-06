@@ -15,6 +15,9 @@ vi.mock("@supabase/supabase-js", () => ({
 }));
 
 const { onRequestPost } = await import("../bootstrap-status.js");
+// A real sing-box REALITY public key: base64url, 43 characters, contains "-" and "_".
+const REAL_KEY = "Vq8-_0123456789abcdefghijklmnopqrstuvwx_-Zz";
+const REAL_SID = "a1b2c3d4";
 const env = { SUPABASE_URL: "https://s.test", SUPABASE_SERVICE_ROLE_KEY: "k" };
 const req = (body, auth = "Bearer node-key") =>
   new Request("https://x.test/api/agent/bootstrap-status", {
@@ -67,8 +70,8 @@ describe("POST /api/agent/bootstrap-status", () => {
           transport: "vless-reality",
           server_port: 443,
           tls_server_name: "decoy.example.test",
-          reality_public_key: "abc123",
-          reality_short_id: "def456",
+          reality_public_key: REAL_KEY,
+          reality_short_id: REAL_SID,
           reality_fingerprint: "chrome",
           vless_flow: "xtls-rprx-vision",
         },
@@ -79,11 +82,45 @@ describe("POST /api/agent/bootstrap-status", () => {
       transport: "vless-reality",
       transport_port: 443,
       tls_server_name: "decoy.example.test",
-      reality_public_key: "abc123",
-      reality_short_id: "def456",
+      reality_public_key: REAL_KEY,
+      reality_short_id: REAL_SID,
       reality_fingerprint: "chrome",
       vless_flow: "xtls-rprx-vision",
     });
+  });
+
+  const transportWith = (overrides) => ({
+    stage: "COMPLETE",
+    status: "OK",
+    message: "bootstrap complete",
+    transport: {
+      transport: "vless-reality",
+      server_port: 443,
+      tls_server_name: "decoy.example.test",
+      reality_public_key: REAL_KEY,
+      reality_short_id: REAL_SID,
+      reality_fingerprint: "chrome",
+      vless_flow: "xtls-rprx-vision",
+      ...overrides,
+    },
+  });
+
+  it("never publishes a REALITY public key that is not 43 base64url characters", async () => {
+    for (const bad of [REAL_KEY.slice(0, 41), REAL_KEY + "A", "abc123", REAL_KEY.replace("-", "+"), REAL_KEY.replace("_", "/")]) {
+      nodesUpdate.mockClear();
+      const res = await onRequestPost({ env, request: req(transportWith({ reality_public_key: bad })) });
+      expect(res.status).toBe(200); // the stage report itself is still accepted
+      expect(nodesUpdate.mock.calls[0][0]).not.toHaveProperty("reality_public_key");
+      expect(nodesUpdate.mock.calls[0][0]).toMatchObject({ bootstrap_stage: "COMPLETE" });
+    }
+  });
+
+  it("never publishes a REALITY short id that is not even-length hex", async () => {
+    for (const bad of ["xyz", "abc", "a1b2c3d4e5f6a7b8c9", "a1b2c3d4 "]) {
+      nodesUpdate.mockClear();
+      await onRequestPost({ env, request: req(transportWith({ reality_short_id: bad })) });
+      expect(nodesUpdate.mock.calls[0][0]).not.toHaveProperty("reality_short_id");
+    }
   });
 
   it("drops a malformed transport report without failing the rest of the bootstrap-status update", async () => {

@@ -11,6 +11,8 @@ function json(body, status = 200) {
 
 const STATUSES = new Set(["RUNNING", "OK", "FAILED"]);
 const VALID_TRANSPORTS = new Set(["vless-reality", "hysteria2"]);
+const REALITY_PUBLIC_KEY_RE = /^[A-Za-z0-9_-]{43}$/;
+const REALITY_SHORT_ID_RE = /^(?:[0-9a-fA-F]{2}){1,8}$/;
 
 function nonEmptyString(value, max = 128) {
   return typeof value === "string" && value.length > 0 && value.length <= max ? value : null;
@@ -35,8 +37,16 @@ function validateTransport(transport) {
 
   const fields = { transport: transport.transport, transport_port: port, tls_server_name: tlsServerName };
   if (transport.transport === "vless-reality") {
-    const realityPublicKey = nonEmptyString(transport.reality_public_key, 128);
-    const realityShortId = nonEmptyString(transport.reality_short_id, 32);
+    // A REALITY public key is 32 bytes as unpadded base64url (43 characters) and a
+    // short id is 1-8 bytes as hex. Anything else is a corrupted report (for
+    // example one that lost its '-' or '_' characters) and is dropped, never
+    // published into the signed route directory.
+    const realityPublicKey = REALITY_PUBLIC_KEY_RE.test(transport.reality_public_key ?? "")
+      ? transport.reality_public_key
+      : null;
+    const realityShortId = REALITY_SHORT_ID_RE.test(transport.reality_short_id ?? "")
+      ? transport.reality_short_id
+      : null;
     const realityFingerprint = nonEmptyString(transport.reality_fingerprint, 32);
     const vlessFlow = nonEmptyString(transport.vless_flow, 64);
     if (!realityPublicKey || !realityShortId || !realityFingerprint || !vlessFlow) return null;

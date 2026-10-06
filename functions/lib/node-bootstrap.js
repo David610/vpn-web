@@ -140,6 +140,10 @@ agent_api_key = "$key"
 poll_interval_secs = 5
 vpn_admin_binary = "/usr/local/bin/vpn-admin"
 vpn_admin_config = "/etc/vpn/deployment.toml"
+# The agent defaults to 0 (no lease users) so unmanaged nodes never rotate
+# credentials; a bootstrapped fleet node is managed, and /v1/vpn/authorize can
+# only issue credentials from this pool (ADR-0003 default).
+lease_pool_size = 32
 CFG
   sync "$tmp"
   mv -f "$tmp" "$AGENT_CONFIG"
@@ -231,13 +235,15 @@ stage_dns_wait() {
 # as "no transport to include".
 transport_report_json() {
   local pubkey short_id
-  # base64 (public.key) and hex (short_id.txt) are both subsets of this
-  # allowlist. A quote/backslash/newline from a corrupted file must never
+  # public.key is base64url (A-Za-z0-9_-, 43 characters); short_id.txt is hex.
+  # Both are subsets of this allowlist. '-' and '_' MUST be kept: dropping them
+  # corrupted about three keys in four and the node then published a key no
+  # client could use. A quote/backslash/newline from a corrupted file must never
   # reach the printf below -- bootstrap-status.js's JSON.parse fails the
   # WHOLE request (stage/status/message included) on malformed JSON, not
   # just these optional fields, the same reasoning report()'s own
   # message argument is already filtered through tr -cd for.
-  pubkey="$(cat /etc/vpn/compat/reality/public.key 2>/dev/null | tr -cd 'A-Za-z0-9+/=' || true)"
+  pubkey="$(cat /etc/vpn/compat/reality/public.key 2>/dev/null | tr -cd 'A-Za-z0-9+/=_-' || true)"
   short_id="$(cat /etc/vpn/compat/reality/short_id.txt 2>/dev/null | tr -cd 'A-Za-z0-9+/=' || true)"
   if [ -z "$pubkey" ] || [ -z "$short_id" ]; then
     echo ""
