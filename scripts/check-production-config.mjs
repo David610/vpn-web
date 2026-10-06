@@ -49,7 +49,7 @@ export function isProductionDeployEnv(env = process.env) {
 
 export const LEGAL_FILES = [
   "src/app/terms/page.tsx",
-  "src/app/privacy/page.tsx",
+  "src/app/privacy/policy/page.tsx",
   "src/app/impressum/page.tsx",
 ];
 

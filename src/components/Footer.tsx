@@ -10,6 +10,9 @@ export default function Footer() {
           <a href="/privacy/" className="dm-footer__link">
             Privacy
           </a>
+          <a href="/privacy/policy/" className="dm-footer__link">
+            Privacy policy
+          </a>
           <a href="/terms/" className="dm-footer__link">
             Terms
           </a>

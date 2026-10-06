@@ -2,8 +2,16 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { SITE_NAME } from "@/lib/site-config";
 import { useLocalSessionFlag } from "@/hooks/useLocalSessionFlag";
+
+const LINKS = [
+  { href: "/apps", label: "Product" },
+  { href: "/locations", label: "Locations" },
+  { href: "/pricing", label: "Pricing" },
+  { href: "/help", label: "Help" },
+];
 
 export default function Nav() {
   // Reads localStorage directly instead of useSession()/the Supabase client
@@ -11,6 +19,7 @@ export default function Nav() {
   // thing it needs auth state for is which nav link to show.
   const { hasSession: session, loading } = useLocalSessionFlag();
   const [open, setOpen] = useState(false);
+  const pathname = usePathname() ?? "";
 
   async function handleLogout() {
     // Dynamically imported so the Supabase SDK chunk still isn't part of
@@ -22,6 +31,9 @@ export default function Nav() {
     });
     window.location.href = "/";
   }
+
+  const close = () => setOpen(false);
+  const isActive = (href: string) => pathname === href || pathname.startsWith(`${href}/`);
 
   return (
     <header className="dm-nav">
@@ -42,30 +54,40 @@ export default function Nav() {
         className={`dm-nav__desktop${open ? " dm-nav__desktop--open" : ""}`}
         aria-label="Main"
       >
-        <Link href="/locations" className="dm-nav__link" onClick={() => setOpen(false)}>
-          Locations
-        </Link>
-        <Link href="/pricing" className="dm-nav__link" onClick={() => setOpen(false)}>
-          Pricing
-        </Link>
-        {loading ? null : session ? (
-          <>
-            <Link href="/account/" className="dm-nav__link" onClick={() => setOpen(false)}>
-              Account
-            </Link>
-            <button
-              type="button"
-              onClick={handleLogout}
-              className="btn btn-secondary dm-nav__cta"
+        <div className="dm-nav__links">
+          {LINKS.map((l) => (
+            <Link
+              key={l.href}
+              href={l.href}
+              className={`dm-nav__link${isActive(l.href) ? " dm-nav__link--active" : ""}`}
+              aria-current={isActive(l.href) ? "page" : undefined}
+              onClick={close}
             >
-              Log out
-            </button>
-          </>
-        ) : (
-          <Link href="/login" className="btn btn-secondary dm-nav__cta" onClick={() => setOpen(false)}>
-            Log in
-          </Link>
-        )}
+              {l.label}
+            </Link>
+          ))}
+        </div>
+        <div className="dm-nav__actions">
+          {loading ? null : session ? (
+            <>
+              <Link href="/account/" className="dm-nav__link" onClick={close}>
+                Account
+              </Link>
+              <button type="button" onClick={handleLogout} className="btn btn-primary dm-nav__cta">
+                Log out
+              </button>
+            </>
+          ) : (
+            <>
+              <Link href="/login" className="dm-nav__link" onClick={close}>
+                Log in
+              </Link>
+              <Link href="/signup" className="btn btn-primary dm-nav__cta" onClick={close}>
+                Get {SITE_NAME}
+              </Link>
+            </>
+          )}
+        </div>
       </nav>
     </header>
   );

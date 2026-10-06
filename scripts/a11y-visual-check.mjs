@@ -216,6 +216,7 @@ const PAGES = [
   { path: "/signup/", label: "public-signup" },
   { path: "/terms/", label: "public-terms" },
   { path: "/privacy/", label: "public-privacy" },
+  { path: "/privacy/policy/", label: "public-privacy-policy" },
   { path: "/impressum/", label: "public-impressum" },
   { path: "/account/", label: "account-overview" },
   { path: "/account/subscriptions/", label: "account-subscriptions" },

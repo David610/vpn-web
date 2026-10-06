@@ -39,7 +39,7 @@ export default function TermsPage() {
             your own devices. It is not intended to be shared across
             multiple people or resold. We monitor for usage patterns
             inconsistent with this (see our{" "}
-            <a href="/privacy/" className="text-link">
+            <a href="/privacy/policy/" className="text-link">
               Privacy Policy
             </a>{" "}
             for what we sample and why) and may flag an account for manual
