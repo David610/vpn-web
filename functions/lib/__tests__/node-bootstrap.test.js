@@ -65,6 +65,44 @@ describe("buildNodeBootstrapUserData", () => {
     expect(fnBody).toMatch(/short_id\.txt.*2>\/dev\/null \| tr -cd '[^']+' \|\| true/);
   });
 
+  // sing-box REALITY public keys are base64url (43 characters, alphabet
+  // A-Za-z0-9_-). A filter that only allows the standard base64 alphabet
+  // silently deletes every '-' and '_' -- about three keys in four -- and the
+  // node then publishes a key no client can use. Found on real nodes: a 43
+  // character key was published as 41/42 characters.
+  it("keeps the base64url characters '-' and '_' when it reads the REALITY public key", () => {
+    const fnStart = BOOTSTRAP_SCRIPT.indexOf("transport_report_json()");
+    const fnBody = BOOTSTRAP_SCRIPT.slice(fnStart, BOOTSTRAP_SCRIPT.indexOf("\n}", fnStart) + 2);
+    const line = fnBody.split("\n").find((l) => l.includes("public.key") && l.includes("tr -cd"));
+    expect(line).toBeTruthy();
+    const set = /tr -cd '([^']+)'/.exec(line)[1];
+    // Emulate tr's character set: ranges and literals, a trailing '-' is literal.
+    const kept = (ch) => {
+      for (let i = 0; i < set.length; i += 1) {
+        if (set[i + 1] === "-" && i + 2 < set.length) {
+          if (ch >= set[i] && ch <= set[i + 2]) return true;
+          i += 2;
+        } else if (set[i] === ch) return true;
+      }
+      return false;
+    };
+    const key = "Vq8-_0123456789abcdefghijklmnopqrstuvwxy_-Zz";
+    expect([...key].filter((c) => !kept(c)).join("")).toBe("");
+  });
+
+  // lease_pool_size defaults to 0 in the agent on purpose ("fleet bootstrap
+  // opts in explicitly"), and /v1/vpn/authorize can only hand out credentials
+  // from the node's lease pool. A bootstrap that never opts in produces nodes
+  // that answer every managed authorize with capacity_exhausted.
+  it("opts the agent into the managed lease pool", () => {
+    const cfgStart = BOOTSTRAP_SCRIPT.indexOf("write_agent_config()");
+    const cfgBody = BOOTSTRAP_SCRIPT.slice(cfgStart, BOOTSTRAP_SCRIPT.indexOf("\n}", cfgStart) + 2);
+    const m = /^lease_pool_size = (\d+)$/m.exec(cfgBody);
+    expect(m).not.toBeNull();
+    expect(Number(m[1])).toBeGreaterThan(0);
+    expect(Number(m[1])).toBeLessThanOrEqual(1024);
+  });
+
   it("never fails the INSTALL stage when the REALITY key files are absent", () => {
     // transport_report_json must fall back to an empty string (falsy in
     // bash's [ -n "$transport" ] check), not set -e-abort the script,
