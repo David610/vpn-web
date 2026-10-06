@@ -10,6 +10,15 @@ import { useSession } from "@/hooks/useSession";
 import { api } from "@/lib/api";
 import type { Overview } from "./types";
 
+const ICONS: Record<string, string> = {
+  Overview: "M4 11l8-7 8 7v9h-5v-6H9v6H4z",
+  Devices: "M5 5h14v10H5zM3 19h18",
+  Links: "M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1",
+  Subscription: "M4 6h16v12H4zM4 10h16",
+  Billing: "M7 3h10v18l-2-1.5-3 1.5-3-1.5L7 21zM10 8h4M10 12h4",
+  Settings: "M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M5.6 18.4l1.8-1.8M16.6 7.4l1.8-1.8",
+};
+
 const LINKS = [
   { href: "/account/", label: "Overview" },
   { href: "/account/devices/", label: "Devices" },
@@ -17,8 +26,15 @@ const LINKS = [
   { href: "/account/subscription/", label: "Subscription" },
   { href: "/account/billing/", label: "Billing" },
   { href: "/account/settings/", label: "Settings" },
-  { href: "/account/help/", label: "Help" },
 ];
+
+function NavIcon({ label }: { label: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d={ICONS[label]} />
+    </svg>
+  );
+}
 
 type AccountContext = {
   session: Session;
@@ -43,11 +59,15 @@ export function AccountShell({
   eyebrow,
   title,
   sub,
+  action,
+  crumbs,
   children,
 }: {
   eyebrow: string;
   title: string;
   sub?: string;
+  action?: React.ReactNode;
+  crumbs?: Array<{ label: string; href?: string }>;
   children: React.ReactNode;
 }) {
   const { session, loading } = useSession();
@@ -88,6 +108,7 @@ export function AccountShell({
           <nav className="area__nav" aria-label="Account">
             {LINKS.map((link) => (
               <Link key={link.href} href={link.href} aria-current={current(link.href) ? "page" : undefined}>
+                <NavIcon label={link.label} />
                 {link.label}
               </Link>
             ))}
@@ -109,11 +130,24 @@ export function AccountShell({
           </details>
         </aside>
         <main className="area__main">
-          <header className="area__head">
-            <p className="area__eyebrow">{eyebrow}</p>
-            <h1 className="area__title">{title}</h1>
-            {sub ? <p className="area__sub">{sub}</p> : null}
-          </header>
+          {title || action || crumbs ? <header className="area__head">
+            <div>
+              {crumbs ? (
+                <nav className="crumbs" aria-label="Breadcrumb">
+                  {crumbs.map((c, i) => (
+                    <span key={c.label}>
+                      {i > 0 ? <span aria-hidden="true"> › </span> : null}
+                      {c.href ? <Link href={c.href}>{c.label}</Link> : c.label}
+                    </span>
+                  ))}
+                </nav>
+              ) : null}
+              <p className="area__eyebrow">{eyebrow}</p>
+              {title ? <h1 className="area__title">{title}</h1> : null}
+              {sub ? <p className="area__sub">{sub}</p> : null}
+            </div>
+            {action ? <div className="area__action">{action}</div> : null}
+          </header> : null}
           {!session ? (
             <p className="muted">{loading ? "Loading…" : "Redirecting to log in…"}</p>
           ) : (

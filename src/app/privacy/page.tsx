@@ -1,124 +1,127 @@
 import Nav from "@/components/Nav";
 import Footer from "@/components/Footer";
+import AppMock from "@/components/AppMock";
 import { SITE_NAME, SITE_URL } from "@/lib/site-config";
 
 export const metadata = {
-  description: `Privacy policy for ${SITE_NAME}.`,
+  title: `Privacy — ${SITE_NAME}`,
+  description: `How ${SITE_NAME} protects your privacy: what we collect, what we never do, and the limits of any VPN.`,
   alternates: { canonical: `${SITE_URL}/privacy/` },
 };
+
+const PRINCIPLES = [
+  {
+    title: "No activity logs",
+    text: "We do not track, store or share your browsing activity, DNS queries or the apps you use.",
+    d: "M7 3h7l4 4v14H7zM14 3v4h4",
+  },
+  {
+    title: "Minimal account information",
+    text: "You only need an email address to get started. We don’t ask for your name, address or payment details beyond what’s required to process your subscription.",
+    d: "M12 4a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM4.5 20c.8-3.6 3.8-5.5 7.5-5.5s6.7 1.9 7.5 5.5",
+  },
+  {
+    title: "Privacy-safe diagnostics",
+    text: "Diagnostics only happen when you start them, and they exclude the sites you visit, DNS queries, tokens and credentials. They cannot be used to identify what you do online.",
+    d: "M12 3l7 3v5c0 5-3 8-7 10-4-2-7-5-7-10V6l7-3z",
+  },
+  {
+    title: "Transparent infrastructure",
+    text: "Your device connects with short-lived credentials that are kept separate from your account identity, and we explain how the service works.",
+    d: "M5 5h14v5H5zM5 14h14v5H5zM8 7.5h.01M8 16.5h.01",
+  },
+];
+
+const DOES = [
+  "Encrypts your internet connection, keeping your data private on public networks and from your ISP.",
+  "Hides your IP address from the sites and services you visit.",
+  "Lets you choose where you connect, with one server or two.",
+  "Gives each of your devices its own connection credentials, so you can remove one without affecting the others.",
+];
+
+const DOES_NOT = [
+  "It does not make you anonymous. Websites and online services can still identify you through your account, cookies or other data.",
+  "It does not protect you from malware, phishing or unsafe websites. You still need good security habits and up-to-date software.",
+  "It does not change the content of websites or services, or guarantee access to every platform.",
+  "It does not replace a secure browser, password manager or other privacy tools, but it works well alongside them.",
+];
+
+function Check({ kind }: { kind: "yes" | "no" }) {
+  return (
+    <svg className="mark" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="9" />
+      {kind === "yes" ? <path d="M8.5 12.5l2.5 2.5 4.5-5" /> : <path d="M9 9l6 6M15 9l-6 6" />}
+    </svg>
+  );
+}
 
 export default function PrivacyPage() {
   return (
     <>
       <Nav />
-      <main className="dm-section" style={{ borderBottom: "none" }}>
-        <div className="section-head">
-          <p className="section-eyebrow">Legal</p>
-          <h1 className="section-h2">Privacy Policy</h1>
-          <p className="section-sub">
-            What {SITE_NAME} collects, why, and how long it is kept.
-          </p>
+      <main className="page">
+        <section className="apps-hero">
+          <div>
+            <p className="eyebrow">Our privacy principles</p>
+            <h1 className="page__title">Privacy</h1>
+            <p className="page__lede">Your connection. Your business.</p>
+            <p className="page__body">
+              {SITE_NAME} is built around a simple idea: you should be in control of your online life. We
+              design our service to protect your privacy, minimize the data we collect, and be transparent
+              about how it all works.
+            </p>
+          </div>
+          <AppMock />
+        </section>
+
+        <ul className="principles">
+          {PRINCIPLES.map((p) => (
+            <li key={p.title}>
+              <span className="feature-list__icon feature-list__icon--lg" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d={p.d} />
+                </svg>
+              </span>
+              <div>
+                <h2>{p.title}</h2>
+                <p className="muted">{p.text}</p>
+              </div>
+            </li>
+          ))}
+        </ul>
+
+        <div className="two-col">
+          <section>
+            <p className="eyebrow">What {SITE_NAME} does</p>
+            <h2 className="two-col__title">A more private and open internet.</h2>
+            <p className="muted two-col__sub">{SITE_NAME} helps you take back control of your online experience.</p>
+            <ul className="marks">
+              {DOES.map((t) => (
+                <li key={t}>
+                  <Check kind="yes" />
+                  <span>{t}</span>
+                </li>
+              ))}
+            </ul>
+          </section>
+          <section>
+            <p className="eyebrow">What a VPN does not do</p>
+            <h2 className="two-col__title">A VPN isn’t a complete solution.</h2>
+            <p className="muted two-col__sub">It’s important to understand the limits of any VPN service.</p>
+            <ul className="marks">
+              {DOES_NOT.map((t) => (
+                <li key={t}>
+                  <Check kind="no" />
+                  <span>{t}</span>
+                </li>
+              ))}
+            </ul>
+          </section>
         </div>
-        <div className="legal-content">
-          <h2>Overview</h2>
-          <p>
-            {SITE_NAME} is a VPN service. We collect the minimum needed to
-            operate the account and billing relationship, and we do not log
-            or sell your browsing activity.
-          </p>
-          <span className="legal-todo">
-            TODO (legal review needed): this page is a structural draft, not
-            a lawyer-reviewed privacy policy. It needs sign-off before real
-            customer signups begin, and updating whenever a new data
-            processor (Stripe, Supabase, Resend, Cloudflare, the hosting
-            provider) or data category is added.
-          </span>
 
-          <h2>Data we collect</h2>
-          <ul>
-            <li>
-              <strong>Account data:</strong> email address and password hash
-              (via Supabase Auth), used to sign you in.
-            </li>
-            <li>
-              <strong>Billing data:</strong> handled by Stripe directly — we
-              store only your Stripe customer/subscription IDs and
-              subscription status, never your card details.
-            </li>
-            <li>
-              <strong>VPN configuration:</strong> a subscription URL/config
-              generated for your account, stored encrypted, used solely to
-              deliver your VPN connection details.
-            </li>
-            <li>
-              <strong>Device metadata:</strong> the name, platform, and last
-              connection time of each device you register, so you can see
-              and revoke them from your account dashboard.
-            </li>
-            <li>
-              <strong>Connection records:</strong> for the managed VPN
-              service, a per-device record of which route and server your
-              device was assigned and when, used to operate and load-balance
-              the network. This is routing metadata, not a browsing
-              history — we do not log which sites or services you connect
-              to.
-            </li>
-            <li>
-              <strong>Telegram data:</strong> if you link a Telegram account
-              to manage your VPN through our Telegram Mini App, we store
-              your Telegram user ID and the link between it and your
-              account.
-            </li>
-          </ul>
-
-          <h2>What we do not do</h2>
-          <ul>
-            <li>We do not log your browsing activity, DNS queries, or the destinations you connect to through the VPN.</li>
-            <li>We do not sell or share your data with advertisers.</li>
-          </ul>
-
-          <h2>Data processors</h2>
-          <p>
-            We use the following third-party processors to operate the
-            service: Stripe (payments), Supabase (authentication and
-            database), Cloudflare (hosting and the config-delivery API),
-            Resend (operational email alerts), Hetzner (the VPS servers that
-            run the VPN nodes your device connects to), and, if you choose
-            to link your account, Telegram (the Mini App used to manage
-            devices from Telegram). Each processes only the data necessary
-            for its function.
-          </p>
-
-          <h2>Data retention</h2>
-          <p>
-            Account and billing data are retained for the duration of your
-            subscription plus [retention period — TODO, confirm with legal;
-            typically bounded by tax/accounting record-keeping requirements
-            for billing data]. Connection records (which route/server a
-            device used and when) are deleted after 30 days; raw per-node
-            traffic samples are deleted after 7 days (daily totals are kept
-            for capacity planning); short-lived Telegram linking codes are
-            deleted shortly after they expire. You may request account
-            deletion at any time by contacting us.
-          </p>
-
-          <h2>Your rights (GDPR)</h2>
-          <p>
-            If you are in the EU/EEA, you have the right to access, correct,
-            delete, or export your personal data, and to object to or
-            restrict certain processing. Contact us at [privacy contact
-            email — TODO] to exercise these rights.
-          </p>
-
-          <h2>Contact</h2>
-          <p>
-            See our{" "}
-            <a href="/impressum/" className="text-link">
-              Impressum
-            </a>{" "}
-            for the responsible entity and contact details.
-          </p>
-        </div>
+        <p className="fineprint">
+          The legal details are in our <a className="text-link" href="/privacy/policy/">privacy policy</a>.
+        </p>
       </main>
       <Footer />
     </>

@@ -30,10 +30,10 @@ export function AdminPage({
 }) {
   return (
     <div>
-      <div className="mb-6 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-2">
+      <div className="mb-8 flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
         <div>
-          <h1 className="text-xl font-semibold text-fg">{title}</h1>
-          {description ? <p className="mt-1 text-xs text-fg-3">{description}</p> : null}
+          <h1 className="area__title">{title}</h1>
+          {description ? <p className="area__sub">{description}</p> : null}
         </div>
         {actions}
       </div>
@@ -55,10 +55,10 @@ export function AdminSection({
   children: ReactNode;
 }) {
   return (
-    <section className={`mb-8 ${className ?? ""}`}>
+    <section className={`panel-lite ${className ?? ""}`}>
       {label || action ? (
-        <div className="mb-2 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 border-b border-border pb-1">
-          {label ? <h2 className="text-xs font-semibold uppercase tracking-wide text-fg-3">{label}</h2> : <span />}
+        <div className="mb-3 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+          {label ? <h2 className="text-base font-semibold text-fg" style={{ margin: 0 }}>{label}</h2> : <span />}
           {action}
         </div>
       ) : null}

@@ -109,7 +109,7 @@ describe("checkProductionConfig", () => {
     expect(LEGAL_FILES).toEqual(
       expect.arrayContaining([
         "src/app/terms/page.tsx",
-        "src/app/privacy/page.tsx",
+        "src/app/privacy/policy/page.tsx",
         "src/app/impressum/page.tsx",
       ])
     );

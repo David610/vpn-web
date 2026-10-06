@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { AccountShell, useAccount } from "@/components/account/AccountShell";
 import { ConfirmDialog, InputDialog } from "@/components/Dialog";
@@ -24,6 +25,7 @@ function DeviceRow({
   const [error, setError] = useState<string | null>(null);
   const [renaming, setRenaming] = useState(false);
   const [revoking, setRevoking] = useState(false);
+  const [managing, setManaging] = useState(false);
 
   async function rename(name: string) {
     if (name === device.name) {
@@ -88,69 +90,72 @@ function DeviceRow({
   const revoked = device.status === "REVOKED";
 
   return (
-    <li className="row" style={{ gridTemplateColumns: "minmax(0, 1fr)" }}>
-      <div>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: "var(--space-3)" }}>
-          <div>
-            <p className="row__title">{device.name}</p>
-            <p className="row__sub">
-              {device.platform === "external" ? "Compatible external client" : `Arcana-managed · ${device.platform}`} · {revoked ? "Revoked" : "Active"}
-            </p>
-            <p className="row__sub">Last seen {relative(device.lastSeenAt)}{device.current ? " · Current device" : ""}</p>
-          </div>
-        </div>
-
-        {!revoked && (
-          <div className="form-grid" style={{ marginTop: "var(--space-3)" }}>
-            <div>
-              <label className="field-label" htmlFor={`sub-${device.id}`}>Subscription</label>
-              <select
-                id={`sub-${device.id}`}
-                className="field select"
-                value={device.subscriptionId ?? ""}
-                disabled={busy !== null}
-                onChange={(e) => move(e.target.value)}
-              >
-                <option value="" disabled>Choose a subscription</option>
-                {subscriptions.map((s) => (
-                  <option key={s.id} value={s.id}>{s.name}</option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="field-label" htmlFor={`conn-${device.id}`}>Configuration</label>
-              <select
-                id={`conn-${device.id}`}
-                className="field select"
-                value={assignment?.profileId ?? ""}
-                disabled={busy !== null || profiles.length === 0}
-                onChange={(e) => changeConnection(e.target.value)}
-              >
-                <option value="" disabled>
-                  {profiles.length === 0 ? "No configurations yet" : "Choose a configuration"}
-                </option>
-                {profiles.map((p) => (
-                  <option key={p.id} value={p.id} disabled={!p.enabled && p.id !== assignment?.profileId}>
-                    {p.name}{p.enabled ? "" : " (disabled)"}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-        )}
-
-        <div className="row__actions" style={{ justifyContent: "flex-start", marginTop: "var(--space-3)" }}>
+    <>
+      <tr>
+        <td>
+          <span className="table__name">
+            {device.name}
+            {device.current ? <span className="pill">This device</span> : null}
+          </span>
+        </td>
+        <td>{device.platform === "external" ? "Compatible client" : device.platform}</td>
+        <td>{relative(device.lastSeenAt)}</td>
+        <td><span className={`status${revoked ? " status--off" : ""}`}>{revoked ? "Revoked" : "Active"}</span></td>
+        <td className="table__end">
           {!revoked && (
-            <>
-              <button type="button" className="btn-link" disabled={busy !== null} onClick={() => setRenaming(true)}>Inspect / rename</button>
-              <button type="button" className="btn-link text-danger" disabled={busy !== null} onClick={() => setRevoking(true)}>
-                Revoke
-              </button>
-            </>
+            <button type="button" className="btn-link" aria-expanded={managing} onClick={() => setManaging((v) => !v)}>
+              {managing ? "Close" : "Manage"}
+            </button>
           )}
-        </div>
-        {error && <p className="field-error" style={{ marginTop: "var(--space-2)" }}>{error}</p>}
-      </div>
+        </td>
+      </tr>
+      {managing && !revoked && (
+        <tr className="subtle-row">
+          <td colSpan={5}>
+            <div className="form-grid">
+              <div>
+                <label className="field-label" htmlFor={`sub-${device.id}`}>Subscription</label>
+                <select
+                  id={`sub-${device.id}`}
+                  className="field select"
+                  value={device.subscriptionId ?? ""}
+                  disabled={busy !== null}
+                  onChange={(e) => move(e.target.value)}
+                >
+                  <option value="" disabled>Choose a subscription</option>
+                  {subscriptions.map((s) => (
+                    <option key={s.id} value={s.id}>{s.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="field-label" htmlFor={`conn-${device.id}`}>Configuration</label>
+                <select
+                  id={`conn-${device.id}`}
+                  className="field select"
+                  value={assignment?.profileId ?? ""}
+                  disabled={busy !== null || profiles.length === 0}
+                  onChange={(e) => changeConnection(e.target.value)}
+                >
+                  <option value="" disabled>
+                    {profiles.length === 0 ? "No configurations yet" : "Choose a configuration"}
+                  </option>
+                  {profiles.map((p) => (
+                    <option key={p.id} value={p.id} disabled={!p.enabled && p.id !== assignment?.profileId}>
+                      {p.name}{p.enabled ? "" : " (disabled)"}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <div className="row__actions" style={{ justifyContent: "flex-start", marginTop: "var(--space-3)" }}>
+              <button type="button" className="btn-link" disabled={busy !== null} onClick={() => setRenaming(true)}>Rename</button>
+              <button type="button" className="btn-link text-danger" disabled={busy !== null} onClick={() => setRevoking(true)}>Remove device</button>
+            </div>
+            {error && <p className="field-error" style={{ marginTop: "var(--space-2)" }}>{error}</p>}
+          </td>
+        </tr>
+      )}
       <InputDialog
         open={renaming}
         title="Rename device"
@@ -171,7 +176,7 @@ function DeviceRow({
         onConfirm={revoke}
         onCancel={() => setRevoking(false)}
       />
-    </li>
+    </>
   );
 }
 
@@ -219,17 +224,30 @@ function DevicesBody() {
       {overview.devices.length === 0 ? (
         <p className="muted">No devices registered yet. Install Arcana on a device and sign in to add one.</p>
       ) : (
-        <ul className="rows">
-          {overview.devices.map((d) => (
-            <DeviceRow
-              key={d.id}
-              device={d}
-              subscriptions={overview.subscriptions}
-              profiles={profiles}
-              assignment={assignments.get(d.id) ?? null}
-            />
-          ))}
-        </ul>
+        <div className="table-wrap">
+          <table className="table">
+            <thead>
+              <tr>
+                <th scope="col">Device</th>
+                <th scope="col">App</th>
+                <th scope="col">Last seen</th>
+                <th scope="col">Status</th>
+                <th scope="col"><span className="sr-only">Actions</span></th>
+              </tr>
+            </thead>
+            <tbody>
+              {overview.devices.map((d) => (
+                <DeviceRow
+                  key={d.id}
+                  device={d}
+                  subscriptions={overview.subscriptions}
+                  profiles={profiles}
+                  assignment={assignments.get(d.id) ?? null}
+                />
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </>
   );
@@ -237,7 +255,12 @@ function DevicesBody() {
 
 export default function DevicesPage() {
   return (
-    <AccountShell eyebrow="Account" title="Devices" sub="Rename, move between subscriptions, or revoke a device.">
+    <AccountShell
+      eyebrow="Account"
+      title="Devices"
+      sub="Manage the devices connected to your account."
+      action={<Link className="btn btn-primary" href="/apps/">Add device</Link>}
+    >
       <DevicesBody />
     </AccountShell>
   );
