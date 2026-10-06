@@ -1161,19 +1161,16 @@ body {
 .admin-metrics {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0;
-  border: 1px solid var(--fg);
-  margin-bottom: var(--space-12);
+  gap: var(--space-4);
+  margin-bottom: var(--space-6);
 }
 .admin-metrics--5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
-.admin-metric { padding: var(--space-6) var(--space-4); border-right: 1px solid var(--border); }
-.admin-metric:last-child { border-right: none; }
-.admin-metric__value { font-size: var(--text-h2-sub); font-weight: 600; letter-spacing: var(--track-h2); line-height: 1.05; margin: 0; font-family: var(--font-mono); }
-.admin-metric__label { font-size: var(--text-xs); color: var(--fg-2); margin: var(--space-2) 0 0; }
+.admin-metric { padding: var(--space-6); border: 1px solid var(--border-soft); border-radius: var(--radius-lg); background: var(--bg); }
+.admin-metric__value { font-size: 1.875rem; font-weight: 700; letter-spacing: -0.02em; line-height: 1.05; margin: var(--space-2) 0 0; font-variant-numeric: tabular-nums; }
+.admin-metric__label { font-size: var(--text-sm); color: var(--fg-2); margin: 0; order: -1; }
+.admin-metric { display: flex; flex-direction: column; }
 @media (max-width: 700px) {
   .admin-metrics, .admin-metrics--5 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .admin-metric { border-bottom: 1px solid var(--border); }
-  .admin-metric:nth-child(2n) { border-right: none; }
 }
 
 /* Secondary counts: a two-column list of "label ... value" rows, not one
@@ -1193,14 +1190,15 @@ body {
   font-size: var(--text-sm);
 }
 .admin-stat-row__label { color: var(--fg-2); }
-.admin-stat-row__value { font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--fg); }
+.admin-stat-row__value { font-variant-numeric: tabular-nums; color: var(--fg); font-weight: 500; }
 @media (max-width: 560px) {
   .admin-stat-rows { columns: 1; }
 }
 
 /* Admin needs more working width than the narrow customer account column;
    the sidebar stays the same size, only the max total width grows. */
-.area--wide { max-width: 92rem; }
+.area--wide { max-width: none; }
+.area--wide .area__side { min-height: calc(100vh - 8rem); }
 
 /* ── Public pages (redesign) ── */
 .page { padding: var(--space-12) var(--edge) var(--space-24); }
@@ -1416,3 +1414,8 @@ body {
 .detail-head + .page-tabs { margin-top: 0; }
 @media (max-width: 860px) { .split--wide { grid-template-columns: minmax(0, 1fr); } }
 .table th { font-family: var(--font-body); font-size: var(--text-sm); letter-spacing: 0; text-transform: none; }
+.area--wide .area__side { top: var(--space-8); }
+.status--ok::before { background: #2fa05d; }
+.status--warn::before { background: #d98a1a; }
+.status--bad::before { background: var(--danger); }
+.status--off::before { background: var(--fg-3); }

@@ -79,7 +79,7 @@ export default function AdminCustomersPage() {
 
   return (
     <AdminShell>
-      <AdminPage title="Customers" description={`${meta.total} total`}>
+      <AdminPage title="Users" description={`${meta.total} total`}>
         <input
           className={`mb-4 w-full max-w-sm ${adminInputClass}`}
           placeholder="Search by email, user id, or VPN user id"
