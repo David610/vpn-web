@@ -448,8 +448,8 @@ body {
 .hero__signup { font-size: var(--text-sm); }
 .hero__tags { display: flex; gap: var(--space-2); flex-wrap: wrap; }
 .hero__visual { display: flex; align-items: center; justify-content: center; }
-.world-map { width: 100%; height: auto; max-width: 34rem; }
-.world-map__dot { fill: var(--fg-3); opacity: 0.28; }
+.world-map { width: 100%; height: auto; max-width: 42rem; }
+.world-map__dot { fill: var(--fg-3); opacity: 0.5; }
 .world-map__marker { fill: var(--fg); }
 .hero__strip {
   display: grid;
@@ -674,7 +674,6 @@ body {
 }
 .dm-footer__top,
 .dm-footer__bottom {
-  max-width: var(--container-max);
   margin: 0 auto;
   display: flex;
   justify-content: space-between;
