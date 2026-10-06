@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import Nav from "@/components/Nav";
 import Footer from "@/components/Footer";
 import { supabase } from "@/lib/supabase";
+import { signInErrorMessage } from "@/lib/auth-errors";
 import { safeNextPath } from "@/lib/next-path";
 
 export default function LoginPage() {
@@ -30,7 +31,7 @@ export default function LoginPage() {
       // credentials," which is a user-enumeration oracle. Log it for our
       // own debugging only.
       console.error("signIn failed:", signInError.message);
-      setError("Invalid email or password.");
+      setError(signInErrorMessage(signInError));
       return;
     }
     // An invitee arrives here from an invite link and must land back on
