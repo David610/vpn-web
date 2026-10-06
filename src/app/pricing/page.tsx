@@ -12,16 +12,13 @@ export default function PricingPage() {
   return (
     <>
       <Nav />
-      <main>
-        <section className="dm-section" style={{ borderBottom: "none" }}>
-          <div className="section-head">
-            <p className="section-eyebrow">Pricing</p>
-            <h1 className="section-h2">One plan.</h1>
-            <p className="section-sub">
-              No tiers to compare. Add devices in packs of three when you
-              need them.
-            </p>
-          </div>
+      <main className="page">
+        <section>
+          <p className="eyebrow">Pricing</p>
+          <h1 className="page__title">One plan.</h1>
+          <p className="page__lede">
+            No tiers to compare. Add devices in packs of three when you need them.
+          </p>
           <div className="plan">
             <div className="plan__main">
               <p className="plan__price">
