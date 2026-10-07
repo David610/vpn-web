@@ -29,7 +29,7 @@ function LinkDetailBody() {
   const idem = useRef<string | null>(null);
   const load = useCallback(async () => {
     if (!id) { setError("A Link id is required."); return; }
-    try { setDetail(await api<Detail>(session, `/api/account/links/${encodeURIComponent(id)}`)); setError(null); }
+    try { const loaded = await api<Detail>(session, `/api/account/links/${encodeURIComponent(id)}`); setDetail(loaded); setError(null); if (loaded.clients.length === 0 && loaded.link.status === "active") setTab("Clients"); }
     catch (e) { setError(e instanceof Error ? e.message : "Could not load Link."); }
   }, [id, session]);
   useEffect(() => { void load(); return () => { setSecret(null); idem.current = null; }; }, [load]);

@@ -1,18 +1,20 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
 import { AccountShell, useAccount } from "@/components/account/AccountShell";
 import type { RouteOption } from "@/components/account/links";
-import { api } from "@/lib/api";
+import { api, newIdempotencyKey } from "@/lib/api";
+import Link from "next/link";
+import { firstClientName, subscriptionForFirstClient } from "@/lib/link-first-client";
 
 function NewLinkBody() {
   const { session, overview } = useAccount();
-  const router = useRouter();
-  const [routes, setRoutes] = useState<RouteOption[] | null>(null);
+    const [routes, setRoutes] = useState<RouteOption[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const submitted = useRef(false);
+  const [created, setCreated] = useState<{ id: string; url: string | null; note: string | null } | null>(null);
+  const [copied, setCopied] = useState(false);
   useEffect(() => { api<{ link_routes: RouteOption[] }>(session, "/api/account/external-devices")
     .then(data => setRoutes(data.link_routes ?? [])).catch(() => setError("Routes are temporarily unavailable.")); }, [session]);
   async function submit(event: React.FormEvent<HTMLFormElement>) {
@@ -25,8 +27,39 @@ function NewLinkBody() {
         name: String(form.get("name") ?? "").trim(), routeId: String(form.get("routeId") ?? ""),
         maxClients: Number(form.get("maxClients")),
       }});
-      router.push(`/account/links/detail/?id=${encodeURIComponent(result.id)}`);
+      const linkName = String(form.get("name") ?? "").trim();
+      const subscription = subscriptionForFirstClient(overview?.subscriptions ?? []);
+      if (!subscription) {
+        setCreated({ id: result.id, url: null, note: "The Link is created, but none of your subscriptions has a free device place, so no access link was made. Free a place or add devices, then add a client on the Link." });
+        return;
+      }
+      try {
+        const client = await api<{ configurationUrl?: string }>(session, `/api/account/links/${encodeURIComponent(result.id)}/clients`, {
+          body: { name: firstClientName(linkName), clientType: "links", subscriptionId: String(subscription.id) },
+          headers: { "Idempotency-Key": newIdempotencyKey() },
+        });
+        setCreated({ id: result.id, url: client.configurationUrl ?? null, note: client.configurationUrl ? null : "The Link is created. Open it and add a client to get its access link." });
+      } catch (clientError) {
+        setCreated({ id: result.id, url: null, note: `The Link is created, but its access link could not be made (${clientError instanceof Error ? clientError.message : "unknown error"}). Open the Link and add a client.` });
+      }
     } catch (e) { submitted.current = false; setBusy(false); setError(e instanceof Error ? e.message : "Could not create Link."); }
+  }
+  async function copy(value: string) {
+    try { await navigator.clipboard.writeText(value); setCopied(true); } catch { setCopied(false); }
+  }
+  if (created) {
+    return (
+      <section className="secret-result" aria-labelledby="created-heading">
+        <h2 id="created-heading">{created.url ? "Your access link" : "Link created"}</h2>
+        {created.url ? <>
+          <p><strong>This link grants VPN access. Keep it private.</strong></p>
+          <p>Copy it now and paste it into your VPN app. Arcana shows it once; if you lose it, replace it from the Link&apos;s Configuration tab.</p>
+          <input className="field secret-value" readOnly value={created.url} onFocus={(e) => e.currentTarget.select()} aria-label="Access link" />
+          <button className="btn btn-primary" type="button" onClick={() => void copy(created.url!)}>{copied ? "Copied" : "Copy access link"}</button>
+        </> : <p>{created.note}</p>}
+        <p style={{ marginTop: "var(--space-4)" }}><Link className="text-link" href={`/account/links/detail/?id=${encodeURIComponent(created.id)}`}>Open Link</Link></p>
+      </section>
+    );
   }
   return (
     <form onSubmit={submit} className="form-card">

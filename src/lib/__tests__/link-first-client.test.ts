@@ -1,0 +1,29 @@
+import { describe, expect, it } from "vitest";
+import { firstClientName, subscriptionForFirstClient } from "../link-first-client";
+
+const sub = (id: string, status: string, used: number, capacity: number) => ({ id, status, used, capacity });
+
+describe("subscriptionForFirstClient", () => {
+  it("picks the first live subscription with a free device place", () => {
+    expect(subscriptionForFirstClient([sub("a", "active", 3, 3), sub("b", "trialing", 1, 3)])?.id).toBe("b");
+  });
+
+  it("skips canceled subscriptions", () => {
+    expect(subscriptionForFirstClient([sub("a", "canceled", 0, 3), sub("b", "active", 0, 3)])?.id).toBe("b");
+  });
+
+  it("returns null when nothing has room, so the page can say why", () => {
+    expect(subscriptionForFirstClient([sub("a", "active", 3, 3)])).toBeNull();
+    expect(subscriptionForFirstClient([])).toBeNull();
+  });
+});
+
+describe("firstClientName", () => {
+  it("uses the link name", () => {
+    expect(firstClientName("Office router")).toBe("Office router");
+  });
+
+  it("stays within the 40-character client name limit", () => {
+    expect(firstClientName("x".repeat(60))).toHaveLength(40);
+  });
+});
