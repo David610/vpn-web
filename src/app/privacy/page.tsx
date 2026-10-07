@@ -1,6 +1,6 @@
 import Nav from "@/components/Nav";
 import Footer from "@/components/Footer";
-import AppMock from "@/components/AppMock";
+import Image from "next/image";
 import { SITE_NAME, SITE_URL } from "@/lib/site-config";
 
 export const metadata = {
@@ -71,7 +71,14 @@ export default function PrivacyPage() {
               about how it all works.
             </p>
           </div>
-          <AppMock />
+          <Image
+            className="hero-image"
+            src="/images/hero-privacy.webp"
+            width={655}
+            height={395}
+            alt="The Arcana app connected, on a laptop and a phone"
+            priority
+          />
         </section>
 
         <ul className="principles">

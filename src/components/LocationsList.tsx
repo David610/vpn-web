@@ -113,6 +113,7 @@ export default function LocationsList() {
             <tr>
               <th scope="col">Country</th>
               <th scope="col">Cities</th>
+              <th scope="col"><span className="sr-only">Open</span></th>
             </tr>
           </thead>
           <tbody>
@@ -125,6 +126,9 @@ export default function LocationsList() {
                   </span>
                 </td>
                 <td className="muted">{c.cities.join(", ") || "—"}</td>
+                <td className="loc-table__chev" aria-hidden="true">
+                  <svg viewBox="0 0 20 20" width="16" height="16"><path d="M7 4l6 6-6 6" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
+                </td>
               </tr>
             ))}
           </tbody>

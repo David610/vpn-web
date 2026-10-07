@@ -62,6 +62,17 @@ export default function LocationsPage() {
               </div>
             </div>
           </div>
+          <div className="aside-note">
+            <p className="eyebrow">A more open internet</p>
+            <h2 className="aside-note__title">
+              Global access.
+              <br />
+              On your terms.
+            </h2>
+            <p className="muted">
+              Choose where you connect and keep your connection private and secure, with one server or two.
+            </p>
+          </div>
         </aside>
       </main>
       <Footer />

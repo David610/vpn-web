@@ -1,6 +1,6 @@
 import Nav from "@/components/Nav";
 import Footer from "@/components/Footer";
-import AppMock from "@/components/AppMock";
+import Image from "next/image";
 import { SITE_NAME, SITE_URL } from "@/lib/site-config";
 
 export const metadata = {
@@ -20,13 +20,29 @@ const FEATURES = [
   { title: "Kill switch", text: "Blocks internet if the VPN disconnects.", d: "M12 3l7 3v5c0 5-3 8-7 10-4-2-7-5-7-10V6l7-3z" },
 ];
 
+const ICON_PATHS = {
+  windows: "M3 5.5l8-1.1v7.1H3zM12 4.3l9-1.3v8.5h-9zM3 12.5h8v7.1l-8-1.1zM12 12.5h9V21l-9-1.3z",
+  macos: "M5 5h14v10H5zM3 19h18",
+  ios: "M8 3h8a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zM11 18h2",
+  android: "M6 15a6 6 0 0 1 12 0zM9 9L7.5 6.5M15 9l1.5-2.5M9.5 12h.01M14.5 12h.01",
+  linux: "M4 5h16v14H4zM8 10l3 2-3 2M13 14h4",
+} as const;
+
 const PLATFORMS = [
-  { name: "Windows", req: "10+", available: true },
-  { name: "macOS", req: "11+", available: false },
-  { name: "iOS", req: "15+", available: false },
-  { name: "Android", req: "8.0+", available: false },
-  { name: "Linux", req: "Various distros", available: false },
-];
+  { name: "Windows", req: "10+", available: true, icon: "windows" },
+  { name: "macOS", req: "11+", available: false, icon: "macos" },
+  { name: "iOS", req: "15+", available: false, icon: "ios" },
+  { name: "Android", req: "8.0+", available: false, icon: "android" },
+  { name: "Linux", req: "Various distros", available: false, icon: "linux" },
+] as const;
+
+function PlatformIcon({ name, size = 28 }: { name: keyof typeof ICON_PATHS; size?: number }) {
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d={ICON_PATHS[name]} />
+    </svg>
+  );
+}
 
 export default function AppsPage() {
   return (
@@ -36,7 +52,7 @@ export default function AppsPage() {
         <section className="apps-hero">
           <div>
             <p className="eyebrow">Apps</p>
-            <h1 className="page__title page__title--md">Apps for all your devices.</h1>
+            <h1 className="page__title page__title--sm">Apps for all your devices.</h1>
             <p className="page__lede">Connect on your terms.</p>
             <p className="page__body">
               Get the {SITE_NAME} app for your preferred device and enjoy private, secure access to a more
@@ -58,24 +74,34 @@ export default function AppsPage() {
               ))}
             </ul>
             {WINDOWS_DOWNLOAD_URL ? (
-              <a className="btn btn-primary btn-lg" href={WINDOWS_DOWNLOAD_URL}>
-                Download for Windows
+              <a className="btn btn-primary btn-lg btn--icon" href={WINDOWS_DOWNLOAD_URL}>
+                <PlatformIcon name="windows" size={22} /> Download for Windows
               </a>
             ) : (
-              <span className="btn btn-primary btn-lg btn--disabled" aria-disabled="true">
-                Windows download coming soon
+              <span className="btn btn-primary btn-lg btn--icon btn--disabled" aria-disabled="true">
+                <PlatformIcon name="windows" size={22} /> Windows download coming soon
               </span>
             )}
             <p className="fineprint">Requires Windows 10 or later.</p>
           </div>
-          <AppMock />
+          <Image
+            className="hero-image"
+            src="/images/hero-apps.webp"
+            width={795}
+            height={500}
+            alt="The Arcana app connected on a laptop"
+            priority
+          />
         </section>
 
         <ul className="platforms">
           {PLATFORMS.map((p) => (
             <li key={p.name} className={`platforms__tile${p.available ? " platforms__tile--on" : ""}`}>
-              <strong>{p.name}</strong>
-              <span className="muted">{p.available ? p.req : `${p.req} · Coming soon`}</span>
+              <PlatformIcon name={p.icon} />
+              <span className="platforms__text">
+                <strong>{p.name}</strong>
+                <span className="muted">{p.available ? p.req : `${p.req} · Coming soon`}</span>
+              </span>
             </li>
           ))}
         </ul>
