@@ -2,12 +2,11 @@
 
 import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
+import Nav from "@/components/Nav";
+import Footer from "@/components/Footer";
 import { supabaseAdmin } from "@/lib/supabase";
 
 type Phase = "credentials" | "totp";
-
-const FIELD =
-  "w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:border-gray-500 focus:ring-1 focus:ring-gray-500";
 
 export default function AdminLoginPage() {
   const router = useRouter();
@@ -133,115 +132,104 @@ export default function AdminLoginPage() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-gray-50 px-4">
-      <div className="w-full max-w-sm rounded-xl border border-gray-200 bg-white p-8 shadow-sm">
-        <div className="mb-6 text-center">
-          <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
-            Arcana VPN
-          </p>
-          <h1 className="mt-1 text-2xl font-bold text-gray-900">
-            {phase === "credentials" ? "Admin sign in" : "Two-factor code"}
-          </h1>
-          {phase === "totp" && (
-            <p className="mt-2 text-sm text-gray-500">
-              Enter the 6-digit code from your authenticator app.
-            </p>
+    <>
+      <Nav />
+      <main className="dm-section" style={{ borderBottom: "none" }}>
+        <div className="auth-frame">
+          <p className="auth-brand">Arcana admin</p>
+          <div className="auth-head">
+            <h1 className="section-h2">
+              {phase === "credentials" ? "Admin log in" : "Two-factor code"}
+            </h1>
+            {phase === "totp" && (
+              <p className="section-sub">
+                Enter the 6-digit code from your authenticator app.
+              </p>
+            )}
+          </div>
+
+          {phase === "credentials" ? (
+            <form onSubmit={handleCredentials} className="auth-form">
+              <div>
+                <label className="field-label" htmlFor="email">
+                  Email
+                </label>
+                <input
+                  id="email"
+                  type="email"
+                  required
+                  autoComplete="email"
+                  className="field"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="field-label" htmlFor="password">
+                  Password
+                </label>
+                <input
+                  id="password"
+                  type="password"
+                  required
+                  autoComplete="current-password"
+                  aria-invalid={error ? "true" : undefined}
+                  className="field"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                />
+                {error && <span className="field-error">{error}</span>}
+              </div>
+              <button
+                type="submit"
+                className="btn btn-primary"
+                disabled={submitting}
+                style={{ width: "100%" }}
+              >
+                {submitting ? "Logging in…" : "Log in"}
+              </button>
+            </form>
+          ) : (
+            <form onSubmit={handleTotp} className="auth-form">
+              <div>
+                <label className="field-label" htmlFor="code">
+                  Authentication code
+                </label>
+                <input
+                  id="code"
+                  type="text"
+                  required
+                  autoFocus
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  pattern="[0-9]*"
+                  maxLength={6}
+                  aria-invalid={error ? "true" : undefined}
+                  className="field"
+                  style={{ textAlign: "center", letterSpacing: "0.4em" }}
+                  value={code}
+                  onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
+                />
+                {error && <span className="field-error">{error}</span>}
+              </div>
+              <button
+                type="submit"
+                className="btn btn-primary"
+                disabled={submitting || code.length !== 6}
+                style={{ width: "100%" }}
+              >
+                {submitting ? "Verifying…" : "Verify"}
+              </button>
+              <p className="text-tiny auth-foot">
+                <button type="button" onClick={startOver} className="text-link">
+                  Log in as someone else
+                </button>
+              </p>
+            </form>
           )}
         </div>
-
-        {phase === "credentials" ? (
-          <form onSubmit={handleCredentials} className="flex flex-col gap-4">
-            <div>
-              <label htmlFor="email" className="mb-1 block text-sm font-medium text-gray-700">
-                Email
-              </label>
-              <input
-                id="email"
-                type="email"
-                required
-                autoComplete="email"
-                className={FIELD}
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-              />
-            </div>
-
-            <div>
-              <label htmlFor="password" className="mb-1 block text-sm font-medium text-gray-700">
-                Password
-              </label>
-              <input
-                id="password"
-                type="password"
-                required
-                autoComplete="current-password"
-                aria-invalid={error ? "true" : undefined}
-                className={FIELD}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-              />
-            </div>
-
-            {error && (
-              <p className="text-sm text-red-600" role="alert">
-                {error}
-              </p>
-            )}
-
-            <button
-              type="submit"
-              disabled={submitting}
-              className="mt-2 w-full rounded-lg bg-gray-900 px-4 py-2 text-sm font-semibold text-white hover:bg-gray-700 disabled:opacity-50"
-            >
-              {submitting ? "Signing in…" : "Sign in"}
-            </button>
-          </form>
-        ) : (
-          <form onSubmit={handleTotp} className="flex flex-col gap-4">
-            <div>
-              <label htmlFor="code" className="mb-1 block text-sm font-medium text-gray-700">
-                Authentication code
-              </label>
-              <input
-                id="code"
-                type="text"
-                required
-                autoFocus
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                pattern="[0-9]*"
-                maxLength={6}
-                aria-invalid={error ? "true" : undefined}
-                className={`${FIELD} text-center text-lg tracking-[0.4em]`}
-                value={code}
-                onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
-              />
-            </div>
-
-            {error && (
-              <p className="text-sm text-red-600" role="alert">
-                {error}
-              </p>
-            )}
-
-            <button
-              type="submit"
-              disabled={submitting || code.length !== 6}
-              className="mt-2 w-full rounded-lg bg-gray-900 px-4 py-2 text-sm font-semibold text-white hover:bg-gray-700 disabled:opacity-50"
-            >
-              {submitting ? "Verifying…" : "Verify"}
-            </button>
-
-            <button
-              type="button"
-              onClick={startOver}
-              className="text-sm text-gray-500 underline hover:text-gray-700"
-            >
-              Sign in as someone else
-            </button>
-          </form>
-        )}
-      </div>
-    </div>
+      </main>
+      <Footer />
+    </>
   );
 }
