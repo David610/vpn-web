@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
+import Nav from "@/components/Nav";
+import Footer from "@/components/Footer";
 import { supabaseAdmin } from "@/lib/supabase";
 
 type Enrollment = { factorId: string; qrCode: string; secret: string };
@@ -120,96 +122,104 @@ export default function AdminMfaEnrollPage() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-gray-50 px-4 py-10">
-      <div className="w-full max-w-md rounded-xl border border-gray-200 bg-white p-8 shadow-sm">
-        <div className="mb-6 text-center">
-          <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
-            Arcana VPN
-          </p>
-          <h1 className="mt-1 text-2xl font-bold text-gray-900">
-            Set up two-factor authentication
-          </h1>
-          <p className="mt-2 text-sm text-gray-500">
-            Admin accounts require an authenticator app. Scan this code, then
-            enter the 6-digit number it shows.
-          </p>
-        </div>
+    <>
+      <Nav />
+      <main className="dm-section" style={{ borderBottom: "none" }}>
+        <div className="auth-frame">
+          <p className="auth-brand">Arcana admin</p>
+          <div className="auth-head">
+            <h1 className="section-h2">Set up two-factor authentication</h1>
+            <p className="section-sub">
+              Admin accounts require an authenticator app. Scan this code, then
+              enter the 6-digit number it shows.
+            </p>
+          </div>
 
-        {fatal ? (
-          <p className="text-center text-sm text-red-600" role="alert">
-            {fatal}
-          </p>
-        ) : !enrollment ? (
-          <p className="text-center text-sm text-gray-500">Preparing…</p>
-        ) : (
-          <>
-            <div className="mb-4 flex justify-center">
-              {/* qr_code is an inline SVG data URL from Supabase, so there is
-                  nothing for next/image to optimise and no remote host to
-                  allow-list. */}
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={enrollment.qrCode}
-                alt="QR code for two-factor authentication setup"
-                width={200}
-                height={200}
-                className="rounded-lg border border-gray-200 bg-white p-2"
-              />
-            </div>
-
-            <div className="mb-6 text-center">
-              {showSecret ? (
-                <p className="break-all rounded-lg bg-gray-50 px-3 py-2 font-mono text-xs text-gray-700">
-                  {enrollment.secret}
-                </p>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => setShowSecret(true)}
-                  className="text-xs text-gray-500 underline hover:text-gray-700"
-                >
-                  Can&apos;t scan? Enter the key manually
-                </button>
-              )}
-            </div>
-
-            <form onSubmit={handleVerify} className="flex flex-col gap-4">
-              <div>
-                <label htmlFor="code" className="mb-1 block text-sm font-medium text-gray-700">
-                  Authentication code
-                </label>
-                <input
-                  id="code"
-                  type="text"
-                  required
-                  inputMode="numeric"
-                  autoComplete="one-time-code"
-                  pattern="[0-9]*"
-                  maxLength={6}
-                  aria-invalid={error ? "true" : undefined}
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-center text-lg tracking-[0.4em] outline-none focus:border-gray-500 focus:ring-1 focus:ring-gray-500"
-                  value={code}
-                  onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
+          {fatal ? (
+            <span className="field-error" role="alert">
+              {fatal}
+            </span>
+          ) : !enrollment ? (
+            <p className="text-tiny">Preparing…</p>
+          ) : (
+            <>
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "center",
+                  marginBottom: "var(--space-4)",
+                }}
+              >
+                {/* qr_code is an inline SVG data URL from Supabase, so there is
+                    nothing for next/image to optimise and no remote host to
+                    allow-list. */}
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={enrollment.qrCode}
+                  alt="QR code for two-factor authentication setup"
+                  width={200}
+                  height={200}
+                  style={{
+                    border: "1px solid var(--border)",
+                    borderRadius: "var(--radius-lg)",
+                    background: "#fff",
+                    padding: "var(--space-2)",
+                  }}
                 />
               </div>
 
-              {error && (
-                <p className="text-sm text-red-600" role="alert">
-                  {error}
-                </p>
-              )}
-
-              <button
-                type="submit"
-                disabled={submitting || code.length !== 6}
-                className="w-full rounded-lg bg-gray-900 px-4 py-2 text-sm font-semibold text-white hover:bg-gray-700 disabled:opacity-50"
+              <p
+                className="text-tiny"
+                style={{ textAlign: "center", marginBottom: "var(--space-6)" }}
               >
-                {submitting ? "Verifying…" : "Activate"}
-              </button>
-            </form>
-          </>
-        )}
-      </div>
-    </div>
+                {showSecret ? (
+                  <code style={{ wordBreak: "break-all" }}>{enrollment.secret}</code>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setShowSecret(true)}
+                    className="text-link"
+                  >
+                    Can&apos;t scan? Enter the key manually
+                  </button>
+                )}
+              </p>
+
+              <form onSubmit={handleVerify} className="auth-form">
+                <div>
+                  <label className="field-label" htmlFor="code">
+                    Authentication code
+                  </label>
+                  <input
+                    id="code"
+                    type="text"
+                    required
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    pattern="[0-9]*"
+                    maxLength={6}
+                    aria-invalid={error ? "true" : undefined}
+                    className="field"
+                    style={{ textAlign: "center", letterSpacing: "0.4em" }}
+                    value={code}
+                    onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
+                  />
+                  {error && <span className="field-error">{error}</span>}
+                </div>
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  disabled={submitting || code.length !== 6}
+                  style={{ width: "100%" }}
+                >
+                  {submitting ? "Verifying…" : "Activate"}
+                </button>
+              </form>
+            </>
+          )}
+        </div>
+      </main>
+      <Footer />
+    </>
   );
 }
