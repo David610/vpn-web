@@ -27,8 +27,8 @@ export async function onRequestGet({ env, request, params }) {
   const tokenHash = await subscriptionTokenHash(token, env);
   const legacyTokenHash = await legacySubscriptionTokenHash(token, env);
   const ipHash = await rateLimitIpHash(clientIpKey(request), env);
-  if (!(await checkRateLimit(db, `sub:token:${tokenHash}`, { windowSeconds: 60, limit: 30 })) ||
-      !(await checkRateLimit(db, `sub:ip:${ipHash}`, { windowSeconds: 60, limit: 120 }))) return rateLimitedResponse();
+  if (!(await checkRateLimit(db, `sub:token:${tokenHash}`, { windowSeconds: 60, limit: 30, env })) ||
+      !(await checkRateLimit(db, `sub:ip:${ipHash}`, { windowSeconds: 60, limit: 120, env }))) return rateLimitedResponse();
 
   const { data: device, error } = await db.from("external_vpn_devices")
     .select("device_id,client_type,principal_id,desired_route_id,revoked_at,subscription_expires_at")

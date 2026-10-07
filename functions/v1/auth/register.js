@@ -33,10 +33,12 @@ export async function onRequestPost({ env, request }) {
   const emailAllowed = await checkRateLimit(supabaseAdmin, `v1-register:email:${email}`, {
     windowSeconds: REGISTER_WINDOW_SECONDS,
     limit: REGISTER_LIMIT_PER_EMAIL,
+    env,
   });
   const ipAllowed = await checkRateLimit(supabaseAdmin, `v1-register:ip:${clientIpKey(request)}`, {
     windowSeconds: REGISTER_WINDOW_SECONDS,
     limit: REGISTER_LIMIT_PER_IP,
+    env,
   });
   if (!emailAllowed || !ipAllowed) {
     return rateLimitedResponse("Too many attempts. Please try again later.");

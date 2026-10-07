@@ -28,6 +28,7 @@ export async function onRequestPost({ env, request }) {
   const allowed = await checkRateLimit(supabaseAdmin, `telegram-link-code:${user.id}`, {
     windowSeconds: LINK_CODE_WINDOW_SECONDS,
     limit: LINK_CODE_LIMIT,
+    env,
   });
   if (!allowed) return rateLimitedResponse("Too many linking codes requested. Please try again later.");
 

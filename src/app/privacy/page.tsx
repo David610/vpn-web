@@ -127,7 +127,9 @@ export default function PrivacyPage() {
         </div>
 
         <p className="fineprint">
-          The legal details are in our <a className="text-link" href="/privacy/policy/">privacy policy</a>.
+          We do keep some account and service data, such as your email address, your devices and when each
+          last connected. The <a className="text-link" href="/privacy/policy/">privacy policy</a> lists exactly
+          what we keep and for how long.
         </p>
       </main>
       <Footer />

@@ -1,3 +1,5 @@
+import { hmacSha256Hex, sha256Hex } from "./crypto.js";
+
 /**
  * App-level rate limiting (F-49, remediation item 11), backed by the
  * `check_rate_limit` Postgres RPC (see
@@ -17,23 +19,36 @@
  * from the same source.
  */
 
+const MIN_HASH_KEY_LENGTH = 32;
+
+async function opaqueBucketKey(key, env) {
+  const material = `rate-limit-bucket:v1:${key}`;
+  const secret = env?.SUBSCRIPTION_TOKEN_HASH_KEY;
+  // hmacSha256Hex rejects short keys; a throw here would fail the limiter open.
+  return typeof secret === "string" && secret.length >= MIN_HASH_KEY_LENGTH
+    ? hmacSha256Hex(material, secret)
+    : sha256Hex(material);
+}
+
 /**
  * @param {object} supabaseAdmin a service-role Supabase client
  * @param {string} key identifies the bucket being limited. Callers should
- *   namespace this (e.g. `"login:email:" + email.toLowerCase()`) and hash
- *   or otherwise avoid putting raw secrets in it, since it is stored as
- *   plain text.
- * @param {{ windowSeconds: number, limit: number }} options
+ *   namespace this (e.g. `"login:email:" + email.toLowerCase()`). The key is
+ *   never stored as given: it is reduced to a keyed hash first, so neither
+ *   customer emails nor client IP addresses reach the database.
+ * @param {{ windowSeconds: number, limit: number, env?: object }} options
+ *   `env.SUBSCRIPTION_TOKEN_HASH_KEY` keys the hash. Without it the key is
+ *   still hashed, but unkeyed, which is weaker for low-entropy inputs.
  * @returns {Promise<boolean>} true if this call is within the limit and
  *   should proceed; false if the caller is over the limit right now.
  *   Fails OPEN (returns true) on an unexpected database error -- a rate
  *   limiter that itself takes down auth for everyone on a transient DB
  *   blip is a worse outcome than occasionally missing a throttle.
  */
-export async function checkRateLimit(supabaseAdmin, key, { windowSeconds, limit }) {
+export async function checkRateLimit(supabaseAdmin, key, { windowSeconds, limit, env }) {
   try {
     const { data, error } = await supabaseAdmin.rpc("check_rate_limit", {
-      p_bucket_key: key,
+      p_bucket_key: await opaqueBucketKey(key, env),
       p_window_seconds: windowSeconds,
       p_limit: limit,
     });

@@ -8,6 +8,8 @@ import {
   pruneNodeRevisions,
   clearStaleRevokedDeviceMetadata,
   pruneOperationalAlerts,
+  pruneRateLimitBuckets,
+  pruneLinkUsageDaily,
   runRetention,
 } from "../retention.js";
 
@@ -128,6 +130,28 @@ describe("retention (F-18 / H-02)", () => {
     expect(builder.eq).toHaveBeenCalledWith("status", "resolved");
   });
 
+  it("pruneRateLimitBuckets deletes counters whose window ended more than a day ago", async () => {
+    const supabase = fakeSupabase({ rate_limit_buckets: { error: null, count: 40 } });
+    const result = await pruneRateLimitBuckets(supabase, {});
+    expect(result).toEqual({ table: "rate_limit_buckets", deleted: 40, cutoffDays: 1 });
+    const builder = supabase.from.mock.results[0].value;
+    expect(builder.lt).toHaveBeenCalledWith("window_start", expect.any(String));
+  });
+
+  it("pruneLinkUsageDaily keeps 35 days of per-client aggregates by default and filters on the date bucket", async () => {
+    const supabase = fakeSupabase({ vpn_link_usage_daily: { error: null, count: 3 } });
+    const result = await pruneLinkUsageDaily(supabase, {});
+    expect(result).toEqual({ table: "vpn_link_usage_daily", deleted: 3, cutoffDays: 35 });
+    const builder = supabase.from.mock.results[0].value;
+    expect(builder.lt).toHaveBeenCalledWith("bucket_date", expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/));
+  });
+
+  it("pruneLinkUsageDaily honours LINK_USAGE_RETENTION_DAYS", async () => {
+    const supabase = fakeSupabase({ vpn_link_usage_daily: { error: null, count: 0 } });
+    const result = await pruneLinkUsageDaily(supabase, { LINK_USAGE_RETENTION_DAYS: "10" });
+    expect(result.cutoffDays).toBe(10);
+  });
+
   it("runRetention isolates failures: one table erroring does not stop the others", async () => {
     const supabase = {
       from: vi.fn((table) => {
@@ -141,6 +165,6 @@ describe("retention (F-18 / H-02)", () => {
       }),
     };
     const results = await runRetention(supabase, {});
-    expect(results.length).toBe(9);
+    expect(results.length).toBe(11);
   });
 });
