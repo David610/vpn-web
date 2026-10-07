@@ -18,9 +18,21 @@ import { spawn } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 
 const PORT = process.env.CSP_VERIFY_PORT ?? "18899";
-const BASE = `http://127.0.0.1:${PORT}`;
+// Point at a server that is already running with the real _headers (for
+// example `npx wrangler pages dev out --port 8788`) instead of starting one.
+const EXTERNAL_BASE = process.env.CSP_VERIFY_BASE;
+const BASE = EXTERNAL_BASE ?? `http://127.0.0.1:${PORT}`;
 
 const PAGES = ["/", "/login/", "/account/", "/admin/", "/telegram/"];
+
+// Chrome words a Trusted Types violation as "This document requires
+// 'TrustedScriptURL' assignment" (or TrustedHTML / TrustedScript), which does
+// not contain the phrase "Trusted Types" or "Content Security Policy". A
+// matcher that only looked for those phrases passed while the live site was
+// throwing this on every page.
+const TRUSTED_TYPES_ERROR = /requires 'Trusted(?:ScriptURL|HTML|Script)' assignment|trusted types|TrustedTypePolicy/i;
+
+const STARTUP_MS = Number(process.env.CSP_VERIFY_STARTUP_MS ?? 20000);
 
 function startWrangler() {
   const child = spawn(
@@ -73,7 +85,7 @@ async function waitForServer(timeoutMs) {
 }
 
 function stopWrangler(child) {
-  if (!child.pid) return;
+  if (!child || !child.pid) return;
   try {
     if (process.platform !== "win32") {
       // Negative pid = signal the whole process group (works because the
@@ -90,12 +102,14 @@ function stopWrangler(child) {
   }
 }
 
-const { child, readyPromise } = startWrangler();
+const { child, readyPromise } = EXTERNAL_BASE
+  ? { child: null, readyPromise: Promise.resolve() }
+  : startWrangler();
 const failures = [];
 
 try {
-  await Promise.race([readyPromise, sleep(20000).then(() => { throw new Error("wrangler dev startup timed out"); })]);
-  await waitForServer(15000);
+  await Promise.race([readyPromise, sleep(STARTUP_MS).then(() => { throw new Error("wrangler dev startup timed out"); })]);
+  await waitForServer(STARTUP_MS);
 
   const browser = await chromium.launch(
     process.env.PLAYWRIGHT_CHROMIUM_PATH ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_PATH } : {}
@@ -105,10 +119,17 @@ try {
     const context = await browser.newContext();
     const page = await context.newPage();
     const cspViolations = [];
+    const trustedTypesErrors = [];
     page.on("console", (msg) => {
       if (msg.type() === "error" && /content security policy/i.test(msg.text())) {
         cspViolations.push(msg.text());
       }
+      if (msg.type() === "error" && TRUSTED_TYPES_ERROR.test(msg.text())) {
+        trustedTypesErrors.push(msg.text());
+      }
+    });
+    page.on("pageerror", (err) => {
+      if (TRUSTED_TYPES_ERROR.test(err.message)) trustedTypesErrors.push(err.message);
     });
 
     const response = await page.goto(`${BASE}${path}`, { waitUntil: "networkidle", timeout: 20000 });
@@ -144,6 +165,19 @@ try {
 
     if (!hydrated) {
       failures.push(`${path}: no React fiber found on any DOM node -- page did not hydrate (CSP likely blocking inline hydration scripts)`);
+    }
+
+    // The default policy is what lets the framework's own script loading
+    // satisfy require-trusted-types-for. If it is absent, dynamically loaded
+    // chunks are blocked.
+    const hasDefaultPolicy = await page.evaluate(
+      () => Boolean(window.trustedTypes && window.trustedTypes.defaultPolicy)
+    );
+    if (!hasDefaultPolicy) {
+      failures.push(`${path}: no Trusted Types default policy is registered -- the framework's own script loading is blocked`);
+    }
+    if (trustedTypesErrors.length > 0) {
+      failures.push(`${path}: Trusted Types violation(s): ${[...new Set(trustedTypesErrors)].slice(0, 2).join(" | ")}`);
     }
 
     if (cspViolations.length > 0) {
