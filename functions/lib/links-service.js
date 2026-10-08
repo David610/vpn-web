@@ -2,7 +2,7 @@ import { getAccountForUser } from "./accounts.js";
 import { supportsMode } from "./client-capabilities.js";
 import { decryptSecret, encryptSecret } from "./crypto.js";
 import { COMPATIBILITY_LIFETIME_MS, newOpaqueId, newProtocolCredential, newSubscriptionToken, subscriptionTokenHash, subscriptionUrl } from "./external-credentials.js";
-import { CLIENT_NAME, idempotencyHash, LINK_NAME } from "./vpn-links.js";
+import { CLIENT_NAME, idempotencyHash, LINK_NAME, publicClient, publicLink } from "./vpn-links.js";
 
 export const GENERIC_LINK_CLIENT = "links";
 export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -234,4 +234,129 @@ export async function compatibleLinkRoutes(db) {
   const { data, error } = await db.from("logical_routes").select("id,region,privacy_class,display_name").eq("enabled", true).order("display_name");
   if (error) throw new Error(`logical route lookup failed: ${error.message}`);
   return (data ?? []).filter((route) => supportsMode(GENERIC_LINK_CLIENT, route.privacy_class));
+}
+
+// ── Compositions shared by the website and the Telegram Mini App ─────────────
+// Both surfaces authenticate differently but act on the same account, so the
+// multi-step operations live here once.
+
+const BROWSER_LINK_COLUMNS = "id,name,configuration_family,desired_route_id,max_clients,status,location_mode,created_at,revoked_at";
+
+/** The browser/Mini App view of every Link on the caller's account. */
+export async function browserListLinks(db, user) {
+  const accountId = await accountIdFor(db, user);
+  if (!accountId) return failure(404, "account_not_found", "Account not found");
+  const { data, error } = await db.from("vpn_links").select(BROWSER_LINK_COLUMNS)
+    .eq("account_id", accountId).order("created_at", { ascending: true });
+  if (error) throw new Error(`link lookup failed: ${error.message}`);
+  const { data: clients, error: clientsError } = await db.from("external_vpn_devices")
+    .select("link_id,device_id,revoked_at,created_at").eq("account_id", accountId).order("created_at", { ascending: true });
+  if (clientsError) throw new Error(`link client count failed: ${clientsError.message}`);
+  const routes = await routesById(db, (data ?? []).map((link) => link.desired_route_id));
+  return { status: 200, body: { links: (data ?? []).map((link) => {
+    const active = (clients ?? []).filter((client) => client.link_id === link.id && !client.revoked_at);
+    const route = routes.get(link.desired_route_id);
+    return publicLink(link, active.length, route?.display_name ?? route?.region, active[0]?.device_id ?? null, route?.privacy_class ?? null);
+  }) } };
+}
+
+/** One Link with its clients, in the browser/Mini App view. */
+export async function browserGetLink(db, user, linkId) {
+  const accountId = await accountIdFor(db, user);
+  if (!accountId) return failure(404, "link_not_found", "Link not found");
+  const { data: link, error } = await db.from("vpn_links").select(BROWSER_LINK_COLUMNS)
+    .eq("id", linkId).eq("account_id", accountId).maybeSingle();
+  if (error) throw new Error(`link lookup failed: ${error.message}`);
+  if (!link) return failure(404, "link_not_found", "Link not found");
+  const { data: clients, error: clientError } = await db.from("external_vpn_devices")
+    .select("device_id,link_id,client_type,desired_route_id,last_subscription_fetch_at,revoked_at,created_at,devices(name)")
+    .eq("link_id", link.id).eq("account_id", accountId).order("created_at", { ascending: true });
+  if (clientError) throw new Error(`link client lookup failed: ${clientError.message}`);
+  const routes = await routesById(db, [link.desired_route_id]);
+  const route = routes.get(link.desired_route_id);
+  const active = (clients ?? []).filter((c) => !c.revoked_at);
+  return { status: 200, body: { link: publicLink(link, active.length, route?.display_name ?? route?.region, active[0]?.device_id ?? null, route?.privacy_class ?? null),
+    clients: (clients ?? []).map(publicClient) } };
+}
+
+async function firstActiveClientId(db, accountId, linkId) {
+  const { data, error } = await db.from("external_vpn_devices").select("device_id")
+    .eq("link_id", linkId).eq("account_id", accountId).is("revoked_at", null)
+    .order("created_at", { ascending: true }).limit(1);
+  if (error) throw new Error(`primary client lookup failed: ${error.message}`);
+  return data?.[0]?.device_id ?? null;
+}
+
+function randomIndex(length) {
+  const buffer = new Uint32Array(1);
+  crypto.getRandomValues(buffer);
+  return buffer[0] % length;
+}
+
+/**
+ * Creates a Link with its single access link in one step. "auto" picks a
+ * random available route (spreads load instead of piling onto one location).
+ * If the access link cannot be created the empty Link is revoked again, so a
+ * failed attempt leaves nothing behind.
+ */
+export async function createLinkWithClient(db, env, request, user, { name, locationMode, routeId, subscriptionId }) {
+  const routes = await compatibleLinkRoutes(db);
+  const route = locationMode === "auto" ? routes[routes.length ? randomIndex(routes.length) : 0] : routes.find((r) => r.id === routeId);
+  if (!route) return failure(422, "unsupported_route", "That location is unavailable");
+  const created = await createLink(db, user, { name, routeId: route.id, maxClients: 1, locationMode });
+  if (created.status !== 201) return created;
+  const linkId = created.body.link.id;
+  const cleanup = () => revokeLink(db, user, linkId).catch((err) => console.error("empty link cleanup failed:", err.message));
+  const idempotent = new Request(request.url, { headers: { "Idempotency-Key": crypto.randomUUID() } });
+  let client;
+  try {
+    client = await createClient(db, env, idempotent, user, linkId, { name: name.slice(0, 40), subscriptionId });
+  } catch (err) {
+    await cleanup();
+    throw err;
+  }
+  if (client.status >= 400 || !client.body.configuration_url) {
+    await cleanup();
+    return client.status >= 400 ? client : failure(500, "link_not_shown", "The link could not be created");
+  }
+  return { status: 201, body: { id: linkId, configuration_url: client.body.configuration_url } };
+}
+
+/**
+ * Moves a Link to another route by creating its replacement first and only then
+ * revoking the old one, so a failed attempt never costs the user a working link.
+ * (The backend has no in-place route change: node authorizations are projected
+ * per route.)
+ */
+export async function moveLinkToRoute(db, env, request, user, linkId, input) {
+  const accountId = await accountIdFor(db, user);
+  const { data: link, error } = accountId
+    ? await db.from("vpn_links").select("id,name,status").eq("id", linkId).eq("account_id", accountId).maybeSingle()
+    : { data: null, error: null };
+  if (error) throw new Error(`link lookup failed: ${error.message}`);
+  if (!link || link.status !== "active") return failure(404, "link_not_found", "Link not found");
+  const result = await createLinkWithClient(db, env, request, user, { ...input, name: link.name });
+  if (result.status !== 201) return result;
+  let oldRevoked = true;
+  try {
+    oldRevoked = (await revokeLink(db, user, linkId)).status === 204;
+  } catch (err) {
+    console.error("old link revoke after move failed:", err.message);
+    oldRevoked = false;
+  }
+  return { status: 201, body: { ...result.body, old_revoked: oldRevoked } };
+}
+
+export async function revealPrimaryAccessLink(db, env, request, user, linkId) {
+  const accountId = await accountIdFor(db, user);
+  const clientId = accountId ? await firstActiveClientId(db, accountId, linkId) : null;
+  if (!clientId) return failure(404, "client_not_found", "Client not found");
+  return revealAccessLink(db, env, request, user, linkId, clientId);
+}
+
+export async function replacePrimaryAccessLink(db, env, request, user, linkId) {
+  const accountId = await accountIdFor(db, user);
+  const clientId = accountId ? await firstActiveClientId(db, accountId, linkId) : null;
+  if (!clientId) return failure(404, "client_not_found", "Client not found");
+  return replaceAccessLink(db, env, request, user, linkId, clientId);
 }
