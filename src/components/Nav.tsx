@@ -7,7 +7,7 @@ import { SITE_NAME } from "@/lib/site-config";
 import { useLocalSessionFlag } from "@/hooks/useLocalSessionFlag";
 
 const LINKS = [
-  { href: "/apps", label: "Product" },
+  { href: "/#how-it-works", label: "Product" },
   { href: "/locations", label: "Locations" },
   { href: "/pricing", label: "Pricing" },
   { href: "/help", label: "Help" },
@@ -46,7 +46,8 @@ export default function Nav() {
   }
 
   const close = () => setOpen(false);
-  const isActive = (href: string) => pathname === href || pathname.startsWith(`${href}/`);
+  const isActive = (href: string) =>
+    !href.includes("#") && (pathname === href || pathname.startsWith(`${href}/`));
 
   return (
     <header className="dm-nav">
@@ -95,7 +96,7 @@ export default function Nav() {
             </>
           ) : (
             <>
-              <Link href="/login" className="dm-nav__link" onClick={close}>
+              <Link href="/login" className="btn btn-secondary dm-nav__cta" onClick={close}>
                 Log in
               </Link>
               <Link href="/signup" className="btn btn-primary dm-nav__cta" onClick={close}>

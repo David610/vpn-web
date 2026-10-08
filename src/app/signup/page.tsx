@@ -3,10 +3,11 @@
 import { useState, type FormEvent } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import Nav from "@/components/Nav";
-import Footer from "@/components/Footer";
+import AuthShell from "@/components/auth/AuthShell";
+import PasswordField from "@/components/auth/PasswordField";
 import { supabase } from "@/lib/supabase";
 import { safeNextPath } from "@/lib/next-path";
+import { PLAN_PRICE_LABEL } from "@/lib/site-config";
 
 export default function SignupPage() {
   const router = useRouter();
@@ -51,86 +52,82 @@ export default function SignupPage() {
       // live session directly — go straight on instead of telling an
       // already-logged-in user to check their email. An invitee signing up
       // to accept a seat returns to the invite via ?next=.
-      router.replace(safeNextPath(window.location.search));
+      router.replace(safeNextPath(window.location.search, "/account/"));
       return;
     }
     setSubmitted(true);
   }
 
   return (
-    <>
-      <Nav />
-      <main className="dm-section" style={{ borderBottom: "none" }}>
-        <div className="auth-frame">
-          <p className="auth-brand">Arcana</p>
-          <div className="auth-head">
-            <h1 className="section-h2">Create account</h1>
-          </div>
-          {submitted ? (
-            <p className="section-sub">
-              Check your email for a confirmation link, then{" "}
-              <Link
-                href={`/login/${typeof window !== "undefined" ? window.location.search : ""}`}
-                className="text-link"
-              >
-                log in
-              </Link>
-              .
-            </p>
-          ) : (
-            <>
-              <form onSubmit={handleSubmit} className="auth-form">
-                <div>
-                  <label className="field-label" htmlFor="email">
-                    Email
-                  </label>
-                  <input
-                    id="email"
-                    type="email"
-                    required
-                    autoComplete="email"
-                    className="field"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                  />
-                </div>
-                <div>
-                  <label className="field-label" htmlFor="password">
-                    Password
-                  </label>
-                  <input
-                    id="password"
-                    type="password"
-                    required
-                    minLength={12}
-                    autoComplete="new-password"
-                    className="field"
-                    aria-invalid={error ? "true" : undefined}
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                  />
-                  {error && <span className="field-error">{error}</span>}
-                </div>
-                <button
-                  type="submit"
-                  className="btn btn-primary"
-                  disabled={submitting}
-                  style={{ width: "100%" }}
-                >
-                  {submitting ? "Creating account…" : "Create account"}
-                </button>
-              </form>
-              <p className="text-tiny auth-foot">
-                Already have an account?{" "}
-                <Link href="/login" className="text-link">
-                  Log in
-                </Link>
-              </p>
-            </>
-          )}
-        </div>
-      </main>
-      <Footer />
-    </>
+    <AuthShell
+      corner="login"
+      title={submitted ? "Check your email" : "Create your account"}
+      sub={submitted ? undefined : "Manage your VPN links in one place."}
+      foot={
+        submitted ? undefined : (
+          <p>
+            {PLAN_PRICE_LABEL} / month <span aria-hidden="true">·</span> One plan. Subscribe after signup.
+          </p>
+        )
+      }
+    >
+      {submitted ? (
+        <p className="auth-card__sub">
+          We sent a confirmation link to {email}. Open it, then{" "}
+          <Link
+            href={`/login/${typeof window !== "undefined" ? window.location.search : ""}`}
+            className="text-link"
+          >
+            log in
+          </Link>
+          .
+        </p>
+      ) : (
+        <>
+          <form onSubmit={handleSubmit} className="auth-form">
+            <div>
+              <label className="field-label" htmlFor="email">
+                Email address
+              </label>
+              <input
+                id="email"
+                type="email"
+                required
+                autoComplete="email"
+                placeholder="you@example.com"
+                className="field"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+              />
+            </div>
+            <PasswordField
+              id="password"
+              label="Password"
+              autoComplete="new-password"
+              placeholder="Create a strong password"
+              minLength={12}
+              value={password}
+              onChange={setPassword}
+              error={error}
+            />
+            <button type="submit" className="btn btn-primary btn-block btn-lg" disabled={submitting}>
+              {submitting ? (
+                "Creating account…"
+              ) : (
+                <>
+                  Create account <span aria-hidden="true">→</span>
+                </>
+              )}
+            </button>
+          </form>
+          <p className="auth-form__aside auth-form__aside--center">
+            Already have an account?{" "}
+            <Link href="/login" className="text-link">
+              Log in
+            </Link>
+          </p>
+        </>
+      )}
+    </AuthShell>
   );
 }

@@ -1,30 +1,31 @@
-import { SITE_NAME } from "@/lib/site-config";
+import { SITE_NAME, SUPPORT_EMAIL } from "@/lib/site-config";
+
+const LINKS = [
+  { href: "/privacy/", label: "Privacy" },
+  { href: "/privacy/policy/", label: "Privacy Policy" },
+  { href: "/terms/", label: "Terms of Service" },
+  { href: "/impressum/", label: "Impressum" },
+  { href: `mailto:${SUPPORT_EMAIL}`, label: "Contact" },
+];
 
 export default function Footer() {
   const year = new Date().getFullYear();
   return (
     <footer className="dm-footer">
       <div className="dm-footer__top">
-        <span className="dm-footer__brand">{SITE_NAME}</span>
-        <div className="dm-footer__links">
-          <a href="/privacy/" className="dm-footer__link">
-            Privacy
-          </a>
-          <a href="/privacy/policy/" className="dm-footer__link">
-            Privacy policy
-          </a>
-          <a href="/terms/" className="dm-footer__link">
-            Terms
-          </a>
-          <a href="/impressum/" className="dm-footer__link">
-            Impressum
-          </a>
-        </div>
-      </div>
-      <div className="dm-footer__bottom">
-        <span className="text-tiny">
-          © {year} {SITE_NAME} · Private VPN access for a more open world.
-        </span>
+        <p className="dm-footer__lead">
+          <span className="dm-footer__brand">{SITE_NAME}</span>
+          <span className="text-tiny">
+            © {year} {SITE_NAME}. All rights reserved.
+          </span>
+        </p>
+        <nav className="dm-footer__links" aria-label="Legal">
+          {LINKS.map((l) => (
+            <a key={l.href} href={l.href} className="dm-footer__link">
+              {l.label}
+            </a>
+          ))}
+        </nav>
       </div>
     </footer>
   );

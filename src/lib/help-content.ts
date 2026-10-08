@@ -1,50 +1,63 @@
+import { PLAN_DEVICES, PLAN_PRICE_LABEL, TWO_SERVER_LINKS } from "./site-config";
+
 export type HelpCategory = { id: string; label: string; icon: "book" | "laptop" | "globe" | "card" | "shield" | "wrench" };
 export type HelpItem = { category: string; question: string; summary: string; answer: string[] };
 
 export const HELP_CATEGORIES: HelpCategory[] = [
   { id: "getting-started", label: "Getting started", icon: "book" },
-  { id: "apps", label: "Using the apps", icon: "laptop" },
+  { id: "links", label: "Using your link", icon: "laptop" },
   { id: "locations", label: "Locations and servers", icon: "globe" },
   { id: "billing", label: "Billing and account", icon: "card" },
   { id: "privacy", label: "Privacy and security", icon: "shield" },
   { id: "troubleshooting", label: "Troubleshooting", icon: "wrench" },
 ];
 
+const TWO_SERVERS: HelpItem = TWO_SERVER_LINKS
+  ? {
+      category: "locations",
+      question: "How do I use two servers?",
+      summary: "Route a link through two servers for extra privacy.",
+      answer: [
+        "When you create or edit a link, choose 2 servers under Routing. Your traffic then passes through two locations instead of one, which adds a layer of privacy and may reduce speed.",
+        "If a two-server route is not available, Arcana tells you. It never quietly gives you a single server instead.",
+      ],
+    }
+  : {
+      category: "locations",
+      question: "Can I use two servers?",
+      summary: "Not yet for third-party VPN clients.",
+      answer: [
+        "Two-server routing needs a VPN client that can chain two connections, and the clients Arcana links support today connect through one server. Your links use a single server for now.",
+        "When two-server routing becomes available it will appear as an option when you create or edit a link.",
+      ],
+    };
+
 export const HELP_ITEMS: HelpItem[] = [
   {
     category: "getting-started",
     question: "What is Arcana?",
-    summary: "Learn what Arcana is, and how it helps you access a more open internet.",
+    summary: "Private VPN access through secure links.",
     answer: [
-      "Arcana is private VPN access without the clutter. One plan covers up to three of your devices, and you connect with one tap.",
-      "Your subscription, your devices and your connection links are all managed from your account.",
+      "Arcana gives you private VPN access through secure HTTPS links. You paste a link into a compatible third-party VPN client. There is no Arcana app to install.",
+      `One plan covers up to ${PLAN_DEVICES} devices. Your subscription and your links are managed from your account.`,
     ],
   },
   {
     category: "getting-started",
     question: "How does Arcana work?",
-    summary: "Understand how we encrypt your connection and route your traffic.",
+    summary: "Understand how we route your traffic.",
     answer: [
-      "The app encrypts your traffic and sends it through an Arcana server, so the sites you visit see the server's address instead of yours.",
-      "Your account and payment details are kept separate from the credentials your device uses to connect. Those connection credentials are short-lived and are renewed automatically.",
+      "Your VPN client connects through an Arcana server, so the sites you visit see the server's address instead of yours.",
+      "Your account and payment details are kept separate from the connection credentials inside your link.",
     ],
   },
   {
     category: "getting-started",
-    question: "How do I install the app?",
-    summary: "Step-by-step instructions for the platforms we support.",
+    question: "How do I get started?",
+    summary: "Create an account, make a link, paste it into a client.",
     answer: [
-      "Create an account, then open the Apps page and download the app for your device. Sign in with the same account and tap Connect.",
-      "The Windows app is first. The other platforms are in preparation and are marked as coming soon on the Apps page.",
-    ],
-  },
-  {
-    category: "getting-started",
-    question: "How do I use two servers?",
-    summary: "Learn how to connect using one or two servers for extra privacy.",
-    answer: [
-      "In the app, open Route and choose Two servers. Your traffic then passes through two locations instead of one, which adds a layer of privacy and may reduce speed.",
-      "If a two-server route is not available, Arcana tells you. It never quietly connects through a single server instead.",
+      "Create an account and subscribe. Then open VPN links, choose Create link, pick your settings and copy the link.",
+      "Paste the link into a compatible VPN client as a subscription or configuration link, then connect from that client.",
     ],
   },
   {
@@ -52,56 +65,67 @@ export const HELP_ITEMS: HelpItem[] = [
     question: "How do I cancel my plan?",
     summary: "Find out how to manage your subscription and cancel anytime.",
     answer: [
-      "Sign in, open Account, then Subscription. From there you can cancel, and your access continues until the end of the period you have paid for.",
+      "Sign in and open Account & plan. From there you can cancel, and your access continues until the end of the period you have paid for.",
     ],
   },
   {
-    category: "apps",
-    question: "How do I connect and disconnect?",
-    summary: "The power button on the Home screen does both.",
+    category: "links",
+    question: "Which VPN clients can I use?",
+    summary: "Clients that accept an HTTPS subscription link.",
     answer: [
-      "Tap the power button on Home to connect. The screen shows Connecting while the route is set up, then Protected once it is private. Tap it again to disconnect.",
+      "Arcana links work with clients that import a subscription link for VLESS or Hysteria2 connections, such as Hiddify, Shadowrocket, Incy, sing-box and Xray-based clients.",
+      "Arcana cannot promise compatibility with every client. If yours does not accept the link, try one of these.",
     ],
   },
   {
-    category: "apps",
-    question: "What does “Internet blocked” mean?",
-    summary: "The kill switch is holding traffic until the connection is back.",
+    category: "links",
+    question: "Who can use my link?",
+    summary: "Anyone who has it. Keep it private.",
     answer: [
-      "If the connection drops unexpectedly, the app blocks internet access instead of letting traffic leave unprotected. It reconnects automatically. You can disconnect on purpose from Home to restore normal access.",
+      "Anyone with your link can connect with it, so treat it like a password and do not post or share it.",
+      "If a link was shared or lost, open it and replace it. The old link stops working immediately.",
+    ],
+  },
+  {
+    category: "links",
+    question: "How do I revoke a link?",
+    summary: "Open the link and choose Revoke link.",
+    answer: [
+      "Open VPN links, choose the link and select Revoke link. Anything still using it stops working, and it no longer uses one of your device places.",
     ],
   },
   {
     category: "locations",
     question: "Which locations can I connect to?",
-    summary: "Only locations with a server running right now are listed.",
-    answer: ["Open Locations to see every place you can connect today. The list only shows locations that have a server running right now."],
+    summary: "Only locations with a server running right now are offered.",
+    answer: ["Choose Location when you create a link. The list only shows locations that have a server available right now."],
   },
   {
     category: "locations",
     question: "What does Automatic do?",
-    summary: "It picks the best location for you.",
-    answer: ["Automatic chooses the fastest, most reliable server for your location and network conditions. Pick a specific location instead when you need your traffic to appear from there."],
+    summary: "Arcana selects an available location for you.",
+    answer: ["With Automatic, Arcana selects an available location for you. Choose a location yourself when you need your traffic to appear from there."],
   },
+  TWO_SERVERS,
   {
     category: "billing",
     question: "How much does Arcana cost?",
-    summary: "One plan: €6.99 a month for up to 3 devices.",
-    answer: ["There is a single plan at €6.99 a month that covers up to three devices. You can see and change your subscription under Account, Subscription."],
+    summary: `One plan: ${PLAN_PRICE_LABEL} a month for up to ${PLAN_DEVICES} devices.`,
+    answer: [`There is a single plan at ${PLAN_PRICE_LABEL} a month that covers up to ${PLAN_DEVICES} devices. You can see and manage it under Account & plan.`],
   },
   {
     category: "billing",
-    question: "How do I remove a device?",
-    summary: "Free a seat from your account.",
-    answer: ["Open Account, then Devices, and remove the device you no longer use. Its connection credentials stop working and the seat is free again."],
+    question: "How do I free up a device place?",
+    summary: "Revoke a link you no longer use.",
+    answer: ["Each active link uses one of your device places. Revoke a link you no longer use and its place is free again."],
   },
   {
     category: "privacy",
     question: "What does Arcana know about me?",
     summary: "Only what is needed to run your account.",
     answer: [
-      "An email address to sign you in, your subscription status, and basic details about the devices you register, such as their name, platform and when they last connected.",
-      "We do not ask for your name, address or payment details beyond what the payment provider needs to process your subscription.",
+      "An email address to sign you in, your subscription status, and the name and settings of your links, including when each link last fetched its configuration.",
+      "We do not ask for your name, address or payment details beyond what the payment provider needs to process your subscription. We do not log the sites you visit.",
     ],
   },
   {
@@ -112,11 +136,11 @@ export const HELP_ITEMS: HelpItem[] = [
   },
   {
     category: "troubleshooting",
-    question: "The app will not connect",
+    question: "My link will not connect",
     summary: "A few things to try first.",
     answer: [
-      "Check that your internet works without the VPN, then try a different location. If your network blocks VPN traffic, try again on another network.",
-      "If it still fails, contact support and tell us the time, your platform and the location you chose. Please do not send passwords or connection links.",
+      "Check that your subscription is active and that your internet works without the VPN. Then try a different location or network, and make sure your VPN client supports VLESS or Hysteria2 links.",
+      "If it still fails, replace the link and import the new one. If that does not help, contact support and tell us the time, your VPN client and the location you chose. Please do not send passwords or links.",
     ],
   },
 ];

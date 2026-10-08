@@ -10,3 +10,14 @@ export const IS_PRODUCTION = process.env.NODE_ENV === "production";
 // is the ONLY place it may be hardcoded — scripts/check-production-config.mjs
 // refuses a production deploy while this still resolves to the placeholder.
 export const SUPPORT_EMAIL = process.env.NEXT_PUBLIC_SUPPORT_EMAIL || "support@arcana.example";
+
+// Subscription terms shown on public pages. Billing and capacity are enforced
+// server-side; these only drive copy.
+export const PLAN_PRICE_LABEL = "€6.99";
+export const PLAN_DEVICES = 3;
+
+// Two-server (Privacy+) Links are only offered once the backend can render a
+// second hop for third-party clients (see functions/lib/client-capabilities.js,
+// where every client currently lists no privacy_plus protocols). Flip this
+// together with that table so marketing never promises what a Link cannot do.
+export const TWO_SERVER_LINKS = false;
