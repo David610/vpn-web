@@ -2,8 +2,9 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
+import UserMenu from "@/components/UserMenu";
 import { useSession } from "@/hooks/useSession";
 import { api } from "@/lib/api";
 import { SITE_NAME } from "@/lib/site-config";
@@ -46,57 +47,13 @@ function Icon({ name }: { name: keyof typeof ICONS }) {
   );
 }
 
-function UserMenu({ email }: { email: string }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const onPointer = (e: PointerEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("pointerdown", onPointer);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("pointerdown", onPointer);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
-
-  async function signOut() {
-    // Dynamic import keeps the Supabase client out of the shell's first paint.
-    const { supabase } = await import("@/lib/supabase");
-    await supabase.auth.signOut().catch((err: { message: string }) => {
-      console.error("Sign out failed:", err.message);
-    });
-    window.location.href = "/";
-  }
-
-  return (
-    <div className="ps-user" ref={ref}>
-      <button type="button" className="ps-user__button" aria-label={`Account menu for ${email}`} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
-        <span className="ps-user__avatar" aria-hidden="true">{email.charAt(0).toUpperCase()}</span>
-        <span className="ps-user__email">{email}</span>
-        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-          <path d="M6 9l6 6 6-6" />
-        </svg>
-      </button>
-      {open ? (
-        <div className="ps-user__menu" role="menu">
-          <p className="ps-user__menu-email">{email}</p>
-          <button type="button" role="menuitem" onClick={signOut}>
-            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M10 4H5v16h5M15 8l4 4-4 4M19 12H9" />
-            </svg>
-            Sign out
-          </button>
-        </div>
-      ) : null}
-    </div>
-  );
+async function signOutCustomer() {
+  // Dynamic import keeps the Supabase client out of the shell's first paint.
+  const { supabase } = await import("@/lib/supabase");
+  await supabase.auth.signOut().catch((err: { message: string }) => {
+    console.error("Sign out failed:", err.message);
+  });
+  window.location.href = "/";
 }
 
 /**
@@ -152,7 +109,7 @@ export function AccountShell({
         <Link href="/account/" className="ps-top__brand">
           {SITE_NAME}
         </Link>
-        {email ? <UserMenu email={email} /> : null}
+        {email ? <UserMenu email={email} onSignOut={signOutCustomer} /> : null}
       </header>
       <div className="ps-body">
         <nav className="ps-side" aria-label="Account">

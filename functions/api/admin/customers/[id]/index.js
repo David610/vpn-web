@@ -7,6 +7,46 @@ function jsonResponse(body, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 }
 
+/**
+ * The account's VPN links as metadata only: name, routing, location mode and
+ * dates. Never an access link, token or credential, so an administrator can see
+ * what a customer has without being able to use it. A failure costs the list,
+ * not the page (null means "unavailable").
+ */
+async function linkMetadata(supabaseAdmin, accountId) {
+  try {
+    const { data: rows, error } = await supabaseAdmin
+      .from("vpn_links")
+      .select("id, name, status, desired_route_id, location_mode, created_at, revoked_at")
+      .eq("account_id", accountId)
+      .order("created_at", { ascending: false });
+    if (error) throw new Error(error.message);
+    const routeIds = [...new Set((rows ?? []).map((r) => r.desired_route_id))];
+    const routes = new Map();
+    if (routeIds.length > 0) {
+      const { data: routeRows, error: routeError } = await supabaseAdmin
+        .from("logical_routes")
+        .select("id, display_name, privacy_class")
+        .in("id", routeIds);
+      if (routeError) throw new Error(routeError.message);
+      for (const r of routeRows ?? []) routes.set(r.id, r);
+    }
+    return (rows ?? []).map((r) => ({
+      id: r.id,
+      name: r.name,
+      status: r.status,
+      routing: routes.get(r.desired_route_id)?.privacy_class === "privacy_plus" ? 2 : 1,
+      locationMode: r.location_mode ?? "manual",
+      location: routes.get(r.desired_route_id)?.display_name ?? null,
+      createdAt: r.created_at,
+      revokedAt: r.revoked_at ?? null,
+    }));
+  } catch (err) {
+    console.error("admin/customers/:id: link metadata failed:", err.message);
+    return null;
+  }
+}
+
 export async function onRequestGet({ env, request, params }) {
   const supabaseAdmin = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
     auth: { autoRefreshToken: false, persistSession: false },
@@ -38,6 +78,7 @@ export async function onRequestGet({ env, request, params }) {
     let accountSuspendedAt = null;
     let memberCount = 0;
     let grants = [];
+    let links = [];
     if (account) {
       // Narrowed to the live statuses before maybeSingle(): an account that
       // lapsed and resubscribed keeps its old canceled rows, and only the
@@ -75,6 +116,7 @@ export async function onRequestGet({ env, request, params }) {
       stripeCustomerId = accountRow?.stripe_customer_id ?? null;
       accountSuspendedAt = accountRow?.suspended_at ?? null;
       memberCount = count ?? 0;
+      links = await linkMetadata(supabaseAdmin, account.accountId);
       grants = (grantRows ?? []).map((g) => ({
         id: g.id,
         status: g.status,
@@ -128,6 +170,7 @@ export async function onRequestGet({ env, request, params }) {
           }
         : null,
       grants,
+      links,
       // Plural now (F-07/C-06): a customer can have several provisioned
       // devices, and the admin UI needs to see and act on all of them.
       vpnAccounts: vpnAccounts.map((v) => ({

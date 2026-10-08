@@ -2,6 +2,8 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { AdminShell } from "@/components/admin/AdminShell";
+import { AdminPage, AdminTable, AdminTableWrap } from "@/components/admin/AdminPrimitives";
+import { OperationsTabs } from "@/components/admin/OperationsTabs";
 import { StatusBadge } from "@/components/admin/StatusBadge";
 import { ConfirmButton } from "@/components/admin/ConfirmButton";
 import { useAdminSession } from "@/hooks/useAdminSession";
@@ -67,13 +69,15 @@ export default function AdminJobsPage() {
 
   return (
     <AdminShell>
-      <div className="mb-4 flex items-baseline justify-between gap-4">
-        <h1 className="text-xl font-semibold">Jobs</h1>
-        <span className="text-xs text-gray-500">{meta.total} total</span>
-      </div>
+      <AdminPage
+        title="Operations"
+        description="Failed provisioning, node alerts and actions that need review."
+        actions={<span className="text-fg-2">{meta.total} jobs</span>}
+      >
+        <OperationsTabs />
 
       <select
-        className="mb-4 rounded border px-3 py-2"
+        className="mb-4 admin-select admin-select--inline"
         value={statusFilter}
         onChange={(e) => {
           setStatusFilter(e.target.value);
@@ -87,18 +91,18 @@ export default function AdminJobsPage() {
         <option value="failed">Failed</option>
       </select>
 
-      {actionMessage && <p className="mb-4 text-sm text-gray-600">{actionMessage}</p>}
+      {actionMessage && <p className="mb-4 text-sm text-fg-2">{actionMessage}</p>}
       {error ? (
-        <p className="text-red-600">{error}</p>
+        <p className="text-danger">{error}</p>
       ) : !jobs ? (
         <p>Loading…</p>
       ) : (
         <>
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
+          <AdminTableWrap>
+            <AdminTable>
               <thead>
-                <tr className="border-b text-gray-500">
-                  <th className="py-2">ID</th>
+                <tr>
+                  <th>ID</th>
                   <th>Type</th>
                   <th>Node</th>
                   <th>Status</th>
@@ -108,8 +112,8 @@ export default function AdminJobsPage() {
               </thead>
               <tbody>
                 {jobs.map((j) => (
-                  <tr key={j.id} className="border-b">
-                    <td className="py-2">#{j.id}</td>
+                  <tr key={j.id}>
+                    <td>#{j.id}</td>
                     <td>{j.jobType}</td>
                     <td>{j.nodeId}</td>
                     <td><StatusBadge status={j.status} /></td>
@@ -119,7 +123,7 @@ export default function AdminJobsPage() {
                         <ConfirmButton
                           label="Retry"
                           confirmLabel="Confirm retry"
-                          className="rounded bg-neutral-900 px-2 py-1 text-xs text-white"
+                          className="btn btn-primary btn-sm"
                           onConfirm={() => retry(j.id)}
                         />
                       )}
@@ -127,24 +131,24 @@ export default function AdminJobsPage() {
                   </tr>
                 ))}
               </tbody>
-            </table>
-          </div>
+            </AdminTable>
+          </AdminTableWrap>
 
           <div className="mt-4 flex items-center gap-3">
             <button
               type="button"
-              className="rounded border px-3 py-1.5 text-sm disabled:opacity-40"
+              className="btn btn-secondary btn-sm"
               disabled={page <= 1}
               onClick={() => setPage((p) => Math.max(1, p - 1))}
             >
               Previous
             </button>
-            <span className="text-sm text-gray-500">
+            <span className="text-sm text-fg-2">
               Page {page} of {meta.totalPages}
             </span>
             <button
               type="button"
-              className="rounded border px-3 py-1.5 text-sm disabled:opacity-40"
+              className="btn btn-secondary btn-sm"
               disabled={page >= meta.totalPages}
               onClick={() => setPage((p) => Math.min(meta.totalPages, p + 1))}
             >
@@ -153,6 +157,7 @@ export default function AdminJobsPage() {
           </div>
         </>
       )}
+      </AdminPage>
     </AdminShell>
   );
 }

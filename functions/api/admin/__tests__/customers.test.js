@@ -3,6 +3,15 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const getClaims = vi.fn();
 const adminMaybeSingle = vi.fn();
 const rpc = vi.fn();
+let statsResults;
+
+/** A chainable, awaitable stand-in for a PostgREST query that resolves to a canned result. */
+function chain(result) {
+  const builder = {};
+  for (const m of ["select", "in", "eq", "is"]) builder[m] = vi.fn(() => builder);
+  builder.then = (resolve, reject) => Promise.resolve(result).then(resolve, reject);
+  return builder;
+}
 
 vi.mock("@supabase/supabase-js", () => ({
   createClient: vi.fn(() => ({
@@ -16,6 +25,7 @@ vi.mock("@supabase/supabase-js", () => ({
           maybeSingle: adminMaybeSingle,
         };
       }
+      if (table in statsResults) return chain(statsResults[table]);
       throw new Error(`unexpected table ${table}`);
     }),
   })),
@@ -55,6 +65,11 @@ beforeEach(() => {
   });
   adminMaybeSingle.mockReset().mockResolvedValue({ data: { role: "owner" }, error: null });
   rpc.mockReset().mockResolvedValue({ data: [row()], error: null });
+  statsResults = {
+    vpn_links: { data: [{ account_id: "acct-1" }, { account_id: "acct-1" }], error: null },
+    external_vpn_devices: { data: [{ account_id: "acct-1" }], error: null },
+    subscriptions: { data: [{ account_id: "acct-1", extra_seats: 3 }], error: null },
+  };
 });
 
 describe("GET /api/admin/customers", () => {
@@ -83,6 +98,9 @@ describe("GET /api/admin/customers", () => {
         vpnUserId: "vpn-abc",
         nodeId: "node-1",
         enabled: true,
+        linkCount: 2,
+        clientCount: 1,
+        capacity: 6,
       },
     ]);
     expect(body).toMatchObject({ page: 1, perPage: 50, total: 1, totalPages: 1 });
@@ -120,5 +138,20 @@ describe("GET /api/admin/customers", () => {
     const body = await (await onRequestGet({ env, request: makeRequest("?page=2") })).json();
     expect(body.customers).toEqual([]);
     expect(body.total).toBe(0);
+  });
+
+  it("still returns the directory, without link counts, when the counts cannot be read", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    statsResults.vpn_links = { data: null, error: { message: "boom" } };
+    const res = await onRequestGet({ env, request: makeRequest() });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.customers[0]).toMatchObject({ email: "alice@example.com", linkCount: null, clientCount: null, capacity: null });
+  });
+
+  it("exposes counts only, never a link, token or URL", async () => {
+    statsResults.vpn_links = { data: [{ account_id: "acct-1", name: "Secret", token: "t0ken" }], error: null };
+    const text = await (await onRequestGet({ env, request: makeRequest() })).text();
+    expect(text).not.toMatch(/t0ken|Secret|subscription_token|configuration/i);
   });
 });

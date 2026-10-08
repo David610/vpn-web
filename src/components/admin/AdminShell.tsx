@@ -3,9 +3,18 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
+import UserMenu from "@/components/UserMenu";
 import { useAdminSession } from "@/hooks/useAdminSession";
-import { SITE_NAME } from "@/lib/site-config";
+import { supabaseAdmin } from "@/lib/supabase";
+import { ENV_LABEL, SITE_NAME } from "@/lib/site-config";
 import { AdminNav } from "./AdminNav";
+
+async function signOutAdmin() {
+  await supabaseAdmin.auth.signOut().catch((err: { message: string }) => {
+    console.error("Admin sign out failed:", err.message);
+  });
+  window.location.href = "/admin/login";
+}
 
 export function AdminShell({ children }: { children: React.ReactNode }) {
   const { session, access, loading } = useAdminSession();
@@ -30,15 +39,22 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="area area--wide">
-      <aside className="area__side">
-        <Link href="/admin" className="admin-wordmark">
-          {SITE_NAME}
+    <div className="ps ps--admin">
+      <header className="ps-top">
+        <Link href="/admin" className="ps-top__brand">
+          {SITE_NAME} <span className="ps-tag">Admin</span>
         </Link>
-        <p className="area__label">Admin</p>
+        <div className="ps-top__right">
+          {ENV_LABEL ? <span className="ps-env">{ENV_LABEL}</span> : null}
+          <UserMenu email={session.user.email ?? "Admin"} label="Admin" onSignOut={signOutAdmin} />
+        </div>
+      </header>
+      <div className="ps-body">
         <AdminNav />
-      </aside>
-      <main className="area__main">{children}</main>
+        <main className="ps-main ps-main--wide" id="admin-main">
+          {children}
+        </main>
+      </div>
     </div>
   );
 }

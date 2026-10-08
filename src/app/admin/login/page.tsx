@@ -2,8 +2,8 @@
 
 import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
-import Nav from "@/components/Nav";
-import Footer from "@/components/Footer";
+import AuthShell from "@/components/auth/AuthShell";
+import PasswordField from "@/components/auth/PasswordField";
 import { supabaseAdmin } from "@/lib/supabase";
 
 type Phase = "credentials" | "totp";
@@ -26,7 +26,7 @@ export default function AdminLoginPage() {
    * from deciding its own privilege, and means a non-admin is never shown
    * an MFA prompt for a role they do not hold.
    */
-  async function routeBySessionLevel(accessToken: string) {
+  async function routeBySessionLevel(accessToken: string, otp = "") {
     const res = await fetch("/api/admin/overview", {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
@@ -47,10 +47,13 @@ export default function AdminLoginPage() {
           const { data: factors } = await supabaseAdmin.auth.mfa.listFactors();
           const totp = factors?.totp[0];
           if (totp) {
+            // A code typed into the combined form is verified right away; with
+            // none (or a wrong one) the dedicated code screen takes over.
+            if (/^\d{6}$/.test(otp) && (await verifyCode(totp.id, otp))) return;
             setFactorId(totp.id);
             setCode("");
             setPhase("totp");
-            setError(null);
+            setError(otp ? "That code is not valid. Check your authenticator and try again." : null);
             return;
           }
         }
@@ -65,6 +68,19 @@ export default function AdminLoginPage() {
     await supabaseAdmin.auth.signOut();
     setPhase("credentials");
     setError("This account does not have admin access.");
+  }
+
+  /** Verifies a TOTP code, which upgrades the session to aal2 in place, then routes on. */
+  async function verifyCode(id: string, otp: string): Promise<boolean> {
+    const { error: verifyError } = await supabaseAdmin.auth.mfa.challengeAndVerify({ factorId: id, code: otp.trim() });
+    if (verifyError) {
+      console.error("admin MFA verify failed:", verifyError.message);
+      return false;
+    }
+    const { data } = await supabaseAdmin.auth.getSession();
+    if (!data.session) return false;
+    await routeBySessionLevel(data.session.access_token);
+    return true;
   }
 
   async function handleCredentials(e: FormEvent) {
@@ -87,7 +103,7 @@ export default function AdminLoginPage() {
       return;
     }
 
-    await routeBySessionLevel(data.session.access_token);
+    await routeBySessionLevel(data.session.access_token, code);
     setSubmitting(false);
   }
 
@@ -132,104 +148,83 @@ export default function AdminLoginPage() {
   }
 
   return (
-    <>
-      <Nav />
-      <main className="dm-section" style={{ borderBottom: "none" }}>
-        <div className="auth-frame">
-          <p className="auth-brand">Arcana admin</p>
-          <div className="auth-head">
-            <h1 className="section-h2">
-              {phase === "credentials" ? "Admin log in" : "Two-factor code"}
-            </h1>
-            {phase === "totp" && (
-              <p className="section-sub">
-                Enter the 6-digit code from your authenticator app.
-              </p>
-            )}
+    <AuthShell
+      corner="none"
+      title={phase === "credentials" ? "Admin sign in" : "Two-factor code"}
+      sub={phase === "credentials" ? "Sign in to manage Arcana." : "Enter the 6-digit code from your authenticator app."}
+      foot={<p>Two-step verification is required for administrators.</p>}
+    >
+      {phase === "credentials" ? (
+        <form onSubmit={handleCredentials} className="auth-form">
+          <div>
+            <label className="field-label" htmlFor="email">
+              Email
+            </label>
+            <input
+              id="email"
+              type="email"
+              required
+              autoComplete="email"
+              className="field"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+            />
           </div>
-
-          {phase === "credentials" ? (
-            <form onSubmit={handleCredentials} className="auth-form">
-              <div>
-                <label className="field-label" htmlFor="email">
-                  Email
-                </label>
-                <input
-                  id="email"
-                  type="email"
-                  required
-                  autoComplete="email"
-                  className="field"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                />
-              </div>
-              <div>
-                <label className="field-label" htmlFor="password">
-                  Password
-                </label>
-                <input
-                  id="password"
-                  type="password"
-                  required
-                  autoComplete="current-password"
-                  aria-invalid={error ? "true" : undefined}
-                  className="field"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                />
-                {error && <span className="field-error">{error}</span>}
-              </div>
-              <button
-                type="submit"
-                className="btn btn-primary"
-                disabled={submitting}
-                style={{ width: "100%" }}
-              >
-                {submitting ? "Logging in…" : "Log in"}
-              </button>
-            </form>
-          ) : (
-            <form onSubmit={handleTotp} className="auth-form">
-              <div>
-                <label className="field-label" htmlFor="code">
-                  Authentication code
-                </label>
-                <input
-                  id="code"
-                  type="text"
-                  required
-                  autoFocus
-                  inputMode="numeric"
-                  autoComplete="one-time-code"
-                  pattern="[0-9]*"
-                  maxLength={6}
-                  aria-invalid={error ? "true" : undefined}
-                  className="field"
-                  style={{ textAlign: "center", letterSpacing: "0.4em" }}
-                  value={code}
-                  onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
-                />
-                {error && <span className="field-error">{error}</span>}
-              </div>
-              <button
-                type="submit"
-                className="btn btn-primary"
-                disabled={submitting || code.length !== 6}
-                style={{ width: "100%" }}
-              >
-                {submitting ? "Verifying…" : "Verify"}
-              </button>
-              <p className="text-tiny auth-foot">
-                <button type="button" onClick={startOver} className="text-link">
-                  Log in as someone else
-                </button>
-              </p>
-            </form>
-          )}
-        </div>
-      </main>
-      <Footer />
-    </>
+          <PasswordField id="password" label="Password" autoComplete="current-password" value={password} onChange={setPassword} error={error} />
+          <div>
+            <label className="field-label" htmlFor="otp">
+              Authenticator code
+            </label>
+            <input
+              id="otp"
+              type="text"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              pattern="[0-9]*"
+              maxLength={6}
+              placeholder="6-digit code"
+              className="field"
+              value={code}
+              onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
+            />
+          </div>
+          <button type="submit" className="btn btn-primary btn-block btn-lg" disabled={submitting}>
+            {submitting ? "Signing in…" : "Sign in"}
+          </button>
+        </form>
+      ) : (
+        <form onSubmit={handleTotp} className="auth-form">
+          <div>
+            <label className="field-label" htmlFor="code">
+              Authentication code
+            </label>
+            <input
+              id="code"
+              type="text"
+              required
+              autoFocus
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              pattern="[0-9]*"
+              maxLength={6}
+              aria-invalid={error ? "true" : undefined}
+              className="field"
+              style={{ textAlign: "center", letterSpacing: "0.4em" }}
+              value={code}
+              onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
+            />
+            {error && <span className="field-error">{error}</span>}
+          </div>
+          <button type="submit" className="btn btn-primary btn-block btn-lg" disabled={submitting || code.length !== 6}>
+            {submitting ? "Verifying…" : "Verify"}
+          </button>
+          <p className="auth-form__aside">
+            <button type="button" onClick={startOver} className="text-link">
+              Log in as someone else
+            </button>
+          </p>
+        </form>
+      )}
+    </AuthShell>
   );
 }

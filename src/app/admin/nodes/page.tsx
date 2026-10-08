@@ -8,6 +8,7 @@ import { TypedConfirmDialog } from "@/components/admin/TypedConfirmDialog";
 import {
   AdminButton,
   AdminField,
+  AdminPage,
   AdminNotice,
   AdminSection,
   AdminTable,
@@ -264,14 +265,13 @@ export default function AdminNodesPage() {
 
   return (
     <AdminShell>
-      <h1 className="mb-4 text-xl font-semibold text-fg">Fleet</h1>
+      <AdminPage
+        eyebrow="Arcana admin"
+        title="Servers"
+        description="Inspect nodes, investigate availability and manage controlled lifecycle actions."
+        actions={<span className="text-fg-3">VPN traffic and host health · refresh {REFRESH_MS / 1000}s</span>}
+      >
       <FleetTabs />
-      <div className="mb-4 flex flex-wrap items-baseline justify-between gap-x-4">
-        <h2 className="text-base font-semibold text-fg">Nodes</h2>
-        <span className="text-xs text-fg-3">
-          VPN traffic and host health · refresh {REFRESH_MS / 1000}s
-        </span>
-      </div>
 
       <AdminSection>
         <form onSubmit={createPendingNode} className="flex flex-wrap items-end gap-2 rounded-sm border border-border bg-bg-alt p-3 text-sm">
@@ -396,7 +396,7 @@ export default function AdminNodesPage() {
                   <td>
                     <div className="flex flex-wrap gap-1">
                       <StatusBadge status={node.status} />
-                      <StatusBadge status={node.lifecycleState} />
+                      {node.lifecycleState.toLowerCase() !== node.status.toLowerCase() ? <StatusBadge status={node.lifecycleState} /> : null}
                     </div>
                     <select
                       aria-label={`Lifecycle transition for ${node.nodeId}`}
@@ -464,6 +464,7 @@ export default function AdminNodesPage() {
           reliable per-user counters.
         </p>
       )}
+      </AdminPage>
     </AdminShell>
   );
 }

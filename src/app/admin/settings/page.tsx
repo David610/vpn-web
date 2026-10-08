@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { AdminShell } from "@/components/admin/AdminShell";
+import { AdminPage } from "@/components/admin/AdminPrimitives";
 import { useAdminSession } from "@/hooks/useAdminSession";
 import { adminFetch } from "@/lib/adminFetch";
 
@@ -53,9 +54,9 @@ export default function AdminSettingsPage() {
 
   return (
     <AdminShell>
-      <h1 className="mb-6 text-xl font-semibold">Settings</h1>
+      <AdminPage title="Settings" description="Whether each integration is configured. Secret values are never shown.">
       {error ? (
-        <p className="text-red-600">{error}</p>
+        <p className="text-danger">{error}</p>
       ) : !settings ? (
         <p>Loading…</p>
       ) : (
@@ -151,6 +152,7 @@ export default function AdminSettingsPage() {
           )}
         </div>
       )}
+      </AdminPage>
     </AdminShell>
   );
 }

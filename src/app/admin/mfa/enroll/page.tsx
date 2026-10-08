@@ -2,8 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
-import Nav from "@/components/Nav";
-import Footer from "@/components/Footer";
+import AuthShell from "@/components/auth/AuthShell";
 import { supabaseAdmin } from "@/lib/supabase";
 
 type Enrollment = { factorId: string; qrCode: string; secret: string };
@@ -122,18 +121,11 @@ export default function AdminMfaEnrollPage() {
   }
 
   return (
-    <>
-      <Nav />
-      <main className="dm-section" style={{ borderBottom: "none" }}>
-        <div className="auth-frame">
-          <p className="auth-brand">Arcana admin</p>
-          <div className="auth-head">
-            <h1 className="section-h2">Set up two-factor authentication</h1>
-            <p className="section-sub">
-              Admin accounts require an authenticator app. Scan this code, then
-              enter the 6-digit number it shows.
-            </p>
-          </div>
+    <AuthShell
+      corner="none"
+      title="Set up two-factor authentication"
+      sub="Admin accounts require an authenticator app. Scan this code, then enter the 6-digit number it shows."
+    >
 
           {fatal ? (
             <span className="field-error" role="alert">
@@ -208,18 +200,14 @@ export default function AdminMfaEnrollPage() {
                 </div>
                 <button
                   type="submit"
-                  className="btn btn-primary"
+                  className="btn btn-primary btn-block btn-lg"
                   disabled={submitting || code.length !== 6}
-                  style={{ width: "100%" }}
                 >
                   {submitting ? "Verifying…" : "Activate"}
                 </button>
               </form>
             </>
           )}
-        </div>
-      </main>
-      <Footer />
-    </>
+    </AuthShell>
   );
 }

@@ -21,3 +21,7 @@ export const PLAN_DEVICES = 3;
 // where every client currently lists no privacy_plus protocols). Flip this
 // together with that table so marketing never promises what a Link cannot do.
 export const TWO_SERVER_LINKS = false;
+
+// Optional badge shown in the admin header ("Staging", "Development", ...) so
+// an admin always knows which environment they are acting on. Empty in production.
+export const ENV_LABEL = process.env.NEXT_PUBLIC_ENV_LABEL || "";

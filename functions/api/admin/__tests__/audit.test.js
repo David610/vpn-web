@@ -2,11 +2,12 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const getClaims = vi.fn();
 const adminMaybeSingle = vi.fn();
+const getUserById = vi.fn();
 let auditQuery;
 
 vi.mock("@supabase/supabase-js", () => ({
   createClient: vi.fn(() => ({
-    auth: { getClaims },
+    auth: { getClaims, admin: { getUserById } },
     from: vi.fn((table) => {
       if (table === "admin_users") return { select: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(), maybeSingle: adminMaybeSingle };
       if (table === "admin_audit_log") return auditQuery();
@@ -25,6 +26,7 @@ function makeRequest() {
 beforeEach(() => {
   getClaims.mockReset().mockResolvedValue({ data: { claims: { sub: "admin-1", aal: "aal2" } }, error: null });
   adminMaybeSingle.mockReset().mockResolvedValue({ data: { role: "owner" }, error: null });
+  getUserById.mockReset().mockResolvedValue({ data: { user: { email: "admin@example.test" } }, error: null });
   auditQuery = () => ({
     select: vi.fn().mockReturnThis(),
     order: vi.fn().mockReturnThis(),
@@ -49,11 +51,21 @@ describe("GET /api/admin/audit", () => {
     expect(body.entries[0]).toEqual({
       id: 1,
       adminUserId: "admin-1",
+      adminEmail: "admin@example.test",
       action: "admin.disable_user",
       targetType: "vpn_account",
       targetId: "1",
       metadata: {},
       createdAt: "t1",
     });
+  });
+
+  it("still returns entries, without an email, when the admin lookup fails", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    getUserById.mockRejectedValue(new Error("auth down"));
+    const res = await onRequestGet({ env, request: makeRequest() });
+    const body = await res.json();
+    expect(res.status).toBe(200);
+    expect(body.entries[0]).toMatchObject({ adminUserId: "admin-1", adminEmail: null });
   });
 });

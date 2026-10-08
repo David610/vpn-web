@@ -14,7 +14,7 @@ export default function AuthShell({
 }: {
   title: string;
   sub?: string;
-  corner: "login" | "help";
+  corner: "login" | "help" | "none";
   children: React.ReactNode;
   foot?: React.ReactNode;
 }) {
@@ -28,11 +28,11 @@ export default function AuthShell({
           <Link href="/login" className="btn btn-secondary">
             Log in
           </Link>
-        ) : (
+        ) : corner === "help" ? (
           <Link href="/help" className="dm-nav__link">
             Help
           </Link>
-        )}
+        ) : null}
       </header>
       <main className="auth-page">
         <div className="auth-card">
