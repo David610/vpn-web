@@ -262,3 +262,14 @@ describe("Link location mode", () => {
     expect((await post({ name: "Bad", routeId: "route_one", maxClients: 1, locationMode: "fastest" })).status).toBe(400);
   });
 });
+
+describe("Link list primary client", () => {
+  it("returns the first active client so the UI can copy a link without extra requests", async () => {
+    db._tables.external_vpn_devices.find((client) => client.device_id === "device-1").revoked_at = "2026-01-02";
+    await createCopyableClient("primary-key-0000001");
+    const { links } = await (await listLinks({ env, request })).json();
+    const link = links.find((item) => item.id === "link-1");
+    expect(link.primaryClientId).toMatch(/^created-/);
+    expect(links.find((item) => item.id === "link-3").primaryClientId).toBeNull();
+  });
+});

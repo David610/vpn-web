@@ -15,10 +15,11 @@ export async function onRequestGet(context) {
       .select("device_id,link_id,client_type,desired_route_id,last_subscription_fetch_at,revoked_at,created_at,devices(name)")
       .eq("link_id", link.id).eq("account_id", account.accountId).order("created_at", { ascending: true });
     if (clientError) throw new Error(`link client lookup failed: ${clientError.message}`);
-    const { data: route, error: routeError } = await db.from("logical_routes").select("display_name,region")
+    const { data: route, error: routeError } = await db.from("logical_routes").select("display_name,region,privacy_class")
       .eq("id", link.desired_route_id).maybeSingle();
     if (routeError) throw new Error(`route label lookup failed: ${routeError.message}`);
-    return { status: 200, body: { link: publicLink(link, (clients ?? []).filter((c) => !c.revoked_at).length, route?.display_name ?? route?.region),
+    const active = (clients ?? []).filter((c) => !c.revoked_at);
+    return { status: 200, body: { link: publicLink(link, active.length, route?.display_name ?? route?.region, active[0]?.device_id ?? null, route?.privacy_class ?? null),
       clients: (clients ?? []).map(publicClient) } };
   }, { recent: false });
 }

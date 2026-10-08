@@ -175,7 +175,7 @@ function LinkForm({ onLinked }: { onLinked: () => void }) {
           <button className="primary" disabled={busy || !code.trim()}>
             {busy ? "Linking…" : "Link account"}
           </button>
-          <button type="button" onClick={() => openWebsite("/account/security/")}>
+          <button type="button" onClick={() => openWebsite("/account/plan/")}>
             Open website
           </button>
         </div>
@@ -522,7 +522,7 @@ export default function TelegramMiniAppPage() {
               extra pack. Buy, change or cancel on the website.
             </p>
             <div className="actions">
-              <button onClick={() => openWebsite("/account/subscriptions/")}>Manage on website</button>
+              <button onClick={() => openWebsite("/account/plan/")}>Manage on website</button>
             </div>
           </section>
 

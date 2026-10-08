@@ -9,3 +9,10 @@ export function firstClientName(linkName: string): string {
 export function subscriptionForFirstClient<T extends PlanSubscription>(subscriptions: T[]): T | null {
   return subscriptions.find((s) => s.status !== "canceled" && s.used < s.capacity) ?? null;
 }
+
+const LINK_NAME_PATTERN = /^[\p{L}\p{N} ._'()-]{1,40}$/u;
+
+/** Mirrors the server's name rules (functions/lib/vpn-links.js) so users see why a name is rejected. */
+export function isValidLinkName(name: string): boolean {
+  return LINK_NAME_PATTERN.test(name.trim());
+}

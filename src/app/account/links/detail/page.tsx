@@ -1,143 +1,385 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { AccountShell, useAccount } from "@/components/account/AccountShell";
-import { bytes, type LinkClient, type VpnLink } from "@/components/account/links";
-import UsageChart, { dailyTotals, type UsageRow } from "@/components/account/UsageChart";
+import { maskedLink, useAccessLink } from "@/components/account/AccessLink";
+import ChoiceGroup from "@/components/account/ChoiceGroup";
+import {
+  configurationDetail,
+  configurationSummary,
+  pickAutomaticRoute,
+  routingOf,
+  type LinkClient,
+  type LocationChoice,
+  type RouteOption,
+  type Routing,
+  type VpnLink,
+} from "@/components/account/links";
 import { ConfirmDialog } from "@/components/Dialog";
-import { api, newIdempotencyKey, relative } from "@/lib/api";
+import { api, ApiError, newIdempotencyKey } from "@/lib/api";
+import { firstClientName, subscriptionForFirstClient } from "@/lib/link-first-client";
 
 type Detail = { link: VpnLink; clients: LinkClient[] };
-const TABS = ["Overview", "Configuration", "Clients", "Traffic", "Settings"] as const;
-type Tab = (typeof TABS)[number];
+type Replacement = { id: string; url: string; oldRevoked: boolean };
+
+function ReplacementPanel({ replacement }: { replacement: Replacement }) {
+  const router = useRouter();
+  const [copied, setCopied] = useState(false);
+  return (
+    <section className="created" aria-labelledby="replacement-heading">
+      <h2 id="replacement-heading">Your new link is ready</h2>
+      <p>Update it in your VPN client. Anyone with this link can connect, so keep it private.</p>
+      <div className="linkfield linkfield--open">
+        <code onClick={(e) => window.getSelection()?.selectAllChildren(e.currentTarget)}>{replacement.url}</code>
+      </div>
+      {replacement.oldRevoked ? (
+        <p className="muted">The previous link no longer works.</p>
+      ) : (
+        <p className="notice notice--error" role="alert">
+          The new link works, but the previous link could not be revoked. Revoke it from your VPN links so it stops working.
+        </p>
+      )}
+      <div className="form-actions">
+        <button
+          type="button"
+          className="btn btn-primary btn-lg"
+          onClick={async () => {
+            try {
+              await navigator.clipboard.writeText(replacement.url);
+              setCopied(true);
+            } catch {
+              setCopied(false);
+            }
+          }}
+        >
+          {copied ? "Copied" : "Copy link"}
+        </button>
+        <button type="button" className="btn btn-secondary btn-lg" onClick={() => router.replace(`/account/links/detail/?id=${encodeURIComponent(replacement.id)}`)}>
+          Open link
+        </button>
+      </div>
+    </section>
+  );
+}
 
 function LinkDetailBody() {
   const { session, overview } = useAccount();
+  const router = useRouter();
   const id = useSearchParams().get("id") ?? "";
   const [detail, setDetail] = useState<Detail | null>(null);
-  const [usage, setUsage] = useState<UsageRow[]>([]);
-  const [tab, setTab] = useState<Tab>("Overview");
+  const [routes, setRoutes] = useState<RouteOption[] | null>(null);
+  const [routing, setRouting] = useState<Routing>("one");
+  const [location, setLocation] = useState<LocationChoice>("auto");
+  const [routeId, setRouteId] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [secret, setSecret] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
-  const [replayed, setReplayed] = useState(false);
-  const [revokeLink, setRevokeLink] = useState(false);
-  const [revokeClient, setRevokeClient] = useState<LinkClient | null>(null);
-  const idem = useRef<string | null>(null);
+  const [confirm, setConfirm] = useState<"revoke" | "replace" | "move" | null>(null);
+  const [replacement, setReplacement] = useState<Replacement | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
   const load = useCallback(async () => {
-    if (!id) { setError("A Link id is required."); return; }
-    try { const loaded = await api<Detail>(session, `/api/account/links/${encodeURIComponent(id)}`); setDetail(loaded); setError(null); if (loaded.clients.length === 0 && loaded.link.status === "active") setTab("Clients"); }
-    catch (e) { setError(e instanceof Error ? e.message : "Could not load Link."); }
+    if (!id) {
+      setError("A link id is required.");
+      return;
+    }
+    try {
+      const loaded = await api<Detail>(session, `/api/account/links/${encodeURIComponent(id)}`);
+      setDetail(loaded);
+      setRouting(routingOf({ privacy_class: loaded.link.privacyClass ?? "fast" }));
+      setLocation(loaded.link.locationMode);
+      setRouteId(loaded.link.routeId);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not load this link.");
+    }
   }, [id, session]);
-  useEffect(() => { void load(); return () => { setSecret(null); idem.current = null; }; }, [load]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
   useEffect(() => {
     let live = true;
-    api<{ usage: UsageRow[] }>(session, "/api/account/links/usage")
-      .then((u) => { if (live) setUsage(u.usage.filter((r) => String(r.link_id) === id)); })
-      .catch(() => { if (live) setUsage([]); });
-    return () => { live = false; };
-  }, [session, id]);
-  const days = useMemo(() => dailyTotals(usage), [usage]);
-  const total = days.reduce((sum, d) => sum + d.bytes, 0);
+    api<{ link_routes: RouteOption[] }>(session, "/api/account/external-devices")
+      .then((data) => live && setRoutes(data.link_routes ?? []))
+      .catch(() => live && setRoutes([]));
+    return () => {
+      live = false;
+    };
+  }, [session]);
 
-  async function addClient(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault(); if (busy) return; setBusy(true); setError(null); setSecret(null); setReplayed(false);
-    if (!idem.current) idem.current = newIdempotencyKey();
-    const form = new FormData(event.currentTarget);
-    try {
-      const result = await api<{ configurationUrl?: string; replayed?: boolean }>(session, `/api/account/links/${encodeURIComponent(id)}/clients`, {
-        body: { name: String(form.get("name") ?? "").trim(), clientType: String(form.get("clientType")), subscriptionId: String(form.get("subscriptionId")) },
-        headers: { "Idempotency-Key": idem.current },
-      });
-      setReplayed(Boolean(result.replayed));
-      if (!result.replayed && result.configurationUrl) { setSecret(result.configurationUrl); setTab("Configuration"); }
-      idem.current = null; (event.currentTarget as HTMLFormElement).reset(); await load();
-    } catch (e) { setError(e instanceof Error ? e.message : "Could not add client."); }
-    finally { setBusy(false); }
-  }
-  async function rotate(client: LinkClient) {
-    setBusy(true); setError(null);
-    try { const result = await api<{ subscriptionUrl: string }>(session, `/api/account/links/${encodeURIComponent(id)}/clients/${encodeURIComponent(client.id)}/replace-link`, { method: "POST" }); setCopied(false); setSecret(result.subscriptionUrl); setTab("Configuration"); await load(); }
-    catch (e) { setError(e instanceof Error ? e.message : "Could not replace access link."); } finally { setBusy(false); }
-  }
-  async function removeClient() {
-    if (!revokeClient) return; setBusy(true);
-    try { await api(session, `/api/account/external-devices/${revokeClient.id}/revoke`, { method: "POST" }); setRevokeClient(null); await load(); }
-    catch (e) { setError(e instanceof Error ? e.message : "Could not revoke client."); } finally { setBusy(false); }
-  }
-  async function removeLink() {
-    setBusy(true); try { await api(session, `/api/account/links/${encodeURIComponent(id)}`, { method: "DELETE" }); setRevokeLink(false); await load(); }
-    catch (e) { setError(e instanceof Error ? e.message : "Could not revoke Link."); } finally { setBusy(false); }
-  }
-  if (error && !detail) return <p className="notice notice--error">{error}</p>;
+  const activeClients = useMemo(() => (detail?.clients ?? []).filter((c) => c.status === "active"), [detail]);
+  const primaryClientId = activeClients[0]?.id ?? null;
+  const access = useAccessLink(session, id, primaryClientId);
+
+  const candidates = useMemo(
+    () => (routes ?? []).filter((r) => (routing === "two" ? r.privacy_class === "privacy_plus" : r.privacy_class === "fast")),
+    [routes, routing]
+  );
+  const twoAvailable = (routes ?? []).some((r) => r.privacy_class === "privacy_plus") || detail?.link.privacyClass === "privacy_plus";
+
+  if (replacement) return <ReplacementPanel replacement={replacement} />;
+  if (error && !detail) return <p className="notice notice--error" role="alert">{error}</p>;
   if (!detail) return <p className="muted">Loading…</p>;
+
   const { link } = detail;
   const isActive = link.status === "active";
-  const active = detail.clients.filter(c => c.status === "active");
+  if (!isActive) {
+    return (
+      <>
+        <h1 className="ps-title">{link.name}</h1>
+        <p className="muted">This link has been revoked and no longer works.</p>
+      </>
+    );
+  }
 
-  return <>
-    <nav className="crumbs" aria-label="Breadcrumb"><Link href="/account/links/">Links</Link> <span aria-hidden="true">›</span> {link.name}</nav>
-    <div className="detail-head">
-      <h1 className="area__title">{link.name} <span className={`status status--sm${isActive ? "" : " status--off"}`}>{isActive ? "Active" : "Revoked"}</span></h1>
-      {isActive && <button type="button" className="btn btn-secondary" onClick={() => setRevokeLink(true)}>Revoke</button>}
-    </div>
-    <div className="page-tabs" role="tablist" aria-label="Link sections">
-      {TABS.map((t) => <button key={t} type="button" role="tab" aria-selected={tab === t} onClick={() => setTab(t)}>{t}</button>)}
-    </div>
-    {error && <p className="notice notice--error" role="alert">{error}</p>}
+  const initialRouting = routingOf({ privacy_class: link.privacyClass ?? "fast" });
+  const changed =
+    routing !== initialRouting ||
+    location !== link.locationMode ||
+    (location === "manual" && routeId !== link.routeId);
+  const needsRoute = location === "manual" && !candidates.some((r) => r.id === routeId);
 
-    {tab === "Overview" && <div className="split split--wide">
-      <dl className="detail-list detail-list--card">
-        <div><dt>Type</dt><dd>Compatible VPN apps</dd></div>
-        <div><dt>Route</dt><dd>{link.routeLabel ?? link.routeId}</dd></div>
-        <div><dt>Created</dt><dd>{new Date(link.createdAt).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}</dd></div>
-        <div><dt>Clients</dt><dd>{link.clientCount} / {link.maxClients}</dd></div>
-      </dl>
-      <section className="panel-lite">
-        <div className="panel-lite__head"><h2>Traffic (30 days)</h2><span className="card__value card__value--sm">{total > 0 ? bytes(total) : "No usage yet"}</span></div>
-        <UsageChart days={days} width={440} />
-      </section>
-    </div>}
+  async function createClientFor(linkId: string, name: string): Promise<string> {
+    const subscription = subscriptionForFirstClient(overview?.subscriptions ?? []);
+    if (!subscription) throw new ApiError("You have no free device place. Revoke a link you no longer use, or check your plan.", 409, "capacity_exhausted");
+    const client = await api<{ configurationUrl?: string }>(session, `/api/account/links/${encodeURIComponent(linkId)}/clients`, {
+      body: { name: firstClientName(name), clientType: "links", subscriptionId: String(subscription.id) },
+      headers: { "Idempotency-Key": newIdempotencyKey() },
+    });
+    if (!client.configurationUrl) throw new Error("The link was created but could not be shown.");
+    return client.configurationUrl;
+  }
 
-    {tab === "Configuration" && <>
-      {secret && <section className="secret-result" aria-labelledby="configuration-heading"><h2 id="configuration-heading">Access link created</h2><p><strong>This link grants VPN access. Keep it private.</strong></p><p>Copy it now. Arcana will not show this value again after you leave this screen.</p><input className="field secret-value" readOnly value={secret} onFocus={e => e.currentTarget.select()} aria-label="One-time configuration URL" /><button className="btn btn-secondary" type="button" onClick={async () => { await navigator.clipboard.writeText(secret); setCopied(true); }}>{copied ? "Copied" : "Copy access link"}</button></section>}
-      {replayed && <p className="notice" role="status">The original request already succeeded. For your security, its one-time configuration is not shown again.</p>}
-      <section className="panel-lite">
-        <h2>Connection details</h2>
-        <p className="muted">Each client has its own access link. Arcana shows it once, when you create or replace it. Replace an access link if it was shared or lost; the old one stops working.</p>
-        {active.length === 0 ? <p className="muted">No active clients yet.</p> : <ul className="mini-rows mini-rows--2">{active.map(client => <li key={client.id}><span className="mini-rows__name">{client.name}</span><span className="mini-rows__end"><button className="btn btn-secondary btn-sm" disabled={busy} onClick={() => rotate(client)}>Replace access link</button></span></li>)}</ul>}
-      </section>
-    </>}
+  async function addAccessLink() {
+    setBusy(true);
+    setError(null);
+    try {
+      const url = await createClientFor(link.id, link.name);
+      await load();
+      access.adopt(url);
+    } catch (err) {
+      setError(err instanceof ApiError && err.code === "capacity_exhausted" ? "You have no free device place. Revoke a link you no longer use, or check your plan." : err instanceof Error ? err.message : "Could not create an access link.");
+    } finally {
+      setBusy(false);
+    }
+  }
 
-    {tab === "Clients" && <>
-      <div className="table-wrap">
-        <table className="table">
-          <thead><tr><th scope="col">Client</th><th scope="col">Last configuration fetch</th><th scope="col">Status</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead>
-          <tbody>
-            {detail.clients.length === 0 ? <tr><td colSpan={4} className="muted">No clients yet.</td></tr> : detail.clients.map(client => <tr key={client.id}>
-              <td><span className="table__name">{client.name}</span></td>
-              <td>{relative(client.lastSeenAt)}</td>
-              <td><span className={`status${client.status === "active" ? "" : " status--off"}`}>{client.status === "active" ? "Active" : "Revoked"}</span></td>
-              <td className="table__end">{client.status === "active" && <button className="btn-link text-danger" disabled={busy} onClick={() => setRevokeClient(client)}>Revoke</button>}</td>
-            </tr>)}
-          </tbody>
-        </table>
+  async function replaceAccess() {
+    if (!primaryClientId) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await api<{ subscriptionUrl: string }>(
+        session,
+        `/api/account/links/${encodeURIComponent(link.id)}/clients/${encodeURIComponent(primaryClientId)}/replace-link`,
+        { method: "POST" }
+      );
+      access.adopt(result.subscriptionUrl);
+      setNotice("New link ready. The old link no longer works.");
+      setConfirm(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not replace this link.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function moveToNewRoute() {
+    const route = location === "auto" ? pickAutomaticRoute(candidates) : candidates.find((r) => r.id === routeId) ?? null;
+    if (!route) {
+      setError("Choose a location.");
+      setConfirm(null);
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    let newId: string | null = null;
+    try {
+      const created = await api<{ id: string }>(session, "/api/account/links", {
+        body: { name: link.name, routeId: route.id, maxClients: 1, locationMode: location },
+      });
+      newId = created.id;
+      const url = await createClientFor(created.id, link.name);
+      let oldRevoked = true;
+      try {
+        await api(session, `/api/account/links/${encodeURIComponent(link.id)}`, { method: "DELETE" });
+      } catch {
+        oldRevoked = false;
+      }
+      setConfirm(null);
+      setReplacement({ id: created.id, url, oldRevoked });
+    } catch (err) {
+      if (newId) await api(session, `/api/account/links/${encodeURIComponent(newId)}`, { method: "DELETE" }).catch(() => undefined);
+      setConfirm(null);
+      setError(err instanceof Error ? err.message : "Could not change this link.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function revoke() {
+    setBusy(true);
+    setError(null);
+    try {
+      await api(session, `/api/account/links/${encodeURIComponent(link.id)}`, { method: "DELETE" });
+      router.replace("/account/");
+    } catch (err) {
+      setConfirm(null);
+      setError(err instanceof Error ? err.message : "Could not revoke this link.");
+      setBusy(false);
+    }
+  }
+
+  const shown = access.state === "revealed" && access.url ? access.url : maskedLink();
+
+  return (
+    <>
+      <div className="detail-title">
+        <h1 className="ps-title">{link.name}</h1>
+        <p className="ps-sub">VPN link <span aria-hidden="true">•</span> {configurationSummary(link).replace(" · ", " • ")}</p>
+        <p className="muted">{configurationDetail(link)}</p>
       </div>
-      {isActive && <section className="panel-lite" style={{ marginTop: "var(--space-6)" }}><h2>Add client</h2><form onSubmit={addClient} className="form-grid"><div><label className="field-label" htmlFor="client-name">Name</label><input className="field" id="client-name" name="name" maxLength={40} required /></div><div><label className="field-label" htmlFor="client-subscription">Subscription</label><select className="field select" id="client-subscription" name="subscriptionId" required><option value="">Choose subscription</option>{overview?.subscriptions.filter(s => s.status !== "canceled").map(s => <option key={s.id} value={s.id}>{s.name} · {s.used}/{s.capacity} devices</option>)}</select></div><input type="hidden" name="clientType" value="links" /><div><button className="btn btn-primary" disabled={busy || link.clientCount >= link.maxClients}>{busy ? "Adding…" : "Add client"}</button></div></form></section>}
-    </>}
 
-    {tab === "Traffic" && <section className="panel-lite">
-      <div className="panel-lite__head"><h2>Traffic (30 days)</h2><span className="card__value card__value--sm">{total > 0 ? bytes(total) : "No usage yet"}</span></div>
-      <UsageChart days={days} />
-    </section>}
+      <section className="detail-block" aria-labelledby="access-heading">
+        <h2 id="access-heading" className="detail-block__title">Your HTTPS access link</h2>
+        {primaryClientId ? (
+          <>
+            <div className="access-row">
+              <div className={`linkfield${access.state === "revealed" ? " linkfield--open" : ""}`}>
+                <code aria-label={access.state === "revealed" ? "Your HTTPS access link" : "Access link hidden"}>{shown}</code>
+              </div>
+              <button type="button" className="btn btn-primary" onClick={() => void access.copy()} disabled={access.state === "loading"}>
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M9 9h10v11H9zM5 15V4h10" />
+                </svg>
+                {access.copied ? "Copied" : "Copy link"}
+              </button>
+              <button type="button" className="btn btn-secondary" onClick={() => (access.state === "revealed" ? access.hide() : void access.reveal())} disabled={access.state === "loading"}>
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12z" />
+                  <circle cx="12" cy="12" r="3" />
+                  {access.state === "revealed" ? <path d="M4 4l16 16" /> : null}
+                </svg>
+                {access.state === "loading" ? "…" : access.state === "revealed" ? "Hide" : "Reveal"}
+              </button>
+            </div>
+            <p className="field-hint">Anyone with this link can connect. Keep it private.</p>
+            {access.state === "unavailable" ? <p className="notice" role="status">{access.message}</p> : null}
+            {access.state === "error" || (access.state === "revealed" && access.message) ? <p className="notice notice--error" role="alert">{access.message}</p> : null}
+            {notice ? <p className="notice" role="status">{notice}</p> : null}
+            <button type="button" className="btn-link" onClick={() => setConfirm("replace")}>Replace link</button>
+            {activeClients.length > 1 ? <p className="muted">{activeClients.length} clients use this link; the first one is shown here.</p> : null}
+          </>
+        ) : (
+          <div className="empty-inline">
+            <p className="muted">This link has no access link yet.</p>
+            <button type="button" className="btn btn-primary" onClick={() => void addAccessLink()} disabled={busy}>
+              {busy ? "Creating…" : "Create access link"}
+            </button>
+          </div>
+        )}
+      </section>
 
-    {tab === "Settings" && (isActive ? <section className="panel-lite danger-zone"><h2>Revoke Link</h2><p>Revoking this Link will stop exactly {active.length} active {active.length === 1 ? "client" : "clients"}.</p><button className="btn btn-danger" onClick={() => setRevokeLink(true)}>Revoke Link</button></section> : <p className="muted">This Link has been revoked.</p>)}
+      <section className="detail-block">
+        <ChoiceGroup<Routing>
+          legend="Routing"
+          name="routing"
+          variant="list"
+          value={routing}
+          onChange={(value) => {
+            setRouting(value);
+            setRouteId("");
+          }}
+          options={[
+            { value: "one", title: "1 server", text: "Connect through a single server." },
+            { value: "two", title: "2 servers", text: "Route your connection through two servers for extra privacy.", disabled: !twoAvailable, note: "Not available yet for compatible VPN clients." },
+          ]}
+        />
+      </section>
 
-    <ConfirmDialog open={Boolean(revokeClient)} title="Revoke client?" description={`Only “${revokeClient?.name ?? "this client"}” will lose VPN access.`} confirmLabel="Revoke client" danger busy={busy} onConfirm={removeClient} onCancel={() => setRevokeClient(null)} />
-    <ConfirmDialog open={revokeLink} title="Revoke Link?" description={`Exactly ${active.length} active ${active.length === 1 ? "client" : "clients"} will stop working.`} confirmLabel="Revoke Link" danger busy={busy} onConfirm={removeLink} onCancel={() => setRevokeLink(false)} />
-  </>;
+      <section className="detail-block">
+        <ChoiceGroup<LocationChoice>
+          legend="Location"
+          name="location"
+          variant="list"
+          value={location}
+          onChange={setLocation}
+          options={[
+            { value: "auto", title: "Automatic", text: "Arcana selects an available location for you." },
+            { value: "manual", title: "Choose location", text: "Select a specific country or server." },
+          ]}
+        />
+        {location === "manual" ? (
+          <div className="field-group">
+            <label className="field-label" htmlFor="link-route">Country or server</label>
+            <select className="field select" id="link-route" value={routeId} onChange={(e) => setRouteId(e.target.value)} disabled={!routes}>
+              <option value="">{routes ? "Choose a location" : "Loading…"}</option>
+              {candidates.map((r) => (
+                <option key={r.id} value={r.id}>{r.display_name}</option>
+              ))}
+            </select>
+          </div>
+        ) : null}
+      </section>
+
+      {changed ? (
+        <p className="notice" role="status">
+          Saving changes creates a new link and revokes this one, so you will need to update your VPN client.
+        </p>
+      ) : null}
+      {error ? <p className="notice notice--error" role="alert">{error}</p> : null}
+
+      <div className="detail-actions">
+        <div className="form-actions">
+          <button type="button" className="btn btn-primary btn-lg" disabled={!changed || needsRoute || busy} onClick={() => setConfirm("move")}>
+            Save changes
+          </button>
+          <Link className="btn btn-secondary btn-lg" href="/account/">Cancel</Link>
+        </div>
+        <button type="button" className="btn-link btn-link--danger" onClick={() => setConfirm("revoke")}>Revoke link</button>
+      </div>
+
+      <ConfirmDialog
+        open={confirm === "move"}
+        title="Create a new link?"
+        description="Changing routing or location gives you a new link. This link stops working as soon as the new one is ready."
+        confirmLabel="Create new link"
+        busy={busy}
+        onConfirm={moveToNewRoute}
+        onCancel={() => setConfirm(null)}
+      />
+      <ConfirmDialog
+        open={confirm === "replace"}
+        title="Replace this link?"
+        description="You get a new link. The current link stops working immediately, so update it in your VPN client."
+        confirmLabel="Replace link"
+        busy={busy}
+        onConfirm={replaceAccess}
+        onCancel={() => setConfirm(null)}
+      />
+      <ConfirmDialog
+        open={confirm === "revoke"}
+        title="Revoke this link?"
+        description={`“${link.name}” stops working immediately and frees its device place. This cannot be undone.`}
+        confirmLabel="Revoke link"
+        danger
+        busy={busy}
+        onConfirm={revoke}
+        onCancel={() => setConfirm(null)}
+      />
+    </>
+  );
 }
-export default function LinkDetailPage() { return <AccountShell eyebrow="Links" title="" ><LinkDetailBody /></AccountShell>; }
+
+export default function LinkDetailPage() {
+  return (
+    <AccountShell back={{ href: "/account/", label: "Your VPN links" }}>
+      <Suspense fallback={<p className="muted">Loading…</p>}>
+        <LinkDetailBody />
+      </Suspense>
+    </AccountShell>
+  );
+}

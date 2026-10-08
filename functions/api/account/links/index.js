@@ -12,17 +12,20 @@ export async function onRequestGet(context) {
       .eq("account_id", account.accountId).order("created_at", { ascending: true });
     if (error) throw new Error(`link lookup failed: ${error.message}`);
     const { data: clients, error: clientsError } = await db.from("external_vpn_devices")
-      .select("link_id,revoked_at").eq("account_id", account.accountId);
+      .select("link_id,device_id,revoked_at,created_at").eq("account_id", account.accountId)
+      .order("created_at", { ascending: true });
     if (clientsError) throw new Error(`link client count failed: ${clientsError.message}`);
     const routeIds = [...new Set((data ?? []).map((link) => link.desired_route_id))];
     const { data: routes, error: routesError } = routeIds.length
-      ? await db.from("logical_routes").select("id,display_name,region").in("id", routeIds)
+      ? await db.from("logical_routes").select("id,display_name,region,privacy_class").in("id", routeIds)
       : { data: [], error: null };
     if (routesError) throw new Error(`route label lookup failed: ${routesError.message}`);
-    const routeLabels = new Map((routes ?? []).map((route) => [route.id, route.display_name ?? route.region]));
-    return { status: 200, body: { links: (data ?? []).map((link) => publicLink(link,
-      (clients ?? []).filter((client) => client.link_id === link.id && !client.revoked_at).length,
-      routeLabels.get(link.desired_route_id))) } };
+    const routeById = new Map((routes ?? []).map((route) => [route.id, route]));
+    return { status: 200, body: { links: (data ?? []).map((link) => {
+      const active = (clients ?? []).filter((client) => client.link_id === link.id && !client.revoked_at);
+      const route = routeById.get(link.desired_route_id);
+      return publicLink(link, active.length, route?.display_name ?? route?.region, active[0]?.device_id ?? null, route?.privacy_class ?? null);
+    }) } };
   }, { recent: false });
 }
 
