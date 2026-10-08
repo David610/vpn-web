@@ -232,6 +232,46 @@ export async function pruneCompatibilityAuthorizations(supabase, env) {
 }
 
 /**
+ * rate_limit_buckets are abuse-throttling counters, only meaningful for the
+ * length of their window (minutes). Keys are keyed hashes (see
+ * rate-limit.js), but rows written before that change still carry raw emails
+ * and client IPs, so a short fixed retention also clears them out.
+ * Default: delete counters whose window started more than 1 day ago.
+ */
+export async function pruneRateLimitBuckets(supabase, env) {
+  const days = envInt(env, "RATE_LIMIT_BUCKET_RETENTION_DAYS", 1);
+  const cutoff = daysAgoIso(days);
+  const { error, count } = await supabase
+    .from("rate_limit_buckets")
+    .delete({ count: "exact" })
+    .lt("window_start", cutoff);
+  if (error) {
+    console.error("retention: pruneRateLimitBuckets failed:", error.message);
+    return { table: "rate_limit_buckets", error: error.message };
+  }
+  return { table: "rate_limit_buckets", deleted: count ?? 0, cutoffDays: days };
+}
+
+/**
+ * vpn_link_usage_daily holds per-client daily byte counts and the last-seen
+ * time of each Link client. The dashboard shows a 30-day window, so nothing
+ * older is needed. Default: delete day buckets older than 35 days.
+ */
+export async function pruneLinkUsageDaily(supabase, env) {
+  const days = envInt(env, "LINK_USAGE_RETENTION_DAYS", 35);
+  const cutoff = daysAgoIso(days).slice(0, 10);
+  const { error, count } = await supabase
+    .from("vpn_link_usage_daily")
+    .delete({ count: "exact" })
+    .lt("bucket_date", cutoff);
+  if (error) {
+    console.error("retention: pruneLinkUsageDaily failed:", error.message);
+    return { table: "vpn_link_usage_daily", error: error.message };
+  }
+  return { table: "vpn_link_usage_daily", deleted: count ?? 0, cutoffDays: days };
+}
+
+/**
  * Runs every retention step, each isolated so one table's failure doesn't
  * block the others. Called from functions/api/internal/retention-tick.js.
  */
@@ -246,6 +286,8 @@ export async function runRetention(supabase, env) {
     clearStaleRevokedDeviceMetadata,
     pruneOperationalAlerts,
     pruneCompatibilityAuthorizations,
+    pruneRateLimitBuckets,
+    pruneLinkUsageDaily,
   ];
   const results = [];
   for (const step of steps) {

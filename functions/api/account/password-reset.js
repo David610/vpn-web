@@ -57,10 +57,12 @@ export async function onRequestPost({ env, request }) {
   const emailAllowed = await checkRateLimit(supabaseAdmin, `password-reset:email:${email}`, {
     windowSeconds: RESET_WINDOW_SECONDS,
     limit: RESET_LIMIT_PER_EMAIL,
+    env,
   });
   const ipAllowed = await checkRateLimit(supabaseAdmin, `password-reset:ip:${clientIpKey(request)}`, {
     windowSeconds: RESET_WINDOW_SECONDS,
     limit: RESET_LIMIT_PER_IP,
+    env,
   });
   if (!emailAllowed || !ipAllowed) {
     return rateLimitedResponse("Too many password reset requests. Please try again later.");

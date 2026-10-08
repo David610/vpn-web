@@ -23,10 +23,12 @@ export async function onRequestPost({ env, request }) {
   const tokenAllowed = await checkRateLimit(supabaseAdmin, `v1-refresh:token:${await sha256Hex(token)}`, {
     windowSeconds: REFRESH_WINDOW_SECONDS,
     limit: REFRESH_LIMIT_PER_TOKEN,
+    env,
   });
   const ipAllowed = await checkRateLimit(supabaseAdmin, `v1-refresh:ip:${clientIpKey(request)}`, {
     windowSeconds: REFRESH_WINDOW_SECONDS,
     limit: REFRESH_LIMIT_PER_IP,
+    env,
   });
   if (!tokenAllowed || !ipAllowed) {
     return rateLimitedResponse("Too many attempts. Please try again later.");

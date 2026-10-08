@@ -64,6 +64,20 @@ export default function PrivacyPage() {
               to.
             </li>
             <li>
+              <strong>Usage totals:</strong> traffic is counted per server
+              (bytes sent and received), not per person, and is not linked to
+              your account or devices. If you use Links, we may also keep
+              daily byte counts and the day each Link client was last
+              active, so you can see its usage in your dashboard. We never
+              record the sites, DNS names or addresses behind that traffic.
+            </li>
+            <li>
+              <strong>Abuse prevention:</strong> when you sign in, register,
+              reset a password or link Telegram, we keep a short-lived counter
+              that limits repeated attempts. It is stored under a keyed hash
+              of your email address or IP address, not the address itself.
+            </li>
+            <li>
               <strong>Telegram data:</strong> if you link a Telegram account
               to manage your VPN through our Telegram Mini App, we store
               your Telegram user ID and the link between it and your
@@ -98,7 +112,10 @@ export default function PrivacyPage() {
             device used and when) are deleted after 30 days; raw per-node
             traffic samples are deleted after 7 days (daily totals are kept
             for capacity planning); short-lived Telegram linking codes are
-            deleted shortly after they expire. You may request account
+            deleted shortly after they expire; attempt-limiting counters
+            are deleted after 1 day; per-client Link usage is deleted after
+            35 days; and the name and platform of a device you removed are
+            cleared 90 days after it was last seen. You may request account
             deletion at any time by contacting us.
           </p>
 

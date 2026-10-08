@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { AdminShell } from "@/components/admin/AdminShell";
+import { AdminPage, AdminTable, AdminTableWrap } from "@/components/admin/AdminPrimitives";
+import { OperationsTabs } from "@/components/admin/OperationsTabs";
 import { StatusBadge } from "@/components/admin/StatusBadge";
 import { useAdminSession } from "@/hooks/useAdminSession";
 import { adminFetch } from "@/lib/adminFetch";
@@ -66,20 +68,19 @@ export default function AdminAbusePage() {
 
   return (
     <AdminShell>
-      <h1 className="mb-4 text-xl font-semibold">Abuse review</h1>
-      <p className="mb-4 text-sm text-gray-500">
-        Signals are review aids, not automatic bans. No browsing destinations are stored here.
-      </p>
-      {error && <p className="mb-4 text-red-600">{error}</p>}
+      <AdminPage title="Operations" description="Abuse signals are review aids, not automatic bans. No browsing destinations are stored here.">
+        <OperationsTabs />
+      {error && <p className="mb-4 text-danger">{error}</p>}
       {!signals ? (
         <p>Loading…</p>
       ) : signals.length === 0 ? (
-        <p className="text-sm text-gray-500">No flagged signals.</p>
+        <p className="text-sm text-fg-2">No flagged signals.</p>
       ) : (
-        <table className="w-full text-left text-sm">
+        <AdminTableWrap>
+        <AdminTable>
           <thead>
-            <tr className="border-b text-gray-500">
-              <th className="py-2">VPN user</th>
+            <tr>
+              <th>VPN user</th>
               <th>Node</th>
               <th>Distinct IPs</th>
               <th>Window</th>
@@ -89,26 +90,28 @@ export default function AdminAbusePage() {
           </thead>
           <tbody>
             {signals.map((s) => (
-              <tr key={s.id} className="border-b">
-                <td className="py-2">{s.vpnUserId ?? s.vpnAccountId}</td>
+              <tr key={s.id}>
+                <td>{s.vpnUserId ?? s.vpnAccountId}</td>
                 <td>{s.nodeId ?? "—"}</td>
                 <td>{s.distinctIpCount}</td>
                 <td>{new Date(s.windowStart).toLocaleString()} – {new Date(s.windowEnd).toLocaleString()}</td>
                 <td><StatusBadge status={s.reviewStatus} /></td>
                 <td>
                   <div className="flex gap-2">
-                    <button className="rounded border px-2 py-1" onClick={() => review(s, "reviewed")}>Reviewed</button>
-                    <button className="rounded border px-2 py-1" onClick={() => review(s, "ignored")}>Ignore</button>
+                    <button className="btn btn-secondary btn-sm" onClick={() => review(s, "reviewed")}>Reviewed</button>
+                    <button className="btn btn-secondary btn-sm" onClick={() => review(s, "ignored")}>Ignore</button>
                     {s.userId && s.vpnEnabled !== false && (
-                      <button className="rounded bg-red-600 px-2 py-1 text-white" onClick={() => disable(s)}>Disable</button>
+                      <button className="btn btn-danger btn-sm" onClick={() => disable(s)}>Disable</button>
                     )}
                   </div>
                 </td>
               </tr>
             ))}
           </tbody>
-        </table>
+        </AdminTable>
+        </AdminTableWrap>
       )}
+      </AdminPage>
     </AdminShell>
   );
 }

@@ -1,7 +1,6 @@
 import Nav from "@/components/Nav";
 import Footer from "@/components/Footer";
-import Image from "next/image";
-import { SITE_NAME, SITE_URL } from "@/lib/site-config";
+import { SITE_NAME, SITE_URL, TWO_SERVER_LINKS } from "@/lib/site-config";
 
 export const metadata = {
   title: `Privacy — ${SITE_NAME}`,
@@ -21,13 +20,13 @@ const PRINCIPLES = [
     d: "M12 4a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM4.5 20c.8-3.6 3.8-5.5 7.5-5.5s6.7 1.9 7.5 5.5",
   },
   {
-    title: "Privacy-safe diagnostics",
-    text: "Diagnostics only happen when you start them, and they exclude the sites you visit, DNS queries, tokens and credentials. They cannot be used to identify what you do online.",
+    title: "No trackers on this site",
+    text: "We don’t use advertising trackers or third-party analytics on this website.",
     d: "M12 3l7 3v5c0 5-3 8-7 10-4-2-7-5-7-10V6l7-3z",
   },
   {
     title: "Transparent infrastructure",
-    text: "Your device connects with short-lived credentials that are kept separate from your account identity, and we explain how the service works.",
+    text: "Your links use connection credentials that are kept separate from your account identity, and we explain how the service works.",
     d: "M5 5h14v5H5zM5 14h14v5H5zM8 7.5h.01M8 16.5h.01",
   },
 ];
@@ -35,8 +34,10 @@ const PRINCIPLES = [
 const DOES = [
   "Encrypts your internet connection, keeping your data private on public networks and from your ISP.",
   "Hides your IP address from the sites and services you visit.",
-  "Lets you choose where you connect, with one server or two.",
-  "Gives each of your devices its own connection credentials, so you can remove one without affecting the others.",
+  TWO_SERVER_LINKS
+    ? "Lets you choose where you connect, with one server or two."
+    : "Lets you choose where you connect.",
+  "Gives each VPN link its own connection credentials, so you can revoke one without affecting the others.",
 ];
 
 const DOES_NOT = [
@@ -60,25 +61,15 @@ export default function PrivacyPage() {
     <>
       <Nav />
       <main className="page">
-        <section className="apps-hero">
-          <div>
-            <p className="eyebrow">Our privacy principles</p>
-            <h1 className="page__title">Privacy</h1>
-            <p className="page__lede">Your connection. Your business.</p>
-            <p className="page__body">
-              {SITE_NAME} is built around a simple idea: you should be in control of your online life. We
-              design our service to protect your privacy, minimize the data we collect, and be transparent
-              about how it all works.
-            </p>
-          </div>
-          <Image
-            className="hero-image"
-            src="/images/hero-privacy.webp"
-            width={655}
-            height={395}
-            alt="The Arcana app connected, on a laptop and a phone"
-            priority
-          />
+        <section>
+          <p className="eyebrow">Our privacy principles</p>
+          <h1 className="page__title">Privacy</h1>
+          <p className="page__lede">Your connection. Your business.</p>
+          <p className="page__body">
+            {SITE_NAME} is built around a simple idea: you should be in control of your online life. We
+            design our service to protect your privacy, minimize the data we collect, and be transparent
+            about how it all works.
+          </p>
         </section>
 
         <ul className="principles">
@@ -127,7 +118,9 @@ export default function PrivacyPage() {
         </div>
 
         <p className="fineprint">
-          The legal details are in our <a className="text-link" href="/privacy/policy/">privacy policy</a>.
+          We do keep some account and service data, such as your email address, your devices and when each
+          last connected. The <a className="text-link" href="/privacy/policy/">privacy policy</a> lists exactly
+          what we keep and for how long.
         </p>
       </main>
       <Footer />

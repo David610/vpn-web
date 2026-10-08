@@ -18,12 +18,10 @@ export default function HeroActions() {
 
   return (
     <div className="hero-actions">
-      <Link href={signedIn ? "/account/" : "/signup"} className="btn btn-primary btn-lg">
-        {signedIn ? "Open your account" : "Get Arcana"}
+      <Link href={signedIn ? "/account/" : "/signup"} className="btn btn-primary btn-lg btn-hero">
+        {signedIn ? "Open your account" : "Get Arcana"} <span aria-hidden="true">→</span>
       </Link>
-      <Link href="/apps" className="hero-actions__more">
-        Learn more <span aria-hidden="true">→</span>
-      </Link>
+      <p className="fineprint">No Arcana app required.</p>
     </div>
   );
 }

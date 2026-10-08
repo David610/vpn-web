@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { AdminShell } from "@/components/admin/AdminShell";
+import { AdminMetricLarge, AdminMetricRow, AdminPage, AdminTable, AdminTableWrap } from "@/components/admin/AdminPrimitives";
 import { StatusBadge } from "@/components/admin/StatusBadge";
 import { useAdminSession } from "@/hooks/useAdminSession";
 import { adminFetch } from "@/lib/adminFetch";
@@ -29,6 +30,38 @@ type ResponseBody = {
 };
 
 const PAGE_SIZE = 50;
+
+type PaymentsOverview = {
+  customers: { past_due: number; canceled: number };
+  subscriptions?: { live: number; cancelling: number };
+};
+
+function PaymentsSummary() {
+  const { session } = useAdminSession();
+  const [overview, setOverview] = useState<PaymentsOverview | null>(null);
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    adminFetch<PaymentsOverview>("/api/admin/overview", session.access_token)
+      .then((body) => !cancelled && setOverview(body))
+      .catch(() => !cancelled && setOverview(null));
+    return () => {
+      cancelled = true;
+    };
+  }, [session]);
+  const winding = overview ? overview.customers.canceled + (overview.subscriptions?.cancelling ?? 0) : "—";
+  return (
+    <AdminMetricRow count={3}>
+      <AdminMetricLarge label="Active subscriptions" value={overview?.subscriptions?.live ?? "—"} note="Single €6.99/month offering" />
+      <AdminMetricLarge label="Past due" value={overview?.customers.past_due ?? "—"} note="May need billing follow-up" />
+      <AdminMetricLarge label="Canceling / canceled" value={winding} note="Account status from Stripe" />
+    </AdminMetricRow>
+  );
+}
+
+function monthlyPrice(extraPacks: number) {
+  return `€${(6.99 * (1 + extraPacks)).toFixed(2)} / month`;
+}
 
 export default function AdminSubscriptionsPage() {
   const { session } = useAdminSession();
@@ -71,70 +104,67 @@ export default function AdminSubscriptionsPage() {
 
   return (
     <AdminShell>
-      <div className="mb-4 flex items-baseline justify-between gap-4">
-        <h1 className="text-xl font-semibold">Subscriptions</h1>
-        <span className="text-xs text-gray-500">{meta.total} total</span>
-      </div>
+      <AdminPage title="Payments" description="Subscription status and billing issues in one place.">
+        <PaymentsSummary />
+        <h2 className="ps-section-title">Subscriptions</h2>
 
       <input
-        className="mb-4 w-full max-w-sm rounded border px-3 py-2"
+        className="mb-4 w-full max-w-sm admin-input"
         placeholder="Search by owner email, name, or Stripe subscription id"
         value={input}
         onChange={(e) => setInput(e.target.value)}
       />
 
       {error ? (
-        <p className="text-red-600">{error}</p>
+        <p className="text-danger">{error}</p>
       ) : !subscriptions ? (
         <p>Loading…</p>
       ) : (
         <>
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
+          <AdminTableWrap>
+            <AdminTable>
               <thead>
-                <tr className="border-b text-gray-500">
-                  <th className="py-2">Owner</th>
-                  <th>Subscription</th>
+                <tr>
+                  <th>Account</th>
                   <th>Status</th>
-                  <th>Devices</th>
-                  <th>Extra packs</th>
-                  <th>Period ends</th>
+                  <th>Plan</th>
+                  <th>Period end</th>
+                  <th>Provisioned clients / limit</th>
                 </tr>
               </thead>
               <tbody>
                 {subscriptions.map((s) => (
-                  <tr key={s.id} className="border-b">
-                    <td className="py-2">{s.ownerEmail ?? s.accountId}</td>
-                    <td>{s.name}</td>
+                  <tr key={s.id}>
+                    <td>{s.ownerEmail ?? s.accountId}</td>
                     <td>
                       <StatusBadge status={s.cancelAtPeriodEnd ? "cancelling" : s.status} />
                     </td>
-                    <td>{s.activeDevices} / {s.capacity}</td>
-                    <td>{s.extraPacks}</td>
+                    <td>{monthlyPrice(s.extraPacks)}</td>
                     <td>
-                      {s.currentPeriodEnd ? new Date(s.currentPeriodEnd).toLocaleDateString() : "—"}
+                      {s.currentPeriodEnd ? new Date(s.currentPeriodEnd).toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "numeric" }) : "—"}
                     </td>
+                    <td>{s.activeDevices} / {s.capacity}</td>
                   </tr>
                 ))}
               </tbody>
-            </table>
-          </div>
+            </AdminTable>
+          </AdminTableWrap>
 
           <div className="mt-4 flex items-center gap-3">
             <button
               type="button"
-              className="rounded border px-3 py-1.5 text-sm disabled:opacity-40"
+              className="btn btn-secondary btn-sm"
               disabled={page <= 1}
               onClick={() => setPage((p) => Math.max(1, p - 1))}
             >
               Previous
             </button>
-            <span className="text-sm text-gray-500">
+            <span className="text-sm text-fg-2">
               Page {page} of {meta.totalPages}
             </span>
             <button
               type="button"
-              className="rounded border px-3 py-1.5 text-sm disabled:opacity-40"
+              className="btn btn-secondary btn-sm"
               disabled={page >= meta.totalPages}
               onClick={() => setPage((p) => Math.min(meta.totalPages, p + 1))}
             >
@@ -143,6 +173,7 @@ export default function AdminSubscriptionsPage() {
           </div>
         </>
       )}
+      </AdminPage>
     </AdminShell>
   );
 }

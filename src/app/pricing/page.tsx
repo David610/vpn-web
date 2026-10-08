@@ -1,69 +1,80 @@
 import Link from "next/link";
 import Nav from "@/components/Nav";
 import Footer from "@/components/Footer";
-import { SITE_NAME, SITE_URL } from "@/lib/site-config";
+import { PLAN_DEVICES, PLAN_PRICE_LABEL, SITE_NAME, SITE_URL, TWO_SERVER_LINKS } from "@/lib/site-config";
 
 export const metadata = {
-  description: `${SITE_NAME} pricing: one plan, €6.99 a month for 3 devices, plus device packs.`,
+  description: `${SITE_NAME} pricing: one plan, ${PLAN_PRICE_LABEL} a month, with VPN links for compatible clients.`,
   alternates: { canonical: `${SITE_URL}/pricing/` },
 };
+
+const FEATURES = [
+  "Create and manage VPN links",
+  `Up to ${PLAN_DEVICES} devices`,
+  TWO_SERVER_LINKS ? "1 or 2 servers" : "Fast single-server routing",
+  "Automatic or manual locations",
+];
+
+const FAQ = [
+  {
+    q: "How do I connect?",
+    a: "Create an account and subscribe, then create a VPN link in your account. Copy the link into a compatible third-party VPN client such as Hiddify, Shadowrocket or sing-box. No Arcana app is needed.",
+  },
+  {
+    q: "Can I cancel anytime?",
+    a: "Yes. Cancel from Account & plan whenever you like. Your links keep working until the end of the billing period you have already paid for.",
+  },
+];
+
+function Check() {
+  return (
+    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M5 12.5l4.5 4.5L19 7.5" />
+    </svg>
+  );
+}
 
 export default function PricingPage() {
   return (
     <>
       <Nav />
-      <main className="page">
-        <section>
-          <p className="eyebrow">Pricing</p>
-          <h1 className="page__title">One plan.</h1>
-          <p className="page__lede">
-            No tiers to compare. Add devices in packs of three when you need them.
+      <main className="page page--center">
+        <h1 className="page__title page__title--sm">Simple pricing.</h1>
+        <p className="page__lede">One plan. VPN links for compatible clients.</p>
+
+        <section className="plan-card" aria-labelledby="plan-name">
+          <h2 id="plan-name" className="plan-card__name">
+            {SITE_NAME}
+          </h2>
+          <p className="plan-card__price">
+            {PLAN_PRICE_LABEL} <span className="plan__unit">/ month</span>
           </p>
-          <div className="plan">
-            <div className="plan__main">
-              <p className="plan__price">
-                €6.99 <span className="plan__unit">/ month</span>
-              </p>
-              <p className="muted">3 devices included</p>
-              <ul className="plan__list">
-                <li>Every Arcana location</li>
-                <li>1 server for speed, or 2 for an extra hop — never silently downgraded</li>
-                <li>Manage devices and cancel anytime from your account</li>
-              </ul>
-              <Link href="/signup" className="btn btn-primary">
-                Subscribe
-              </Link>
-            </div>
-            <div className="plan__side">
-              <table className="plan__table">
-                <caption className="sr-only">Monthly price by number of devices</caption>
-                <thead>
-                  <tr>
-                    <th scope="col">Devices</th>
-                    <th scope="col">Per month</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <td>3</td>
-                    <td>€6.99</td>
-                  </tr>
-                  <tr>
-                    <td>6</td>
-                    <td>€13.98</td>
-                  </tr>
-                  <tr>
-                    <td>9</td>
-                    <td>€20.97</td>
-                  </tr>
-                </tbody>
-              </table>
-              <p className="muted" style={{ marginTop: "var(--space-4)" }}>
-                Each extra pack of 3 devices is €6.99 / month.
-              </p>
-            </div>
-          </div>
+          <ul className="plan-card__list">
+            {FEATURES.map((f) => (
+              <li key={f}>
+                <Check />
+                {f}
+              </li>
+            ))}
+          </ul>
+          <Link href="/signup" className="btn btn-primary btn-block btn-lg">
+            Get {SITE_NAME}
+          </Link>
         </section>
+
+        <div className="faq">
+          {FAQ.map((item) => (
+            <details key={item.q}>
+              <summary>
+                {item.q}
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M6 9l6 6 6-6" />
+                </svg>
+              </summary>
+              <p className="muted">{item.a}</p>
+            </details>
+          ))}
+        </div>
       </main>
       <Footer />
     </>

@@ -25,11 +25,12 @@ export async function idempotencyHash(request, env) {
   return hmacSha256Hex(`link-client-idempotency:v1:${key}`, env.SUBSCRIPTION_TOKEN_HASH_KEY);
 }
 
-export function publicLink(row, clientCount = 0, routeLabel = null) {
+export function publicLink(row, clientCount = 0, routeLabel = null, primaryClientId = null, privacyClass = null) {
   return {
     id: row.id, name: row.name, configurationFamily: row.configuration_family,
-    routeId: row.desired_route_id, routeLabel: routeLabel ?? row.desired_route_id, maxClients: row.max_clients, status: row.status,
-    clientCount, createdAt: row.created_at, revokedAt: row.revoked_at,
+    routeId: row.desired_route_id, routeLabel: routeLabel ?? row.desired_route_id, locationMode: row.location_mode ?? "manual", privacyClass,
+    maxClients: row.max_clients, status: row.status,
+    clientCount, primaryClientId, createdAt: row.created_at, revokedAt: row.revoked_at,
   };
 }
 

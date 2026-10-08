@@ -85,7 +85,7 @@ export function TelegramCard({ session }: { session: Session }) {
   return (
     <div className="dm-card" style={{ maxWidth: "26rem", marginTop: "var(--space-6)" }}>
       <div className="dm-card-header">
-        <span className="dm-card-title">Telegram</span>
+        <span className="dm-card-title">Telegram account</span>
       </div>
       <div style={{ padding: "var(--space-6)" }}>
         {status.phase === "loading" && <p>Loading…</p>}
@@ -112,8 +112,8 @@ export function TelegramCard({ session }: { session: Session }) {
         {(status.phase === "unlinked" || status.phase === "error") && (
           <>
             <p>
-              Link your Telegram account to use the Arcana Mini App with the same devices and
-              subscriptions as your account.
+              Link your Telegram account to open Arcana in Telegram and manage the same VPN links
+              as your account.
             </p>
             {code ? (
               <div style={{ marginTop: "var(--space-4)" }}>

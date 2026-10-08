@@ -18,11 +18,13 @@ import type { ButtonHTMLAttributes, LabelHTMLAttributes, ReactNode, TableHTMLAtt
 // ── Page / section structure ────────────────────────────────────────────
 
 export function AdminPage({
+  eyebrow = "Arcana admin",
   title,
   description,
   actions,
   children,
 }: {
+  eyebrow?: ReactNode;
   title: ReactNode;
   description?: ReactNode;
   actions?: ReactNode;
@@ -30,13 +32,14 @@ export function AdminPage({
 }) {
   return (
     <div>
-      <div className="mb-8 flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+      <header className="ps-head">
         <div>
-          <h1 className="area__title">{title}</h1>
-          {description ? <p className="area__sub">{description}</p> : null}
+          <p className="ps-eyebrow">{eyebrow}</p>
+          <h1 className="ps-title">{title}</h1>
+          {description ? <p className="ps-sub">{description}</p> : null}
         </div>
-        {actions}
-      </div>
+        {actions ? <div className="ps-head__action">{actions}</div> : null}
+      </header>
       {children}
     </div>
   );
@@ -84,11 +87,12 @@ export function AdminMetricGrid({ children, className }: { children: ReactNode; 
 }
 
 /** One large bordered value+label cell for the prominent top-of-page metric row. */
-export function AdminMetricLarge({ label, value }: { label: string; value: number | string }) {
+export function AdminMetricLarge({ label, value, note }: { label: string; value: number | string; note?: string }) {
   return (
     <div className="admin-metric">
-      <p className="admin-metric__value">{value}</p>
       <p className="admin-metric__label">{label}</p>
+      <p className="admin-metric__value">{value}</p>
+      {note ? <p className="admin-metric__note">{note}</p> : null}
     </div>
   );
 }
@@ -100,8 +104,8 @@ export function AdminMetricLarge({ label, value }: { label: string; value: numbe
  * grid. Everything that isn't headline-worthy belongs in an AdminSection
  * below instead of here.
  */
-export function AdminMetricRow({ children, count }: { children: ReactNode; count?: 4 | 5 }) {
-  return <div className={`admin-metrics ${count === 5 ? "admin-metrics--5" : ""}`.trim()}>{children}</div>;
+export function AdminMetricRow({ children, count }: { children: ReactNode; count?: 3 | 4 | 5 }) {
+  return <div className={`admin-metrics ${count === 5 ? "admin-metrics--5" : ""} ${count === 3 ? "admin-metrics--3" : ""}`.trim()}>{children}</div>;
 }
 
 // ── Compact stat rows ───────────────────────────────────────────────────

@@ -4,13 +4,19 @@
  * devices, plus the account's connection profiles and each device's
  * assignment (the Mini App shows all of it on one screen).
  *
- * Deliberately omits anything the Mini App does not need: the account email,
- * billing identifiers, and any subscription/setup URL (setup happens on the
- * website, never inside Telegram).
+ * The Mini App is a link manager: it lists, creates, copies, edits and revokes
+ * the account's VPN links. An access link is a bearer credential, so it is only
+ * returned by the dedicated access-link/create/replace routes, which require
+ * initData signed within the last hour.
+ *
+ * Deliberately omits anything the Mini App does not need: the account email
+ * and billing identifiers.
  */
 import { getOverview } from "./account-service.js";
 import { getAccountForUser } from "./accounts.js";
 import { routingAxes } from "./connection-profiles.js";
+import { browserListLinks, compatibleLinkRoutes, createLinkWithClient, moveLinkToRoute } from "./links-service.js";
+import { CLIENT_NAME } from "./vpn-links.js";
 
 function profileView(p) {
   return {
@@ -96,6 +102,88 @@ export async function getMiniAppOverview(db, user) {
       profiles,
     },
   };
+}
+
+// ── Links ────────────────────────────────────────────────────────────────────
+
+const LIVE_STATUSES = new Set(["trialing", "active", "past_due", "cancelling"]);
+const LOCATION_MODES = new Set(["auto", "manual"]);
+const ROUTE_ID = /^route_[a-z0-9_]{3,60}$/;
+
+function planSummary(overview) {
+  const sub = overview.subscriptions.find((s) => LIVE_STATUSES.has(s.status)) ?? null;
+  if (!sub) return null;
+  return {
+    status: sub.status,
+    priceCents: overview.plan.basePriceCents + overview.plan.packPriceCents * sub.extraPacks,
+    currentPeriodEnd: sub.currentPeriodEnd,
+    cancelAtPeriodEnd: sub.cancelAtPeriodEnd,
+    used: sub.used,
+    capacity: sub.capacity,
+  };
+}
+
+/** The first live subscription with a free device place, or null. */
+function subscriptionWithRoom(overview) {
+  return overview.subscriptions.find((s) => LIVE_STATUSES.has(s.status) && s.used < s.capacity) ?? null;
+}
+
+function parseLinkChoice(body, { withName }) {
+  const locationMode = body?.locationMode ?? "manual";
+  const routeId = body?.routeId;
+  if (!LOCATION_MODES.has(locationMode)) return null;
+  if (locationMode === "manual" && !ROUTE_ID.test(routeId ?? "")) return null;
+  if (!withName) return { locationMode, routeId };
+  const name = String(body?.name ?? "").trim();
+  if (!CLIENT_NAME.test(name)) return null;
+  return { name, locationMode, routeId };
+}
+
+const NO_ROOM = {
+  status: 409,
+  body: { error: "You have no free device place. Revoke a link you no longer use, or check your plan.", code: "capacity_exhausted" },
+};
+
+/** Every active link, the locations that can be chosen, and the plan card. */
+export async function getMiniAppLinks(db, user) {
+  const listed = await browserListLinks(db, user);
+  if (listed.status !== 200) return listed;
+  const [routes, overview] = await Promise.all([compatibleLinkRoutes(db), getOverview(db, user)]);
+  if (overview.status !== 200) return overview;
+  return {
+    status: 200,
+    body: {
+      links: listed.body.links.filter((l) => l.status === "active"),
+      routes: routes.map((r) => ({ id: r.id, displayName: r.display_name, region: r.region, privacyClass: r.privacy_class })),
+      plan: planSummary(overview.body),
+    },
+  };
+}
+
+/** Body: { name, locationMode: "auto"|"manual", routeId? }. The new access link is returned once; copy it again via access-link. */
+export async function createMiniAppLink(db, env, request, user, body) {
+  const input = parseLinkChoice(body, { withName: true });
+  if (!input) return { status: 400, body: { error: "Invalid link request" } };
+  const overview = await getOverview(db, user);
+  if (overview.status !== 200) return overview;
+  const subscription = subscriptionWithRoom(overview.body);
+  if (!subscription) return NO_ROOM;
+  const result = await createLinkWithClient(db, env, request, user, { ...input, subscriptionId: Number(subscription.id) });
+  return result.status === 201 ? { status: 201, body: { id: result.body.id, configurationUrl: result.body.configuration_url } } : result;
+}
+
+/** Body: { locationMode, routeId? }. Creates the replacement first, then revokes the old link. */
+export async function moveMiniAppLink(db, env, request, user, linkId, body) {
+  const input = parseLinkChoice(body, { withName: false });
+  if (!input) return { status: 400, body: { error: "Invalid link request" } };
+  const overview = await getOverview(db, user);
+  if (overview.status !== 200) return overview;
+  const subscription = subscriptionWithRoom(overview.body);
+  if (!subscription) return NO_ROOM;
+  const result = await moveLinkToRoute(db, env, request, user, linkId, { ...input, subscriptionId: Number(subscription.id) });
+  return result.status === 201
+    ? { status: 201, body: { id: result.body.id, configurationUrl: result.body.configuration_url, oldRevoked: result.body.old_revoked } }
+    : result;
 }
 
 /** Removes this Arcana user's Telegram link (the Mini App's "Unlink"). */

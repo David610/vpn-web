@@ -42,11 +42,12 @@ export async function onRequestPost({ env, request }) {
   const ipAllowed = await checkRateLimit(supabaseAdmin, `telegram-link:ip:${clientIpKey(request)}`, {
     windowSeconds: LINK_ATTEMPT_WINDOW_SECONDS,
     limit: LINK_ATTEMPT_LIMIT_PER_IP,
+    env,
   });
   const userAllowed = await checkRateLimit(
     supabaseAdmin,
     `telegram-link:tguser:${verified.user.id}`,
-    { windowSeconds: LINK_ATTEMPT_WINDOW_SECONDS, limit: LINK_ATTEMPT_LIMIT_PER_TELEGRAM_USER }
+    { windowSeconds: LINK_ATTEMPT_WINDOW_SECONDS, limit: LINK_ATTEMPT_LIMIT_PER_TELEGRAM_USER, env }
   );
   if (!ipAllowed || !userAllowed) {
     return rateLimitedResponse("Too many linking attempts. Please try again later.");

@@ -90,38 +90,37 @@ const OVERVIEW_BODY = {
   plan: { includedDevices: 3, devicesPerPack: 3, basePriceCents: 699, packPriceCents: 699, maxExtraPacks: 10 },
 };
 
-const CONNECTION_PROFILES_BODY = {
-  profiles: [
-    { id: "p1", name: "Everyday", enabled: true, routingMode: "AUTO", preferredEntryLocationId: null, preferredExitLocationId: null, autoFailover: true },
-    { id: "p2", name: "Germany", enabled: true, routingMode: "DIRECT", preferredEntryLocationId: null, preferredExitLocationId: "loc-de", autoFailover: false },
-    { id: "p3", name: "Private route", enabled: true, routingMode: "DOUBLE_HOP", preferredEntryLocationId: "loc-se", preferredExitLocationId: "loc-de", autoFailover: false },
-  ],
-};
-
-const LOCATIONS_BODY = {
-  locations: [
-    { id: "loc-de", countryCode: "DE", city: "Frankfurt", name: "Germany" },
-    { id: "loc-se", countryCode: "SE", city: "Stockholm", name: "Sweden" },
-  ],
-};
-
-const DEVICES_BODY = {
-  devices: OVERVIEW_BODY.devices.map((d) => ({
-    ...d,
-    assignment: d.status === "ACTIVE" ? { profileId: "p1", assignedAt: new Date().toISOString(), profile: { id: "p1", name: "Everyday", enabled: true, routingMode: "AUTO" } } : null,
-  })),
-};
+const LOCATIONS_BODY = { locations: [
+  { id: "loc-de", countryCode: "DE", city: "Frankfurt", name: "Germany" },
+  { id: "loc-se", countryCode: "SE", city: "Stockholm", name: "Sweden" },
+] };
 const ROUTES_BODY = { devices: [], capabilities: {}, routes: [
   { id: "route_de_fast", region: "de", privacy_class: "fast", display_name: "Germany — Fast" },
 ], link_routes: [
   { id: "route_de_fast", region: "de", privacy_class: "fast", display_name: "Germany — Fast" },
 ] };
+const LINK_ID = "11111111-1111-4111-8111-111111111111";
 const LINKS_BODY = { links: [
-  { id: "11111111-1111-4111-8111-111111111111", name: "Travel", configurationFamily: "compatibility", routeId: "route_de_fast", routeLabel: "Germany — Fast", maxClients: 3, clientCount: 1, status: "active", createdAt: new Date().toISOString(), revokedAt: null },
+  { id: LINK_ID, name: "Travel", configurationFamily: "compatibility", routeId: "route_de_fast", routeLabel: "Germany — Fast", locationMode: "auto", privacyClass: "fast", maxClients: 1, clientCount: 1, primaryClientId: "22222222-2222-4222-8222-222222222222", status: "active", createdAt: new Date().toISOString(), revokedAt: null },
 ] };
 const LINK_DETAIL_BODY = { link: LINKS_BODY.links[0], clients: [
-  { id: "22222222-2222-4222-8222-222222222222", linkId: LINKS_BODY.links[0].id, name: "Tablet", clientType: "links", routeId: "route_de_fast", status: "active", createdAt: new Date().toISOString(), lastSeenAt: null, revokedAt: null },
+  { id: "22222222-2222-4222-8222-222222222222", linkId: LINK_ID, name: "Travel", clientType: "links", routeId: "route_de_fast", status: "active", createdAt: new Date().toISOString(), lastSeenAt: null, revokedAt: null },
 ] };
+const ACCESS_LINK_BODY = { configurationUrl: "https://arcana.example/sub/demo-token?format=links" };
+
+const ADMIN_CUSTOMERS_BODY = { customers: [
+  { userId: "u1", accountId: "acc-1", accountRole: "owner", memberCount: 1, email: "qa@arcana.example", subscriptionStatus: "active", currentPeriodEnd: new Date(Date.now() + 20 * 86400000).toISOString(), vpnAccountId: null, vpnUserId: null, nodeId: null, enabled: null, linkCount: 2, clientCount: 2, capacity: 6 },
+], page: 1, perPage: 50, total: 1, totalPages: 1 };
+const ADMIN_CUSTOMER_DETAIL_BODY = {
+  userId: "u1", accountId: "acc-1", accountRole: "owner", memberCount: 1, email: "qa@arcana.example", suspendedAt: null,
+  subscription: { status: "active", currentPeriodEnd: new Date(Date.now() + 20 * 86400000).toISOString(), cancelAtPeriodEnd: false, stripeCustomerId: "cus_1" },
+  grants: [], vpnAccounts: [], jobs: [],
+  links: [{ id: LINK_ID, name: "Travel", status: "active", routing: 1, locationMode: "auto", location: "Germany — Fast", createdAt: new Date().toISOString(), revokedAt: null }],
+};
+const ADMIN_JOBS_BODY = { jobs: [{ id: 9271, jobType: "provision", status: "failed", nodeId: "de-fra-1", createdAt: new Date().toISOString(), completedAt: null }], page: 1, perPage: 50, total: 1, totalPages: 1 };
+const ADMIN_ALERTS_BODY = { alerts: [{ id: "1", alertType: "node_config_stale", severity: "degraded", status: "open", nodeId: "de-fra-1", message: "Node de-fra-1 has not reported its latest configuration", createdAt: new Date().toISOString(), derived: false }] };
+const ADMIN_ABUSE_BODY = { signals: [] };
+const ADMIN_AUDIT_BODY = { entries: [{ id: 1, adminUserId: "a1", adminEmail: "admin@arcana.example", action: "admin.retry_job", targetType: "provisioning_job", targetId: "9271", metadata: {}, createdAt: new Date().toISOString() }] };
 
 const ADMIN_OVERVIEW_BODY = {
   customers: { total: 128, active: 96, trialing: 14, past_due: 3, canceled: 15 },
@@ -203,6 +202,7 @@ const ADMIN_FLEET_READINESS_BODY = {
   ],
   provisioningReady: false,
   missing: ["FLEET_REALITY_HANDSHAKE_SERVER"],
+  claimEnforcement: { ready: false, eligibleNodes: 2, compatibleNodes: 1, serverLeaseSeconds: 300, incompatibleNodes: [] },
 };
 ADMIN_SETTINGS_BODY.readiness = [
   { name: "SUPABASE_URL", group: "Core", sensitive: false, required: true, purpose: "Supabase project URL", present: true },
@@ -212,25 +212,31 @@ ADMIN_SETTINGS_BODY.readiness = [
 
 const PAGES = [
   { path: "/", label: "public-home" },
+  { path: "/pricing/", label: "public-pricing" },
+  { path: "/locations/", label: "public-locations" },
+  { path: "/help/", label: "public-help" },
   { path: "/login/", label: "public-login" },
   { path: "/signup/", label: "public-signup" },
+  { path: "/forgot-password/", label: "public-forgot-password" },
   { path: "/terms/", label: "public-terms" },
   { path: "/privacy/", label: "public-privacy" },
   { path: "/privacy/policy/", label: "public-privacy-policy" },
   { path: "/impressum/", label: "public-impressum" },
-  { path: "/account/", label: "account-overview" },
-  { path: "/account/subscriptions/", label: "account-subscriptions" },
-  { path: "/account/devices/", label: "account-devices" },
-  { path: "/account/links/", label: "account-links" },
+  { path: "/account/", label: "account-links" },
   { path: "/account/links/new/", label: "account-links-new" },
-  { path: "/account/links/detail/?id=11111111-1111-4111-8111-111111111111", label: "account-link-detail" },
-  { path: "/account/subscription/", label: "account-subscription" },
-  { path: "/account/connections/", label: "account-connections" },
-  { path: "/account/billing/", label: "account-billing" },
-  { path: "/account/security/", label: "account-security" },
+  { path: `/account/links/detail/?id=${LINK_ID}`, label: "account-link-detail" },
+  { path: "/account/plan/", label: "account-plan" },
+  { path: "/account/telegram/", label: "account-telegram" },
   { path: "/account/help/", label: "account-help" },
+  { path: "/admin/login/", label: "admin-login" },
   { path: "/admin/", label: "admin-overview", admin: true },
-  { path: "/admin/subscriptions/", label: "admin-subscriptions", admin: true },
+  { path: "/admin/customers/", label: "admin-users", admin: true },
+  { path: "/admin/customers/detail/?id=u1", label: "admin-user-detail", admin: true },
+  { path: "/admin/subscriptions/", label: "admin-payments", admin: true },
+  { path: "/admin/jobs/", label: "admin-operations-jobs", admin: true },
+  { path: "/admin/alerts/", label: "admin-operations-alerts", admin: true },
+  { path: "/admin/abuse/", label: "admin-operations-abuse", admin: true },
+  { path: "/admin/audit/", label: "admin-audit", admin: true },
   { path: "/admin/settings/", label: "admin-settings", admin: true },
   { path: "/admin/nodes/", label: "admin-fleet-nodes", admin: true },
   { path: "/admin/fleet/locations/", label: "admin-fleet-locations", admin: true },
@@ -245,19 +251,23 @@ function jsonRoute(body) {
 }
 
 async function setupMocks(page) {
+  await page.route("**/auth/v1/**", jsonRoute(FAKE_SESSION.user));
+  await page.route("**/api/locations", jsonRoute(LOCATIONS_BODY));
   await page.route("**/api/account/overview", jsonRoute(OVERVIEW_BODY));
-  await page.route("**/api/account/connection-profiles", jsonRoute(CONNECTION_PROFILES_BODY));
-  await page.route("**/api/account/devices", jsonRoute(DEVICES_BODY));
   await page.route("**/api/account/external-devices", jsonRoute(ROUTES_BODY));
   await page.route("**/api/account/links", jsonRoute(LINKS_BODY));
   await page.route("**/api/account/links/usage", jsonRoute({ usage: [], attribution: "client_daily_aggregate" }));
   await page.route("**/api/account/links/*", jsonRoute(LINK_DETAIL_BODY));
-  await page.route("**/api/locations", jsonRoute(LOCATIONS_BODY));
-  await page.route("**/api/vpn/config**", (route) =>
-    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ preferred_setup_url: "https://arcana.example/s/abc123", subscription_url: "https://arcana.example/s/abc123" }) })
-  );
+  await page.route("**/api/account/links/*/clients/*/access-link", jsonRoute(ACCESS_LINK_BODY));
   await page.route("**/api/admin/overview", jsonRoute(ADMIN_OVERVIEW_BODY));
   await page.route("**/api/admin/settings", jsonRoute(ADMIN_SETTINGS_BODY));
+  await page.route("**/api/admin/customers", jsonRoute(ADMIN_CUSTOMERS_BODY));
+  await page.route("**/api/admin/customers?**", jsonRoute(ADMIN_CUSTOMERS_BODY));
+  await page.route("**/api/admin/customers/u1", jsonRoute(ADMIN_CUSTOMER_DETAIL_BODY));
+  await page.route("**/api/admin/jobs**", jsonRoute(ADMIN_JOBS_BODY));
+  await page.route("**/api/admin/alerts", jsonRoute(ADMIN_ALERTS_BODY));
+  await page.route("**/api/admin/abuse", jsonRoute(ADMIN_ABUSE_BODY));
+  await page.route("**/api/admin/audit", jsonRoute(ADMIN_AUDIT_BODY));
   await page.route("**/api/admin/subscriptions**", jsonRoute(ADMIN_SUBSCRIPTIONS_BODY));
   await page.route("**/api/admin/nodes", jsonRoute(ADMIN_NODES_BODY));
   await page.route("**/api/admin/fleet/topology", jsonRoute(ADMIN_FLEET_TOPOLOGY_BODY));
@@ -268,12 +278,15 @@ async function setupMocks(page) {
   await page.route("**/api/account/telegram", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ linked: false }) }));
 }
 
-async function injectSession(page, origin) {
+// Customer pages read arcana-auth-v1; admin pages keep a separate session slot.
+// The login pages are checked signed out, as a visitor would see them.
+async function injectSession(page, pageDef) {
+  if (pageDef.path.endsWith("/login/")) return;
   await page.addInitScript(
     ({ key, session }) => {
       window.localStorage.setItem(key, JSON.stringify(session));
     },
-    { key: "arcana-auth-v1", session: FAKE_SESSION }
+    { key: pageDef.admin ? "arcana-admin-auth-v1" : "arcana-auth-v1", session: FAKE_SESSION }
   );
 }
 
@@ -288,7 +301,7 @@ async function checkPage(browser, viewport, pageDef) {
   });
   page.on("pageerror", (err) => consoleErrors.push(`pageerror: ${err.message}`));
 
-  await injectSession(page);
+  await injectSession(page, pageDef);
   await setupMocks(page);
 
   await page.goto(`${BASE}${pageDef.path}`, { waitUntil: "networkidle", timeout: 15000 }).catch((e) => {

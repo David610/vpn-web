@@ -8,6 +8,8 @@ const { onRequestGet: getLink, onRequestPatch: updateLink } = await import("../l
 const { onRequestGet: listClients } = await import("../links/[id]/clients.js");
 const { onRequestPost: createClient } = await import("../links/[id]/clients.js");
 const { onRequestGet: getUsage } = await import("../links/[id]/usage.js");
+const { onRequestGet: revealLink } = await import("../links/[id]/clients/[clientId]/access-link.js");
+const { onRequestPost: replaceLink } = await import("../links/[id]/clients/[clientId]/replace-link.js");
 
 const env = {
   SUPABASE_URL: "https://supabase.test", SUPABASE_SERVICE_ROLE_KEY: "key",
@@ -41,6 +43,13 @@ function seed() {
   }, {
     user: { id: "user-1", email: "owner@example.test" },
     rpc: {
+      create_vpn_link(args, tables) {
+        const id = `new-link-${tables.vpn_links.length + 1}`;
+        tables.vpn_links.push({ id, account_id: args.p_account_id, name: args.p_name, configuration_family: "compatibility",
+          desired_route_id: args.p_route_id, max_clients: args.p_max_clients, status: "active", location_mode: "manual",
+          created_at: new Date().toISOString(), revoked_at: null });
+        return { data: id, error: null };
+      },
       update_vpn_link(args, tables) {
         const owned = tables.vpn_links.some((link) => link.id === args.p_link_id && link.account_id === args.p_account_id);
         return { data: owned, error: null };
@@ -152,5 +161,115 @@ describe("Link client idempotency and one-time secret delivery", () => {
     expect(other.status).toBe(201);
     expect(db._tables.external_vpn_devices.filter((client) => client.link_id === "link-1" && client.device_id.startsWith("created-"))).toHaveLength(2);
     expect(db._tables.external_vpn_devices.filter((client) => client.link_id === "link-3" && client.device_id.startsWith("created-"))).toHaveLength(1);
+  });
+});
+
+const accessLinkRequest = (linkId, clientId) =>
+  new Request(`https://example.test/api/account/links/${linkId}/clients/${clientId}/access-link`, { headers: { Authorization: "Bearer good" } });
+
+async function createCopyableClient(key, linkId = "link-1") {
+  const created = await createClient({ env, params: { id: linkId }, request: new Request(`https://example.test/api/account/links/${linkId}/clients`, {
+    method: "POST", headers: { Authorization: "Bearer good", "Content-Type": "application/json", "Idempotency-Key": key },
+    body: JSON.stringify({ name: "Laptop", clientType: "links", subscriptionId: "123" }),
+  }) });
+  const body = await created.json();
+  return { deviceId: body.deviceId, url: body.configurationUrl };
+}
+
+describe("Re-copying an access link (encrypted re-reveal)", () => {
+  it("returns the same access URL again to the owner, and never stores the token in the clear", async () => {
+    const { deviceId, url } = await createCopyableClient("reveal-key-0000001");
+    const token = decodeURIComponent(new URL(url).pathname.split("/").pop());
+    const row = db._tables.external_vpn_devices.find((client) => client.device_id === deviceId);
+    expect(row.subscription_token_ciphertext).toMatch(/^\\x[0-9a-f]+$/);
+    expect(JSON.stringify(row)).not.toContain(token);
+
+    const response = await revealLink({ env, request: accessLinkRequest("link-1", deviceId), params: { id: "link-1", clientId: deviceId } });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    expect(await response.json()).toEqual({ configurationUrl: url });
+  });
+
+  it("does not reveal another account's access link", async () => {
+    const response = await revealLink({ env, request: accessLinkRequest("link-2", "device-2"), params: { id: "link-2", clientId: "device-2" } });
+    expect(response.status).toBe(404);
+    expect(JSON.stringify(await response.json())).not.toMatch(/sub\//);
+  });
+
+  it("asks the owner to replace a link created before copying existed", async () => {
+    const response = await revealLink({ env, request: accessLinkRequest("link-1", "device-1"), params: { id: "link-1", clientId: "device-1" } });
+    expect(response.status).toBe(409);
+    expect((await response.json()).code).toBe("access_link_unavailable");
+  });
+
+  it("returns the new link after a replacement and no longer the old one", async () => {
+    const { deviceId, url } = await createCopyableClient("reveal-key-0000002");
+    const replaced = await replaceLink({ env, params: { id: "link-1", clientId: deviceId }, request: new Request("https://example.test/x", { method: "POST", headers: { Authorization: "Bearer good" } }) });
+    const newUrl = (await replaced.json()).subscriptionUrl;
+    expect(newUrl).not.toBe(url);
+    const response = await revealLink({ env, request: accessLinkRequest("link-1", deviceId), params: { id: "link-1", clientId: deviceId } });
+    expect(await response.json()).toEqual({ configurationUrl: newUrl });
+  });
+
+  it("refuses a ciphertext moved onto a different client", async () => {
+    const a = await createCopyableClient("reveal-key-0000003");
+    const b = await createCopyableClient("reveal-key-0000004");
+    const rowA = db._tables.external_vpn_devices.find((client) => client.device_id === a.deviceId);
+    const rowB = db._tables.external_vpn_devices.find((client) => client.device_id === b.deviceId);
+    rowB.subscription_token_ciphertext = rowA.subscription_token_ciphertext;
+    rowB.subscription_token_nonce = rowA.subscription_token_nonce;
+    const response = await revealLink({ env, request: accessLinkRequest("link-1", b.deviceId), params: { id: "link-1", clientId: b.deviceId } });
+    expect(response.status).toBe(409);
+    expect(JSON.stringify(await response.json())).not.toContain(new URL(a.url).pathname);
+  });
+
+  it("does not reveal a revoked client's link", async () => {
+    const { deviceId } = await createCopyableClient("reveal-key-0000005");
+    db._tables.external_vpn_devices.find((client) => client.device_id === deviceId).revoked_at = "2026-02-01";
+    const response = await revealLink({ env, request: accessLinkRequest("link-1", deviceId), params: { id: "link-1", clientId: deviceId } });
+    expect(response.status).toBe(404);
+  });
+
+  it("requires a session", async () => {
+    const response = await revealLink({ env, request: new Request("https://example.test/x"), params: { id: "link-1", clientId: "device-1" } });
+    expect(response.status).toBe(401);
+  });
+
+  it("keeps ciphertext out of the Link list and detail responses", async () => {
+    await createCopyableClient("reveal-key-0000006");
+    const list = JSON.stringify(await (await listLinks({ env, request })).json());
+    const detail = JSON.stringify(await (await getLink({ env, request, params: { id: "link-1" } })).json());
+    for (const body of [list, detail]) expect(body).not.toMatch(/cipher|nonce|\\x[0-9a-f]{8}/i);
+  });
+});
+
+describe("Link location mode", () => {
+  const post = (body) => createLink({ env, request: new Request("https://example.test/api/account/links", {
+    method: "POST", headers: { Authorization: "Bearer good", "Content-Type": "application/json" }, body: JSON.stringify(body) }) });
+
+  it("records an automatically chosen location", async () => {
+    const response = await post({ name: "Auto", routeId: "route_one", maxClients: 1, locationMode: "auto" });
+    expect(response.status).toBe(201);
+    const { id } = await response.json();
+    expect(db._tables.vpn_links.find((link) => link.id === id).location_mode).toBe("auto");
+    const detail = await (await getLink({ env, request, params: { id } })).json();
+    expect(detail.link.locationMode).toBe("auto");
+  });
+
+  it("defaults to a manual location and rejects unknown modes", async () => {
+    const manual = await (await post({ name: "Manual", routeId: "route_one", maxClients: 1 })).json();
+    expect(db._tables.vpn_links.find((link) => link.id === manual.id).location_mode).toBe("manual");
+    expect((await post({ name: "Bad", routeId: "route_one", maxClients: 1, locationMode: "fastest" })).status).toBe(400);
+  });
+});
+
+describe("Link list primary client", () => {
+  it("returns the first active client so the UI can copy a link without extra requests", async () => {
+    db._tables.external_vpn_devices.find((client) => client.device_id === "device-1").revoked_at = "2026-01-02";
+    await createCopyableClient("primary-key-0000001");
+    const { links } = await (await listLinks({ env, request })).json();
+    const link = links.find((item) => item.id === "link-1");
+    expect(link.primaryClientId).toMatch(/^created-/);
+    expect(links.find((item) => item.id === "link-3").primaryClientId).toBeNull();
   });
 });

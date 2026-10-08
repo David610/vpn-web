@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { firstClientName, subscriptionForFirstClient } from "../link-first-client";
+import { firstClientName, isValidLinkName, subscriptionForFirstClient } from "../link-first-client";
 
 const sub = (id: string, status: string, used: number, capacity: number) => ({ id, status, used, capacity });
 
@@ -25,5 +25,15 @@ describe("firstClientName", () => {
 
   it("stays within the 40-character client name limit", () => {
     expect(firstClientName("x".repeat(60))).toHaveLength(40);
+  });
+});
+
+describe("isValidLinkName", () => {
+  it("accepts ordinary names, including non-latin letters", () => {
+    for (const name of ["My phone", "Büro (2)", "Laptop-2", "Дом", "  Travel  "]) expect(isValidLinkName(name)).toBe(true);
+  });
+
+  it("rejects empty, over-long and symbol-bearing names", () => {
+    for (const name of ["", "   ", "x".repeat(41), "a/b", "<b>", "emoji 😀"]) expect(isValidLinkName(name)).toBe(false);
   });
 });

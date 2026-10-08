@@ -1,15 +1,17 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import Link from "next/link";
+import { useCallback, useEffect, useState } from "react";
 import { AdminShell } from "@/components/admin/AdminShell";
 import {
-  AdminPage,
-  AdminSection,
+  AdminButton,
   AdminMetricLarge,
   AdminMetricRow,
+  AdminNotice,
+  AdminPage,
+  AdminSection,
   AdminStatRow,
   AdminStatRows,
-  AdminNotice,
 } from "@/components/admin/AdminPrimitives";
 import { useAdminSession } from "@/hooks/useAdminSession";
 import { adminFetch } from "@/lib/adminFetch";
@@ -33,6 +35,8 @@ type Overview = {
   abuse: { open: number };
 };
 
+type Attention = { key: string; title: string; detail: string; href: string; tone: "Review" | "Investigate" | "New" };
+
 function bytes(value: number) {
   if (value < 1024 ** 3) return `${(value / 1024 ** 2).toFixed(1)} MB`;
   if (value < 1024 ** 4) return `${(value / 1024 ** 3).toFixed(1)} GB`;
@@ -41,40 +45,71 @@ function bytes(value: number) {
 function mbps(value: number) {
   return `${(value / 1_000_000).toFixed(1)} Mbps`;
 }
+function plural(n: number, one: string, many = `${one}s`) {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
+/** What needs a human, derived from live counts. Each item links to where it can be handled. */
+function attentionItems(o: Overview): Attention[] {
+  const items: Attention[] = [];
+  if (o.jobs.failed > 0) {
+    items.push({ key: "jobs", title: `${plural(o.jobs.failed, "provisioning job")} failed`, detail: "Review the failure before retrying.", href: "/admin/jobs", tone: "Review" });
+  }
+  if (o.nodes.offline > 0) {
+    items.push({ key: "nodes", title: `${plural(o.nodes.offline, "server")} offline`, detail: "No recent heartbeat.", href: "/admin/nodes", tone: "Investigate" });
+  }
+  if (o.alerts.open > 0) {
+    items.push({ key: "alerts", title: plural(o.alerts.open, "open alert"), detail: "Operational alerts waiting for review.", href: "/admin/alerts", tone: "Investigate" });
+  }
+  if (o.customers.past_due > 0) {
+    items.push({ key: "billing", title: `${plural(o.customers.past_due, "subscription")} past due`, detail: "May need billing follow-up.", href: "/admin/subscriptions", tone: "New" });
+  }
+  if (o.abuse.open > 0) {
+    items.push({ key: "abuse", title: plural(o.abuse.open, "abuse flag"), detail: "Signals are review aids, not automatic bans.", href: "/admin/abuse", tone: "Review" });
+  }
+  return items;
+}
 
 export default function AdminOverviewPage() {
   const { session } = useAdminSession();
   const [overview, setOverview] = useState<Overview | null>(null);
+  const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  const load = useCallback(async () => {
     if (!session) return;
-    let cancelled = false;
-    const load = () =>
-      adminFetch<Overview>("/api/admin/overview", session.access_token)
-        .then((body) => {
-          if (!cancelled) {
-            setOverview(body);
-            setError(null);
-          }
-        })
-        .catch((err) => !cancelled && setError(err.message));
+    try {
+      setOverview(await adminFetch<Overview>("/api/admin/overview", session.access_token));
+      setUpdatedAt(new Date());
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not load the overview.");
+    }
+  }, [session]);
+
+  useEffect(() => {
+    void load();
     const refresh = () => {
-      if (document.visibilityState === "visible") load();
+      if (document.visibilityState === "visible") void load();
     };
-    load();
     const timer = window.setInterval(refresh, 30_000);
     document.addEventListener("visibilitychange", refresh);
     return () => {
-      cancelled = true;
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", refresh);
     };
-  }, [session]);
+  }, [load]);
+
+  const total = overview ? overview.nodes.online + overview.nodes.offline : 0;
+  const attention = overview ? attentionItems(overview) : [];
 
   return (
     <AdminShell>
-      <AdminPage title="Overview">
+      <AdminPage
+        title="Overview"
+        description="The essential health of the service and your customers."
+        actions={<AdminButton type="button" onClick={() => void load()}>Refresh</AdminButton>}
+      >
         {error ? (
           <AdminNotice tone="error">{error}</AdminNotice>
         ) : !overview ? (
@@ -82,14 +117,51 @@ export default function AdminOverviewPage() {
         ) : (
           <>
             <AdminMetricRow>
-              <AdminMetricLarge label="Customer accounts" value={overview.customers.total} />
-              <AdminMetricLarge label="Live subscriptions" value={overview.subscriptions?.live ?? "—"} />
-              <AdminMetricLarge
-                label="Devices / capacity"
-                value={overview.devices ? `${overview.devices.active} / ${overview.devices.capacity}` : "—"}
-              />
-              <AdminMetricLarge label="Nodes online" value={overview.nodes.online} />
+              <AdminMetricLarge label="Customer accounts" value={overview.customers.total.toLocaleString()} note="Total registered" />
+              <AdminMetricLarge label="Active subscriptions" value={(overview.subscriptions?.live ?? 0).toLocaleString()} note="Single €6.99/month plan" />
+              <AdminMetricLarge label="Servers ready" value={`${overview.nodes.online} / ${total}`} note={overview.nodes.offline === 0 ? "All online" : `${overview.nodes.offline} offline`} />
+              <AdminMetricLarge label="Failed jobs" value={overview.jobs.failed} note={overview.jobs.failed === 0 ? "Nothing to review" : "Require review"} />
             </AdminMetricRow>
+
+            <div className="admin-columns">
+              <AdminSection label="Needs attention" action={<Link className="text-link" href="/admin/jobs">Open operations</Link>}>
+                {attention.length === 0 ? (
+                  <p className="text-fg-2">Nothing needs attention right now.</p>
+                ) : (
+                  <ul className="attention">
+                    {attention.map((item) => (
+                      <li key={item.key}>
+                        <div>
+                          <Link href={item.href} className="attention__title">{item.title}</Link>
+                          <p className="text-fg-2">{item.detail}</p>
+                        </div>
+                        <span className="badge badge--warn">{item.tone}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </AdminSection>
+
+              <AdminSection
+                label="System status"
+                action={
+                  overview.nodes.offline === 0 && overview.jobs.failed === 0 ? (
+                    <span className="badge badge--ok">Operational</span>
+                  ) : (
+                    <span className="badge badge--warn">Attention required</span>
+                  )
+                }
+              >
+                <AdminStatRows>
+                  <AdminStatRow label="VPN servers" value={`${overview.nodes.online} online / ${overview.nodes.offline} offline`} />
+                  <AdminStatRow label="Provisioning" value={`${overview.jobs.pending} pending · ${overview.jobs.failed} failed`} />
+                  <AdminStatRow label="Billing" value={`${overview.customers.past_due} past due`} />
+                  <AdminStatRow label="Traffic this month" value={bytes(overview.usage.month_total_bytes)} />
+                  <AdminStatRow label="Current ↓ / ↑" value={`${mbps(overview.usage.download_bps)} / ${mbps(overview.usage.upload_bps)}`} />
+                </AdminStatRows>
+                {updatedAt ? <p className="text-fg-2 admin-footnote">Updated {updatedAt.toLocaleTimeString()}</p> : null}
+              </AdminSection>
+            </div>
 
             <AdminSection label="Customer status">
               <AdminStatRows>
@@ -98,37 +170,9 @@ export default function AdminOverviewPage() {
                 <AdminStatRow label="Past due" value={overview.customers.past_due} warn />
                 <AdminStatRow label="Cancelled" value={overview.customers.canceled} />
                 <AdminStatRow label="Cancelling" value={overview.subscriptions?.cancelling ?? "—"} />
-                <AdminStatRow label="Several subscriptions" value={overview.subscriptions?.accounts_with_several ?? "—"} />
-                <AdminStatRow label="Extra device packs" value={overview.subscriptions?.extra_packs ?? "—"} />
                 <AdminStatRow label="Support grants" value={overview.members?.admin_grants ?? "—"} />
-              </AdminStatRows>
-            </AdminSection>
-
-            <AdminSection label="Fleet status" action={overview.nodes.offline === 0 ? <span className="text-fg-2">Healthy</span> : <span className="text-danger">Degraded</span>}>
-              <AdminStatRows>
-                <AdminStatRow label="Nodes offline" value={overview.nodes.offline} warn />
                 <AdminStatRow label="Devices over capacity" value={overview.devices?.over_capacity ?? "—"} warn />
                 <AdminStatRow label="Devices without subscription" value={overview.devices?.without_subscription ?? "—"} warn />
-                <AdminStatRow label="Unschedulable devices" value={overview.devices?.unschedulable ?? "—"} warn />
-              </AdminStatRows>
-            </AdminSection>
-
-            <AdminSection label="Operations">
-              <AdminStatRows>
-                <AdminStatRow label="Jobs pending" value={overview.jobs.pending} />
-                <AdminStatRow label="Jobs claimed" value={overview.jobs.claimed} />
-                <AdminStatRow label="Jobs failed" value={overview.jobs.failed} warn />
-                <AdminStatRow label="Open alerts" value={overview.alerts.open} warn />
-                <AdminStatRow label="Abuse flags" value={overview.abuse.open} warn />
-              </AdminStatRows>
-            </AdminSection>
-
-            <AdminSection label="Traffic this month">
-              <AdminStatRows>
-                <AdminStatRow label="Total" value={bytes(overview.usage.month_total_bytes)} />
-                <AdminStatRow label="Down / up" value={`${bytes(overview.usage.month_download_bytes)} / ${bytes(overview.usage.month_upload_bytes)}`} />
-                <AdminStatRow label="Current ↓ / ↑" value={`${mbps(overview.usage.download_bps)} / ${mbps(overview.usage.upload_bps)}`} />
-                <AdminStatRow label="VPN enabled / disabled" value={`${overview.vpn.enabled} / ${overview.vpn.disabled}`} />
               </AdminStatRows>
             </AdminSection>
           </>

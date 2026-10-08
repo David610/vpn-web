@@ -33,10 +33,12 @@ export async function onRequestPost({ env, request }) {
   const emailAllowed = await checkRateLimit(supabaseAdmin, `v1-login:email:${email}`, {
     windowSeconds: LOGIN_WINDOW_SECONDS,
     limit: LOGIN_LIMIT_PER_EMAIL,
+    env,
   });
   const ipAllowed = await checkRateLimit(supabaseAdmin, `v1-login:ip:${clientIpKey(request)}`, {
     windowSeconds: LOGIN_WINDOW_SECONDS,
     limit: LOGIN_LIMIT_PER_IP,
+    env,
   });
   if (!emailAllowed || !ipAllowed) {
     return rateLimitedResponse("Too many login attempts. Please try again later.");

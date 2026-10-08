@@ -19,6 +19,9 @@ type Customer = {
   vpnAccountId: number | null;
   nodeId: string | null;
   enabled: boolean | null;
+  linkCount: number | null;
+  clientCount: number | null;
+  capacity: number | null;
 };
 
 type ResponseBody = {
@@ -79,10 +82,12 @@ export default function AdminCustomersPage() {
 
   return (
     <AdminShell>
-      <AdminPage title="Users" description={`${meta.total} total`}>
+      <AdminPage title="Users" description="Find customer accounts, verify entitlement, and help with VPN links.">
         <input
-          className={`mb-4 w-full max-w-sm ${adminInputClass}`}
+          className={`mb-4 w-full max-w-md ${adminInputClass}`}
+          type="search"
           placeholder="Search by email, user id, or VPN user id"
+          aria-label="Search customers"
           value={input}
           onChange={(e) => setInput(e.target.value)}
         />
@@ -98,54 +103,48 @@ export default function AdminCustomersPage() {
                 <thead>
                   <tr>
                     <th>Customer</th>
-                    <th>Role</th>
                     <th>Subscription</th>
-                    <th>VPN</th>
-                    <th>Node</th>
-                    <th>Period ends</th>
+                    <th>VPN links</th>
+                    <th>Provisioned clients / capacity</th>
+                    <th>Period end</th>
+                    <th>
+                      <span className="sr-only">Actions</span>
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
+                  {customers.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="text-fg-2">No customers match.</td>
+                    </tr>
+                  ) : null}
                   {customers.map((c) => (
                     <tr key={c.userId}>
                       <td>
-                        <Link
-                          href={`/admin/customers/detail?id=${c.userId}`}
-                          className="text-fg underline underline-offset-2 hover:text-fg-2"
-                        >
+                        <Link href={`/admin/customers/detail?id=${c.userId}`} className="text-fg underline underline-offset-2 hover:text-fg-2">
                           {c.email ?? c.userId}
                         </Link>
+                        {c.accountRole === "owner" && c.memberCount > 1 ? <span className="text-fg-2"> · owner of {c.memberCount}</span> : null}
                       </td>
-                      <td className="text-fg-2">
-                        {c.accountRole === "owner" && c.memberCount > 1
-                          ? `owner of ${c.memberCount}`
-                          : c.accountRole}
-                      </td>
-                      <td>
-                        {c.subscriptionStatus ? (
-                          <StatusBadge status={c.subscriptionStatus} />
-                        ) : (
-                          "—"
-                        )}
-                      </td>
-                      <td>
-                        {c.vpnAccountId ? (
-                          <StatusBadge status={c.enabled ? "active" : "canceled"} />
-                        ) : (
-                          "—"
-                        )}
-                      </td>
-                      <td className="font-mono">{c.nodeId ?? "—"}</td>
+                      <td>{c.subscriptionStatus ? <StatusBadge status={c.subscriptionStatus} /> : "—"}</td>
+                      <td>{c.linkCount ?? "—"}</td>
+                      <td>{c.clientCount === null || c.capacity === null ? "—" : `${c.clientCount} / ${c.capacity}`}</td>
                       <td>
                         {c.currentPeriodEnd
-                          ? new Date(c.currentPeriodEnd).toLocaleDateString()
+                          ? new Date(c.currentPeriodEnd).toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "numeric" })
                           : "—"}
+                      </td>
+                      <td>
+                        <Link href={`/admin/customers/detail?id=${c.userId}`} className="text-link">View →</Link>
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </AdminTable>
             </AdminTableWrap>
+            <p className="text-fg-2 admin-footnote">
+              {meta.total === 0 ? "No customers" : `Showing ${(page - 1) * PAGE_SIZE + 1}–${(page - 1) * PAGE_SIZE + customers.length} of ${meta.total} customers`}
+            </p>
 
             <div className="mt-4 flex items-center gap-3">
               <AdminButton type="button" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>

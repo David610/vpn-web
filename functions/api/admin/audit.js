@@ -21,9 +21,24 @@ export async function onRequestGet({ env, request }) {
       .limit(200);
     if (error) throw new Error(`admin_audit_log query failed: ${error.message}`);
 
+    // Show who acted by email, not just by id. A lookup that fails only costs the label.
+    const adminIds = [...new Set(data.map((e) => e.admin_user_id).filter(Boolean))];
+    const emailById = new Map();
+    await Promise.all(
+      adminIds.map(async (id) => {
+        try {
+          const { data: lookup } = await supabaseAdmin.auth.admin.getUserById(id);
+          if (lookup?.user?.email) emailById.set(id, lookup.user.email);
+        } catch (err) {
+          console.error("admin/audit: admin email lookup failed:", err.message);
+        }
+      })
+    );
+
     const entries = data.map((e) => ({
       id: e.id,
       adminUserId: e.admin_user_id,
+      adminEmail: emailById.get(e.admin_user_id) ?? null,
       action: e.action,
       targetType: e.target_type,
       targetId: e.target_id,

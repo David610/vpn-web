@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { AdminShell } from "@/components/admin/AdminShell";
+import { AdminPage } from "@/components/admin/AdminPrimitives";
+import { OperationsTabs } from "@/components/admin/OperationsTabs";
 import { StatusBadge } from "@/components/admin/StatusBadge";
 import { useAdminSession } from "@/hooks/useAdminSession";
 import { adminFetch } from "@/lib/adminFetch";
@@ -59,16 +61,17 @@ export default function AdminAlertsPage() {
 
   return (
     <AdminShell>
-      <h1 className="mb-4 text-xl font-semibold">Alerts</h1>
-      {error && <p className="mb-4 text-red-600">{error}</p>}
+      <AdminPage title="Operations" description="Node alerts that need review.">
+        <OperationsTabs />
+      {error && <p className="mb-4 text-danger">{error}</p>}
       {!alerts ? (
         <p>Loading…</p>
       ) : alerts.length === 0 ? (
-        <p className="text-sm text-gray-500">No alerts.</p>
+        <p className="text-sm text-fg-2">No alerts.</p>
       ) : (
         <div className="space-y-3">
           {alerts.map((a) => (
-            <div key={a.id} className="rounded border bg-white p-4">
+            <div key={a.id} className="panel-lite">
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <StatusBadge status={a.severity} />
@@ -77,7 +80,7 @@ export default function AdminAlertsPage() {
                 {!a.derived && a.status === "open" && (
                   <button
                     type="button"
-                    className="rounded border px-3 py-1 text-sm"
+                    className="btn btn-secondary btn-sm"
                     onClick={() => resolve(a.id)}
                   >
                     Resolve
@@ -85,7 +88,7 @@ export default function AdminAlertsPage() {
                 )}
               </div>
               <p className="mt-2 text-sm">{a.message}</p>
-              <p className="mt-1 text-xs text-gray-500">
+              <p className="mt-1 text-xs text-fg-2">
                 {a.nodeId ? `Node ${a.nodeId} · ` : ""}
                 {a.createdAt ? new Date(a.createdAt).toLocaleString() : "No heartbeat received"}
                 {a.derived ? " · clears automatically" : ""}
@@ -94,6 +97,7 @@ export default function AdminAlertsPage() {
           ))}
         </div>
       )}
+      </AdminPage>
     </AdminShell>
   );
 }

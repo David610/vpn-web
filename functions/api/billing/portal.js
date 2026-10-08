@@ -37,7 +37,7 @@ export async function onRequestPost({ env, request }) {
     });
     const session = await stripe.billingPortal.sessions.create({
       customer: accountRow.stripe_customer_id,
-      return_url: `${env.SITE_URL}/account/billing/`,
+      return_url: `${env.SITE_URL}/account/plan/`,
     });
 
     return jsonResponse({ url: session.url });

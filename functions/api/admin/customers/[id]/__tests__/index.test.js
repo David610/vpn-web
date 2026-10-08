@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const getClaims = vi.fn();
 const adminMaybeSingle = vi.fn();
 const getUserById = vi.fn();
-let subMaybeSingle, vpnAccountsEq, jobsOrder, jobsLimit, jobsIn, memberMaybeSingle, accountMaybeSingle, memberCount;
+let linkRows, routeRows, subMaybeSingle, vpnAccountsEq, jobsOrder, jobsLimit, jobsIn, memberMaybeSingle, accountMaybeSingle, memberCount;
 
 vi.mock("@supabase/supabase-js", () => ({
   createClient: vi.fn(() => ({
@@ -68,6 +68,16 @@ vi.mock("@supabase/supabase-js", () => ({
           order: vi.fn().mockResolvedValue({ data: [], error: null }),
         };
       }
+      if (table === "vpn_links") {
+        return {
+          select: vi.fn().mockReturnThis(),
+          eq: vi.fn().mockReturnThis(),
+          order: () => Promise.resolve(linkRows()),
+        };
+      }
+      if (table === "logical_routes") {
+        return { select: vi.fn().mockReturnThis(), in: () => Promise.resolve(routeRows()) };
+      }
       throw new Error(`unexpected table ${table}`);
     }),
   })),
@@ -94,6 +104,20 @@ beforeEach(() => {
     error: null,
   });
   vpnAccountsEq = vi.fn().mockResolvedValue({ data: [{ id: 1, vpn_user_id: "vpn-abc", node_id: "node-1", enabled: true }], error: null });
+  linkRows = vi.fn().mockReturnValue({
+    data: [
+      { id: "l1", name: "Personal", status: "active", desired_route_id: "route_de_fast", location_mode: "auto", created_at: "2026-10-06T00:00:00Z", revoked_at: null, subscription_token_hash: "must-not-leak" },
+      { id: "l2", name: "Old phone", status: "revoked", desired_route_id: "route_nl_fast", location_mode: "manual", created_at: "2026-09-22T00:00:00Z", revoked_at: "2026-10-01T00:00:00Z" },
+    ],
+    error: null,
+  });
+  routeRows = vi.fn().mockReturnValue({
+    data: [
+      { id: "route_de_fast", display_name: "Germany", privacy_class: "fast" },
+      { id: "route_nl_fast", display_name: "Netherlands", privacy_class: "fast" },
+    ],
+    error: null,
+  });
   jobsOrder = vi.fn();
   jobsIn = vi.fn();
   jobsLimit = vi.fn().mockResolvedValue({
@@ -172,5 +196,25 @@ describe("GET /api/admin/customers/:id", () => {
     expect(res.status).toBe(200);
     expect(body.subscription).toBeNull();
     expect(body.accountId).toBeNull();
+  });
+
+  it("lists the customer's links as metadata only", async () => {
+    const res = await onRequestGet({ env, request: makeRequest(), params: { id: "user-1" } });
+    const body = await res.json();
+    expect(body.links).toEqual([
+      { id: "l1", name: "Personal", status: "active", routing: 1, locationMode: "auto", location: "Germany", createdAt: "2026-10-06T00:00:00Z", revokedAt: null },
+      { id: "l2", name: "Old phone", status: "revoked", routing: 1, locationMode: "manual", location: "Netherlands", createdAt: "2026-09-22T00:00:00Z", revokedAt: "2026-10-01T00:00:00Z" },
+    ]);
+    expect(JSON.stringify(body.links)).not.toMatch(/must-not-leak|token|sub\//i);
+  });
+
+  it("still returns the customer, with links unavailable, when the link lookup fails", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    linkRows.mockReturnValue({ data: null, error: { message: "boom" } });
+    const res = await onRequestGet({ env, request: makeRequest(), params: { id: "user-1" } });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.email).toBe("alice@example.com");
+    expect(body.links).toBeNull();
   });
 });
