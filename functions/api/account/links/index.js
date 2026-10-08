@@ -8,7 +8,7 @@ export async function onRequestGet(context) {
     const account = await getAccountForUser(db, user.id);
     if (!account) return { status: 404, body: { error: "Account not found" } };
     const { data, error } = await db.from("vpn_links")
-      .select("id,name,configuration_family,desired_route_id,max_clients,status,created_at,revoked_at")
+      .select("id,name,configuration_family,desired_route_id,max_clients,status,location_mode,created_at,revoked_at")
       .eq("account_id", account.accountId).order("created_at", { ascending: true });
     if (error) throw new Error(`link lookup failed: ${error.message}`);
     const { data: clients, error: clientsError } = await db.from("external_vpn_devices")

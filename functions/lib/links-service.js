@@ -1,5 +1,6 @@
 import { getAccountForUser } from "./accounts.js";
 import { supportsMode } from "./client-capabilities.js";
+import { decryptSecret, encryptSecret } from "./crypto.js";
 import { COMPATIBILITY_LIFETIME_MS, newOpaqueId, newProtocolCredential, newSubscriptionToken, subscriptionTokenHash, subscriptionUrl } from "./external-credentials.js";
 import { CLIENT_NAME, idempotencyHash, LINK_NAME } from "./vpn-links.js";
 
@@ -8,13 +9,18 @@ export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}
 
 const failure = (status, code, error) => ({ status, body: { error, code } });
 
+const LINK_COLUMNS = "id,name,configuration_family,desired_route_id,max_clients,status,created_at,revoked_at";
+const LOCATION_MODES = new Set(["auto", "manual"]);
+
 export function parseCreateLink(body, style = "v1") {
   const name = String(body?.name ?? "").trim();
   const routeId = body?.[style === "v1" ? "route_id" : "routeId"];
   const maxClients = body?.[style === "v1" ? "max_clients" : "maxClients"];
+  const locationMode = body?.[style === "v1" ? "location_mode" : "locationMode"] ?? "manual";
   if (!LINK_NAME.test(name) || !/^route_[a-z0-9_]{3,60}$/.test(routeId ?? "") ||
-      !Number.isInteger(maxClients) || maxClients < 1 || maxClients > 100) return null;
-  return { name, routeId, maxClients };
+      !Number.isInteger(maxClients) || maxClients < 1 || maxClients > 100 ||
+      !LOCATION_MODES.has(locationMode)) return null;
+  return { name, routeId, maxClients, locationMode };
 }
 
 export function parseCreateClient(body) {
@@ -51,7 +57,7 @@ export function clientView(row) {
 export async function listLinks(db, user) {
   const accountId = await accountIdFor(db, user);
   if (!accountId) return failure(404, "link_not_found", "Link not found");
-  const { data, error } = await db.from("vpn_links").select("id,name,configuration_family,desired_route_id,max_clients,status,created_at,revoked_at")
+  const { data, error } = await db.from("vpn_links").select(LINK_COLUMNS)
     .eq("account_id", accountId).order("created_at", { ascending: true });
   if (error) throw new Error(`link lookup failed: ${error.message}`);
   const { data: clients, error: clientError } = await db.from("external_vpn_devices").select("link_id,revoked_at").eq("account_id", accountId);
@@ -74,8 +80,14 @@ export async function createLink(db, user, input) {
     if (/route_unavailable/.test(error.message ?? "")) return failure(422, "unsupported_route", "Route is unavailable for Links");
     throw new Error(`link creation failed: ${error.message}`);
   }
+  if (input.locationMode === "auto") {
+    // The Link already exists; failing to record "auto" only changes its label.
+    const { error: modeError } = await db.from("vpn_links").update({ location_mode: "auto" })
+      .eq("id", id).eq("account_id", accountId);
+    if (modeError) console.error("link location mode update failed:", modeError.message);
+  }
   const { data: created, error: createdError } = await db.from("vpn_links")
-    .select("id,name,configuration_family,desired_route_id,max_clients,status,created_at,revoked_at")
+    .select(LINK_COLUMNS)
     .eq("id", id).eq("account_id", accountId).maybeSingle();
   if (createdError || !created) throw new Error(`created Link lookup failed: ${createdError?.message ?? "missing row"}`);
   return { status: 201, body: { link: linkView(created, 0, route) } };
@@ -83,7 +95,7 @@ export async function createLink(db, user, input) {
 
 export async function getLink(db, user, linkId) {
   const accountId = await accountIdFor(db, user);
-  const { data: link, error } = await db.from("vpn_links").select("id,name,configuration_family,desired_route_id,max_clients,status,created_at,revoked_at")
+  const { data: link, error } = await db.from("vpn_links").select(LINK_COLUMNS)
     .eq("id", linkId).eq("account_id", accountId).maybeSingle();
   if (error) throw new Error(`link lookup failed: ${error.message}`);
   if (!link) return failure(404, "link_not_found", "Link not found");
@@ -125,6 +137,7 @@ export async function createClient(db, env, request, user, linkId, input) {
     .select("device_id,client_type,created_at,last_subscription_fetch_at,revoked_at,subscription_token_hash,devices(name)")
     .eq("device_id", deviceId).eq("account_id", accountId).eq("link_id", link.id).maybeSingle();
   const replayed = created?.subscription_token_hash !== generatedHash;
+  if (!replayed) await storeAccessLink(db, env, { deviceId, accountId, linkId: link.id, token });
   const client = clientView(created ?? { device_id: deviceId, name: input.name, client_type: GENERIC_LINK_CLIENT, created_at: new Date().toISOString() });
   return replayed ? { status: 200, body: { client, replayed: true } } : { status: 201,
     body: { client, replayed: false, configuration_url: subscriptionUrl(request, token, GENERIC_LINK_CLIENT), shown_once: true } };
@@ -137,12 +150,65 @@ async function ownedClient(db, accountId, linkId, clientId) {
   return data;
 }
 
+// The token is bound to its client (device id inside the sealed payload) so a
+// ciphertext copied between rows cannot reveal another client's link.
+async function sealAccessLink(env, deviceId, token) {
+  try {
+    const { ciphertext, nonce } = await encryptSecret(JSON.stringify({ v: 1, d: deviceId, t: token }), env.VPN_SECRETS_ENCRYPTION_KEY);
+    return { subscription_token_ciphertext: ciphertext, subscription_token_nonce: nonce };
+  } catch (err) {
+    // Never block creating or rotating a link on this: it only costs copyability.
+    console.error("access link seal failed:", err.message);
+    return { subscription_token_ciphertext: null, subscription_token_nonce: null };
+  }
+}
+
+async function storeAccessLink(db, env, { deviceId, accountId, linkId, token }) {
+  const sealed = await sealAccessLink(env, deviceId, token);
+  if (!sealed.subscription_token_ciphertext) return;
+  const { error } = await db.from("external_vpn_devices").update(sealed)
+    .eq("device_id", deviceId).eq("account_id", accountId).eq("link_id", linkId);
+  if (error) console.error("access link store failed:", error.message);
+}
+
+const ACCESS_LINK_UNAVAILABLE = () => failure(409, "access_link_unavailable",
+  "This link cannot be shown again. Replace it to get a link you can copy.");
+
+/**
+ * Returns the owner's access URL again. The caller must already have proven
+ * they own the account; the response is served with Cache-Control: no-store.
+ */
+export async function revealAccessLink(db, env, request, user, linkId, clientId) {
+  const accountId = await accountIdFor(db, user);
+  if (!accountId) return failure(404, "client_not_found", "Client not found");
+  const { data: row, error } = await db.from("external_vpn_devices")
+    .select("device_id,client_type,revoked_at,subscription_token_hash,subscription_token_ciphertext,subscription_token_nonce")
+    .eq("device_id", clientId).eq("account_id", accountId).eq("link_id", linkId).maybeSingle();
+  if (error) throw new Error(`access link lookup failed: ${error.message}`);
+  if (!row || row.revoked_at) return failure(404, "client_not_found", "Client not found");
+  if (!row.subscription_token_ciphertext || !row.subscription_token_nonce) return ACCESS_LINK_UNAVAILABLE();
+  let payload;
+  try {
+    payload = JSON.parse(await decryptSecret(row.subscription_token_ciphertext, row.subscription_token_nonce, env.VPN_SECRETS_ENCRYPTION_KEY));
+  } catch (err) {
+    console.error("access link unseal failed:", err.message);
+    return ACCESS_LINK_UNAVAILABLE();
+  }
+  if (payload?.v !== 1 || payload.d !== row.device_id || typeof payload.t !== "string" ||
+      await subscriptionTokenHash(payload.t, env) !== row.subscription_token_hash) {
+    console.error("access link unseal mismatch for a client");
+    return ACCESS_LINK_UNAVAILABLE();
+  }
+  return { status: 200, body: { configuration_url: subscriptionUrl(request, payload.t, row.client_type) } };
+}
+
 export async function replaceAccessLink(db, env, request, user, linkId, clientId) {
   const accountId = await accountIdFor(db, user);
   const client = await ownedClient(db, accountId, linkId, clientId);
   if (!client || client.revoked_at) return failure(404, "client_not_found", "Client not found");
   const token = newSubscriptionToken();
-  const { data, error } = await db.from("external_vpn_devices").update({ subscription_token_hash: await subscriptionTokenHash(token, env), updated_at: new Date().toISOString() })
+  const stored = await sealAccessLink(env, clientId, token);
+  const { data, error } = await db.from("external_vpn_devices").update({ subscription_token_hash: await subscriptionTokenHash(token, env), ...stored, updated_at: new Date().toISOString() })
     .eq("device_id", clientId).eq("account_id", accountId).eq("link_id", linkId).is("revoked_at", null).select("device_id").maybeSingle();
   if (error) throw new Error(`token rotation failed: ${error.message}`);
   if (!data) return failure(404, "client_not_found", "Client not found");
