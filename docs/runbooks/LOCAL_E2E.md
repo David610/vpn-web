@@ -57,12 +57,12 @@ Use a separate project id and ports so this cannot collide with another stack:
 
 ```bash
 export ANON_KEY=<anon> SERVICE_ROLE_KEY=<service-role>
-node scripts/e2e/portal.cjs     # signup, login, create/copy/replace/move/revoke, capacity, isolation
-node scripts/e2e/telegram.cjs   # linking, every Mini App route, 1 h fresh-initData rule, UI
-node scripts/e2e/admin.cjs      # real TOTP MFA, directory counts, metadata-only detail, audit, login form
+node scripts/e2e/portal.mjs     # signup, login, create/copy/replace/move/revoke, capacity, isolation
+node scripts/e2e/telegram.mjs   # linking, every Mini App route, 1 h fresh-initData rule, UI
+node scripts/e2e/admin.mjs      # real TOTP MFA, directory counts, metadata-only detail, audit, login form
 ```
 
-`telegram.cjs` waits about a minute on purpose: the per-user write limiter allows 10 writes a minute.
+`telegram.mjs` waits about a minute on purpose: the per-user write limiter allows 10 writes a minute.
 Each run creates its own users, so re-running is safe.
 
 ## What this does not cover

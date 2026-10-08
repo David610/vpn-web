@@ -1,8 +1,8 @@
 // Run via docs/runbooks/LOCAL_E2E.md (needs the local stack described there). Requires ANON_KEY in the environment.
 // Real end-to-end run of the customer portal: real GoTrue auth, real Postgres,
 // real Pages Functions. Only Stripe is absent (a subscription row is seeded).
-const { chromium } = require("@playwright/test");
-const { execFileSync } = require("node:child_process");
+import { chromium } from "@playwright/test";
+import { execFileSync } from "node:child_process";
 
 const BASE = process.env.E2E_BASE ?? "http://127.0.0.1:8788";
 const API = process.env.E2E_API ?? "http://127.0.0.1:55321";

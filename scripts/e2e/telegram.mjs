@@ -1,9 +1,9 @@
 // Run via docs/runbooks/LOCAL_E2E.md (needs the local stack described there). Requires ANON_KEY in the environment.
 // Real end-to-end run of the Telegram Mini App: real GoTrue users, real Postgres,
 // real Pages Functions, initData signed exactly as Telegram signs it.
-const { chromium } = require("@playwright/test");
-const { execFileSync, } = require("node:child_process");
-const crypto = require("node:crypto");
+import { chromium } from "@playwright/test";
+import { execFileSync } from "node:child_process";
+import crypto from "node:crypto";
 
 const BASE = process.env.E2E_BASE ?? "http://127.0.0.1:8788";
 const API = process.env.E2E_API ?? "http://127.0.0.1:55321";
@@ -12,7 +12,6 @@ const BOT_TOKEN = "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11";
 const PASSWORD = "CorrectHorse-Battery-12";
 const TG_A = 700000 + Math.floor(Math.random() * 90000);
 const TG_B = TG_A + 1;
-const TG_UNLINKED = TG_A + 2;
 
 const results = [];
 const check = (name, ok, detail = "") => {

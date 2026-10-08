@@ -1,9 +1,9 @@
 // Run via docs/runbooks/LOCAL_E2E.md (needs the local stack described there). Requires ANON_KEY and SERVICE_ROLE_KEY in the environment.
 // Real end-to-end run of the admin area: real GoTrue users with real TOTP MFA,
 // real Postgres (RPCs included), real Pages Functions.
-const { chromium } = require("@playwright/test");
-const { execFileSync } = require("node:child_process");
-const crypto = require("node:crypto");
+import { chromium } from "@playwright/test";
+import { execFileSync } from "node:child_process";
+import crypto from "node:crypto";
 
 const BASE = process.env.E2E_BASE ?? "http://127.0.0.1:8788";
 const API = process.env.E2E_API ?? "http://127.0.0.1:55321";
