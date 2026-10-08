@@ -1772,3 +1772,5 @@ body {
 .admin-columns .admin-stat-rows { columns: 1; }
 /* A scroll container must contain its visually hidden children, or they widen the page. */
 .table-wrap { position: relative; }
+/* Region filter tabs: a single short label ("All") must still be a usable tap target. */
+.tabs__tab { min-width: 2.75rem; min-height: 2.75rem; text-align: center; }
