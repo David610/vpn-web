@@ -7,12 +7,14 @@
   --t-fg-2: #5f5f5a;
   --t-rule: #e4e4e1;
   --t-panel: #f5f5f3;
+  --t-ink: #0a0a0a;
+  --t-on-ink: #ffffff;
   --t-danger: #b91c1c;
-  min-height: 100vh;
+  min-height: var(--tg-viewport-stable-height, 100vh);
   background: var(--t-bg);
   color: var(--t-fg);
   font-family: var(--font-sans);
-  padding: 20px 16px 48px;
+  padding: 24px 16px calc(40px + env(safe-area-inset-bottom));
   max-width: 560px;
   margin: 0 auto;
 }
@@ -22,29 +24,64 @@
   --t-fg-2: #a3a39e;
   --t-rule: #2a2a28;
   --t-panel: #161615;
+  --t-ink: #f5f5f3;
+  --t-on-ink: #0a0a0a;
   --t-danger: #f87171;
 }
-.tma h1 { font-size: 28px; font-weight: 800; letter-spacing: -0.02em; margin: 0; }
-.tma h2 {
-  font-size: 12px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
-  margin: 32px 0 0; padding-bottom: 8px; border-bottom: 1px solid var(--t-fg);
-}
-.tma .muted { color: var(--t-fg-2); font-size: 14px; }
-.tma .row { padding: 14px 0; border-bottom: 1px solid var(--t-rule); }
-.tma .row-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
-.tma .strong { font-weight: 700; font-size: 16px; }
-.tma .big { font-size: 40px; font-weight: 800; letter-spacing: -0.03em; line-height: 1; }
-.tma .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.tma h1 { font-size: 34px; font-weight: 700; letter-spacing: -0.03em; line-height: 1.1; margin: 0; }
+.tma h2 { font-size: 22px; font-weight: 700; letter-spacing: -0.02em; margin: 0; }
+.tma p { margin: 0; }
+.tma .tg-lede { color: var(--t-fg-2); font-size: 17px; line-height: 1.45; margin-top: 10px; }
+.tma .tg-muted { color: var(--t-fg-2); font-size: 14px; }
+.tma .tg-stack { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; margin-top: 24px; }
+.tma .tg-stack--tight { gap: 10px; }
+
 .tma button, .tma select, .tma input {
-  font: inherit; font-size: 14px; color: var(--t-fg); background: var(--t-bg);
-  border: 1px solid var(--t-fg); border-radius: 6px; padding: 8px 12px; min-height: 36px;
+  font: inherit; font-size: 16px; color: var(--t-fg); background: var(--t-bg);
+  border: 1px solid var(--t-rule); border-radius: 10px; padding: 10px 14px; min-height: 44px;
 }
-.tma button.primary { background: var(--t-fg); color: var(--t-bg); font-weight: 700; }
-.tma button.danger { border-color: var(--t-danger); color: var(--t-danger); }
-.tma button:disabled { opacity: 0.4; }
 .tma select, .tma input { width: 100%; }
-.tma label { display: block; font-size: 12px; font-weight: 600; margin: 10px 0 4px; }
-.tma .notice { background: var(--t-panel); padding: 12px; border-radius: 6px; font-size: 14px; margin-top: 16px; }
-.tma .error { color: var(--t-danger); font-size: 14px; margin-top: 12px; }
-.tma a { color: var(--t-fg); text-decoration: underline; text-underline-offset: 3px; }
-.tma ol { padding-left: 20px; font-size: 14px; line-height: 1.6; }
+.tma input:focus-visible, .tma select:focus-visible, .tma button:focus-visible { outline: 2px solid var(--t-fg); outline-offset: 2px; }
+.tma button { cursor: pointer; }
+.tma button:disabled { opacity: 0.45; cursor: default; }
+.tma .tg-primary { background: var(--t-ink); color: var(--t-on-ink); border-color: var(--t-ink); font-weight: 600; min-height: 52px; border-radius: 12px; width: 100%; }
+.tma .tg-secondary { width: 100%; min-height: 48px; font-weight: 500; }
+.tma .tg-quiet { border: 0; background: none; padding: 0; min-height: 44px; text-decoration: underline; text-underline-offset: 3px; color: var(--t-fg-2); }
+.tma .tg-danger { border: 0; background: none; color: var(--t-danger); min-height: 44px; padding: 0; font-weight: 500; }
+.tma label.tg-field-label { display: block; font-size: 14px; font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--t-fg); margin-bottom: 8px; }
+.tma .tg-hint { color: var(--t-fg-2); font-size: 13px; margin-top: 6px; }
+.tma .tg-notice { background: var(--t-panel); padding: 12px 14px; border-radius: 10px; font-size: 14px; }
+.tma .tg-error { color: var(--t-danger); font-size: 14px; }
+
+.tma .tg-card { border: 1px solid var(--t-rule); border-radius: 16px; padding: 18px; }
+.tma .tg-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.tma .tg-card-title { font-size: 20px; font-weight: 700; letter-spacing: -0.01em; }
+.tma .tg-urlrow { display: flex; gap: 10px; margin-top: 14px; }
+.tma .tg-urlbox { flex: 1; min-width: 0; display: flex; align-items: center; padding: 0 14px; min-height: 48px; background: var(--t-panel); border-radius: 10px; color: var(--t-fg-2); font-size: 15px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.tma .tg-urlbox--open { font-family: var(--font-mono); font-size: 13px; color: var(--t-fg); user-select: all; -webkit-user-select: all; white-space: normal; overflow-wrap: anywhere; padding: 12px 14px; }
+.tma .tg-urlrow button { flex: none; min-height: 48px; padding: 0 20px; font-weight: 600; }
+.tma .tg-card-link { display: flex; align-items: center; justify-content: space-between; width: 100%; margin-top: 14px; padding: 14px 0 0; min-height: 52px; border: 0; border-top: 1px solid var(--t-rule); border-radius: 0; background: none; font-size: 17px; text-align: left; }
+.tma .tg-menu { position: relative; }
+.tma .tg-menu > button { border: 0; background: none; min-width: 44px; padding: 0; font-size: 22px; line-height: 1; }
+.tma .tg-menu-list { position: absolute; right: 0; top: 100%; z-index: 5; min-width: 180px; padding: 6px; background: var(--t-bg); border: 1px solid var(--t-rule); border-radius: 12px; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12); }
+.tma .tg-menu-list button { display: block; width: 100%; border: 0; background: none; text-align: left; border-radius: 8px; min-height: 44px; }
+.tma .tg-menu-list .tg-is-danger { color: var(--t-danger); }
+.tma .tg-plan { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.tma .tg-plan .tg-card-title { font-size: 20px; }
+.tma .tg-plan .tg-secondary { width: auto; flex: none; padding: 0 18px; }
+
+.tma fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+.tma legend { font-size: 14px; font-weight: 600; padding: 0; margin-bottom: 10px; }
+.tma .tg-choice { position: relative; display: flex; gap: 14px; align-items: flex-start; padding: 14px; border: 1px solid var(--t-rule); border-radius: 12px; margin-bottom: 10px; cursor: pointer; }
+.tma .tg-choice input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.tma .tg-choice .tg-dot { flex: none; width: 22px; height: 22px; margin-top: 1px; border: 1.5px solid var(--t-fg-2); border-radius: 50%; }
+.tma .tg-choice.tg-is-on { background: var(--t-ink); border-color: var(--t-ink); color: var(--t-on-ink); }
+.tma .tg-choice.tg-is-on .tg-dot { border-color: var(--t-on-ink); background: radial-gradient(circle, var(--t-on-ink) 0 38%, transparent 42%); }
+.tma .tg-choice.tg-is-disabled { opacity: 0.5; cursor: not-allowed; }
+.tma .tg-choice input:focus-visible ~ .tg-dot { outline: 2px solid var(--t-fg); outline-offset: 3px; }
+.tma .tg-choice strong { display: block; font-weight: 600; font-size: 16px; }
+.tma .tg-choice span.tg-text { display: block; font-size: 14px; margin-top: 2px; color: inherit; opacity: 0.75; }
+.tma .tg-urlrow .tg-primary { width: auto; flex: 1; border-radius: 10px; }
+.tma .tg-urlrow button:not(.tg-primary) { flex: 1; }
+.tma .tg-card, .tma .tg-stack > * { min-width: 0; }
+.tma .tg-card { background: none; padding: 18px; margin: 0; }
