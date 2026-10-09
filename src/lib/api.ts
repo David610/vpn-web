@@ -1,4 +1,5 @@
 import type { Session } from "@supabase/supabase-js";
+import { apiUrl } from "./api-base";
 
 export class ApiError extends Error {
   constructor(
@@ -19,7 +20,7 @@ export async function api<T = unknown>(
   path: string,
   init: { method?: string; body?: unknown; headers?: Record<string, string> } = {}
 ): Promise<T> {
-  const res = await fetch(path, {
+  const res = await fetch(apiUrl(path), {
     method: init.method ?? (init.body === undefined ? "GET" : "POST"),
     headers: {
       Authorization: `Bearer ${session.access_token}`,

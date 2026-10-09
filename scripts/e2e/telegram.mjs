@@ -6,6 +6,7 @@ import { execFileSync } from "node:child_process";
 import crypto from "node:crypto";
 
 const BASE = process.env.E2E_BASE ?? "http://127.0.0.1:8788";
+const API_ORIGIN = process.env.E2E_API_BASE ?? BASE;
 const API = process.env.E2E_API ?? "http://127.0.0.1:55321";
 const ANON = process.env.ANON_KEY;
 const BOT_TOKEN = "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11";
@@ -28,7 +29,7 @@ function initData(telegramId, ageSeconds = 0, token = BOT_TOKEN) {
   return new URLSearchParams({ ...fields, hash }).toString();
 }
 async function tg(path, telegramId, { method = "GET", body, age = 0 } = {}) {
-  const res = await fetch(`${BASE}${path}`, {
+  const res = await fetch(`${API_ORIGIN}${path}`, {
     method,
     headers: { "X-Telegram-Init-Data": initData(telegramId, age), ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -54,21 +55,21 @@ const fetchText = async (url) => { const r = await fetch(url); return { status: 
   check("unlinked Telegram user gets 403 not_linked", unlinked.status === 403 && unlinked.json.code === "not_linked");
 
   // 2. Real linking: the website makes a code, the Mini App redeems it with signed initData.
-  const codeRes = await fetch(`${BASE}/api/account/telegram/link-code`, { method: "POST", headers: { Authorization: `Bearer ${A.token}` } });
+  const codeRes = await fetch(`${API_ORIGIN}/api/account/telegram/link-code`, { method: "POST", headers: { Authorization: `Bearer ${A.token}` } });
   const code = (await codeRes.json()).code;
   check("website issues a Telegram linking code", codeRes.status === 200 && !!code, `status ${codeRes.status}`);
   const linked = await tg("/api/telegram/link", TG_A, { method: "POST", body: { code } });
   check("the Mini App links the account with that code", linked.status === 200, `status ${linked.status} ${JSON.stringify(linked.json).slice(0, 80)}`);
-  const codeB = (await (await fetch(`${BASE}/api/account/telegram/link-code`, { method: "POST", headers: { Authorization: `Bearer ${B.token}` } })).json()).code;
+  const codeB = (await (await fetch(`${API_ORIGIN}/api/account/telegram/link-code`, { method: "POST", headers: { Authorization: `Bearer ${B.token}` } })).json()).code;
   await tg("/api/telegram/link", TG_B, { method: "POST", body: { code: codeB } });
 
   // 3. Authentication.
-  const noHeader = await fetch(`${BASE}/api/telegram/links`);
+  const noHeader = await fetch(`${API_ORIGIN}/api/telegram/links`);
   check("no initData: 401", noHeader.status === 401);
-  const wrongBot = await (await fetch(`${BASE}/api/telegram/links`, { headers: { "X-Telegram-Init-Data": initData(TG_A, 0, "999:wrong-token") } })).status;
+  const wrongBot = await (await fetch(`${API_ORIGIN}/api/telegram/links`, { headers: { "X-Telegram-Init-Data": initData(TG_A, 0, "999:wrong-token") } })).status;
   check("initData signed with another bot token: 401", wrongBot === 401);
   const tampered = initData(TG_A).replace(`%22id%22%3A${TG_A}`, `%22id%22%3A${TG_B}`);
-  const tamperedStatus = (await fetch(`${BASE}/api/telegram/links`, { headers: { "X-Telegram-Init-Data": tampered } })).status;
+  const tamperedStatus = (await fetch(`${API_ORIGIN}/api/telegram/links`, { headers: { "X-Telegram-Init-Data": tampered } })).status;
   check("tampered initData (swapped user id): 401", tamperedStatus === 401);
   check("initData older than 24h is rejected for reads", (await tg("/api/telegram/links", TG_A, { age: 25 * 3600 })).status === 401);
 

@@ -4,6 +4,7 @@ import { useState, type FormEvent } from "react";
 import Link from "next/link";
 import Nav from "@/components/Nav";
 import Footer from "@/components/Footer";
+import { apiUrl } from "@/lib/api-base";
 
 export default function ForgotPasswordPage() {
   const [email, setEmail] = useState("");
@@ -20,7 +21,7 @@ export default function ForgotPasswordPage() {
     // only on GoTrue's own coarse per-IP limits. The route always returns
     // the same generic shape, so there is nothing to branch on here either.
     try {
-      await fetch("/api/account/password-reset", {
+      await fetch(apiUrl("/api/account/password-reset"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

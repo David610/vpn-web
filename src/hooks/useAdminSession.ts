@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useSession } from "@/hooks/useSession";
 import { supabaseAdmin } from "@/lib/supabase";
+import { apiUrl } from "@/lib/api-base";
 
 /**
  * Admin access has three distinct outcomes, not two, and the dashboard
@@ -31,7 +32,7 @@ export function useAdminSession() {
       return;
     }
     let cancelled = false;
-    fetch("/api/admin/overview", {
+    fetch(apiUrl("/api/admin/overview"), {
       headers: { Authorization: `Bearer ${session.access_token}` },
     })
       .then(async (res) => {

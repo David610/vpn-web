@@ -145,6 +145,22 @@ beforeEach(() => {
   };
 });
 
+describe("CREATE_NODE worker URL", () => {
+  it("points new nodes at the separate API origin when one is configured", async () => {
+    ctx.env = { ...env, PUBLIC_API_ORIGIN: "https://api.arcana.example.test" };
+    await advance();
+    const { userData } = provider.createInstance.mock.calls[0][0];
+    expect(userData).toContain("WORKER_URL=https://api.arcana.example.test");
+    expect(userData).not.toContain("WORKER_URL=https://arcana.example.test");
+  });
+
+  it("falls back to SITE_URL when the API is served from the site origin", async () => {
+    await advance();
+    const { userData } = provider.createInstance.mock.calls[0][0];
+    expect(userData).toContain("WORKER_URL=https://arcana.example.test");
+  });
+});
+
 describe("CREATE_NODE operation", () => {
   it("drives a node from PROVISIONING to READY across ticks, gated on real signals at each step", async () => {
     // Tick 1: server created, DNS published, then waits for enrollment.

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Flag from "@/components/Flag";
 import { REGIONS, countryName, regionOf, type Region } from "@/lib/regions";
+import { apiUrl } from "@/lib/api-base";
 
 type Location = { countryCode: string; city: string | null; name: string };
 type Country = { code: string; name: string; region: Region | null; cities: string[] };
@@ -33,7 +34,7 @@ export default function LocationsList() {
 
   useEffect(() => {
     let cancelled = false;
-    fetch("/api/locations")
+    fetch(apiUrl("/api/locations"))
       .then((res) => (res.ok ? res.json() : Promise.reject(new Error(String(res.status)))))
       .then((body: { locations?: Location[] }) => {
         if (!cancelled) setLocations(body.locations ?? []);

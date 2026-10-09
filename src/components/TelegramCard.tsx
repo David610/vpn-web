@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
+import { apiUrl } from "@/lib/api-base";
 
 type Status =
   | { phase: "loading" }
@@ -17,7 +18,7 @@ export function TelegramCard({ session }: { session: Session }) {
 
   async function loadStatus() {
     try {
-      const res = await fetch("/api/account/telegram", {
+      const res = await fetch(apiUrl("/api/account/telegram"), {
         headers: { Authorization: `Bearer ${session.access_token}` },
       });
       if (!res.ok) throw new Error("Could not load Telegram link status.");
@@ -41,7 +42,7 @@ export function TelegramCard({ session }: { session: Session }) {
     setError(null);
     setBusy(true);
     try {
-      const res = await fetch("/api/account/telegram/link-code", {
+      const res = await fetch(apiUrl("/api/account/telegram/link-code"), {
         method: "POST",
         headers: { Authorization: `Bearer ${session.access_token}` },
       });
@@ -63,7 +64,7 @@ export function TelegramCard({ session }: { session: Session }) {
     setError(null);
     setBusy(true);
     try {
-      const res = await fetch("/api/account/telegram/unlink", {
+      const res = await fetch(apiUrl("/api/account/telegram/unlink"), {
         method: "POST",
         headers: { Authorization: `Bearer ${session.access_token}` },
       });

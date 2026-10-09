@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import Nav from "@/components/Nav";
 import Footer from "@/components/Footer";
 import { useSession } from "@/hooks/useSession";
+import { apiUrl } from "@/lib/api-base";
 
 type Phase =
   | { name: "reading" }
@@ -36,7 +37,7 @@ export default function InvitePage() {
     async (accessToken: string, inviteToken: string) => {
       setPhase({ name: "accepting" });
       try {
-        const res = await fetch("/api/account/accept-invite", {
+        const res = await fetch(apiUrl("/api/account/accept-invite"), {
           method: "POST",
           headers: {
             Authorization: `Bearer ${accessToken}`,

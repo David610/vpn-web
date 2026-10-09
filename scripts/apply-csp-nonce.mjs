@@ -53,6 +53,7 @@
 import { randomBytes } from "node:crypto";
 import { readFileSync, writeFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
+import { addApiOrigin, apiOriginFrom } from "./csp-api-origin.mjs";
 
 const OUT_DIR = path.resolve("out");
 const PLACEHOLDER = "__CSP_NONCE__";
@@ -110,7 +111,8 @@ if (!headersOriginal.includes(PLACEHOLDER)) {
   console.error(`apply-csp-nonce: ${PLACEHOLDER} not found in ${headersPath} -- CSP script-src was not wired up as expected.`);
   process.exit(1);
 }
-const headersUpdated = headersOriginal.split(PLACEHOLDER).join(nonce);
+const apiOrigin = apiOriginFrom(process.env.NEXT_PUBLIC_API_BASE_URL);
+const headersUpdated = addApiOrigin(headersOriginal.split(PLACEHOLDER).join(nonce), apiOrigin);
 writeFileSync(headersPath, headersUpdated, "utf8");
 
 console.log(

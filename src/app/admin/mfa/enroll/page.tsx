@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from "react"
 import { useRouter } from "next/navigation";
 import AuthShell from "@/components/auth/AuthShell";
 import { supabaseAdmin } from "@/lib/supabase";
+import { apiUrl } from "@/lib/api-base";
 
 type Enrollment = { factorId: string; qrCode: string; secret: string };
 
@@ -32,7 +33,7 @@ export default function AdminMfaEnrollPage() {
     // who wandered onto this URL would be logged out everywhere to gain a
     // factor nothing ever challenges. 403 + mfa_required is the server
     // saying "admin, not stepped up" — exactly who belongs here.
-    const probe = await fetch("/api/admin/overview", {
+    const probe = await fetch(apiUrl("/api/admin/overview"), {
       headers: { Authorization: `Bearer ${sessionData.session.access_token}` },
     });
     if (probe.ok) {

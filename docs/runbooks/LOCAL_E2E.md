@@ -65,6 +65,24 @@ node scripts/e2e/admin.mjs      # real TOTP MFA, directory counts, metadata-only
 `telegram.mjs` waits about a minute on purpose: the per-user write limiter allows 10 writes a minute.
 Each run creates its own users, so re-running is safe.
 
+## 4. Split mode (static site and API on different origins)
+
+Same stack, but the website is static-only and the API is the portable Node server
+(see `CLOUDFLARE_BLOCK_RECOVERY.md`):
+
+```bash
+NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8787 <the build env from step 2> npm run build
+npm run stage-static-site        # dist-static/site: no Functions bundle
+# local only: add http://127.0.0.1:55321 to connect-src in dist-static/site/_headers
+(cd dist-static && node ../node_modules/wrangler/bin/wrangler.js pages dev site --port 8788 --ip 127.0.0.1)
+SUPABASE_URL=... SUPABASE_SERVICE_ROLE_KEY=... SUBSCRIPTION_TOKEN_HASH_KEY=... VPN_SECRETS_ENCRYPTION_KEY=... \
+  API_PORT=8787 PUBLIC_API_ORIGIN=http://127.0.0.1:8787 CORS_ALLOWED_ORIGINS=http://127.0.0.1:8788 \
+  node server/index.mjs
+E2E_API_BASE=http://127.0.0.1:8787 node scripts/e2e/portal.mjs   # likewise telegram.mjs, admin.mjs
+```
+
+Last verified 2026-10-09: portal 37/37, Telegram 44/44, admin 28/28.
+
 ## What this does not cover
 
 Real Stripe checkout and webhooks, a real Telegram client, real VPN nodes and tunnels

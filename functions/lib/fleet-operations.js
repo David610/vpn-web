@@ -130,7 +130,7 @@ const CREATE_NODE_HANDLERS = {
     if (!stored) throw new FatalStepError("node left PROVISIONING while creating its server");
 
     const userData = buildNodeBootstrapUserData({
-      workerUrl: env.SITE_URL,
+      workerUrl: env.PUBLIC_API_ORIGIN || env.SITE_URL,
       nodeId: node.node_id,
       role: node.role,
       hostname: node.hostname,

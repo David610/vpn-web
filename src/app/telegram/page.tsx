@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import "./telegram.css";
 import { configurationDetail, configurationSummary, routingOf, type LocationChoice, type Routing, type VpnLink } from "@/components/account/links";
 import { isValidLinkName } from "@/lib/link-first-client";
+import { apiUrl } from "@/lib/api-base";
 
 type MiniRoute = { id: string; displayName: string; region: string; privacyClass: string };
 type Plan = {
@@ -56,7 +57,7 @@ function webApp(): TelegramWebApp | undefined {
 }
 
 async function call<T>(path: string, init: { method?: string; body?: unknown } = {}): Promise<T> {
-  const res = await fetch(path, {
+  const res = await fetch(apiUrl(path), {
     method: init.method ?? (init.body === undefined ? "GET" : "POST"),
     headers: {
       "X-Telegram-Init-Data": webApp()?.initData ?? "",

@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import AuthShell from "@/components/auth/AuthShell";
 import PasswordField from "@/components/auth/PasswordField";
 import { supabaseAdmin } from "@/lib/supabase";
+import { apiUrl } from "@/lib/api-base";
 
 type Phase = "credentials" | "totp";
 
@@ -27,7 +28,7 @@ export default function AdminLoginPage() {
    * an MFA prompt for a role they do not hold.
    */
   async function routeBySessionLevel(accessToken: string, otp = "") {
-    const res = await fetch("/api/admin/overview", {
+    const res = await fetch(apiUrl("/api/admin/overview"), {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
 

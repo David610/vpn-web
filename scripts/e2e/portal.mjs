@@ -5,6 +5,7 @@ import { chromium } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 
 const BASE = process.env.E2E_BASE ?? "http://127.0.0.1:8788";
+const API_ORIGIN = process.env.E2E_API_BASE ?? BASE;
 const API = process.env.E2E_API ?? "http://127.0.0.1:55321";
 const ANON = process.env.ANON_KEY;
 const EMAIL = `e2e+${Date.now()}@example.test`;
@@ -83,7 +84,7 @@ async function signup(email) {
   const created = await page.locator(".created").count();
   check("create link: 'ready' panel with the access link", created === 1);
   const url1 = created ? await urlOf() : "";
-  check("create link: URL has the expected shape", /^http:\/\/127\.0\.0\.1:8788\/sub\/[A-Za-z0-9_-]{43}\?format=links$/.test(url1), url1.slice(0, 60));
+  check("create link: URL has the expected shape", url1.startsWith(`${API_ORIGIN}/sub/`) && /^\/sub\/[A-Za-z0-9_-]{43}\?format=links$/.test(url1.slice(API_ORIGIN.length)), url1.slice(0, 60));
 
   // 5. The real VPN endpoint serves a configuration for that link.
   if (url1) {
@@ -219,12 +220,12 @@ async function signup(email) {
 
   // 13. Isolation between customers (second real account).
   const tokenB = await signup(`e2e-b+${Date.now()}@example.test`);
-  const listB = await (await fetch(`${BASE}/api/account/links`, { headers: { Authorization: `Bearer ${tokenB}` } })).json().catch(() => ({}));
+  const listB = await (await fetch(`${API_ORIGIN}/api/account/links`, { headers: { Authorization: `Bearer ${tokenB}` } })).json().catch(() => ({}));
   check("isolation: another customer sees none of these links", Array.isArray(listB.links) ? listB.links.length === 0 : false || listB.error === "Account not found");
   const aLink = psql(`select id||'|'||(select device_id from public.external_vpn_devices e where e.link_id=l.id and e.revoked_at is null limit 1) from public.vpn_links l where status='active' and account_id='${acct}' limit 1`).split("|");
-  const crossReveal = await fetch(`${BASE}/api/account/links/${aLink[0]}/clients/${aLink[1]}/access-link`, { headers: { Authorization: `Bearer ${tokenB}` } });
+  const crossReveal = await fetch(`${API_ORIGIN}/api/account/links/${aLink[0]}/clients/${aLink[1]}/access-link`, { headers: { Authorization: `Bearer ${tokenB}` } });
   check("isolation: another customer cannot reveal a link (404)", crossReveal.status === 404, `status ${crossReveal.status}`);
-  const noAuth = await fetch(`${BASE}/api/account/links/${aLink[0]}/clients/${aLink[1]}/access-link`);
+  const noAuth = await fetch(`${API_ORIGIN}/api/account/links/${aLink[0]}/clients/${aLink[1]}/access-link`);
   check("isolation: no session cannot reveal a link (401)", noAuth.status === 401, `status ${noAuth.status}`);
 
   // 14. Privacy: rate-limit keys are opaque hashes, never an email or an IP.

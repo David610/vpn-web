@@ -6,6 +6,7 @@ import { execFileSync } from "node:child_process";
 import crypto from "node:crypto";
 
 const BASE = process.env.E2E_BASE ?? "http://127.0.0.1:8788";
+const API_ORIGIN = process.env.E2E_API_BASE ?? BASE;
 const API = process.env.E2E_API ?? "http://127.0.0.1:55321";
 const ANON = process.env.ANON_KEY;
 const PASSWORD = "CorrectHorse-Battery-12";
@@ -41,7 +42,7 @@ async function authApi(path, token, body) {
   return { status: res.status, json: await res.json() };
 }
 const admin = async (path, token, init = {}) => {
-  const res = await fetch(`${BASE}/api/admin${path}`, { ...init, headers: { Authorization: `Bearer ${token}`, ...(init.headers ?? {}) } });
+  const res = await fetch(`${API_ORIGIN}/api/admin${path}`, { ...init, headers: { Authorization: `Bearer ${token}`, ...(init.headers ?? {}) } });
   return { status: res.status, json: await res.json().catch(() => ({})), text: "" };
 };
 
@@ -52,9 +53,9 @@ const admin = async (path, token, init = {}) => {
   const custId = cust.json.user.id;
   psql(`insert into public.subscriptions(account_id,stripe_subscription_id,status,name,extra_seats,current_period_end) select m.account_id,'sub_adm_${Date.now()}','active','Arcana',0,now()+interval '30 days' from public.account_members m where m.user_id='${custId}'`);
   for (const [name, route] of [["Personal", "route_e2e_de_fast"], ["Travel", "route_e2e_nl_fast"]]) {
-    const created = await fetch(`${BASE}/api/account/links`, { method: "POST", headers: { Authorization: `Bearer ${cust.json.access_token}`, "Content-Type": "application/json" }, body: JSON.stringify({ name, routeId: route, maxClients: 1, locationMode: name === "Personal" ? "auto" : "manual" }) });
+    const created = await fetch(`${API_ORIGIN}/api/account/links`, { method: "POST", headers: { Authorization: `Bearer ${cust.json.access_token}`, "Content-Type": "application/json" }, body: JSON.stringify({ name, routeId: route, maxClients: 1, locationMode: name === "Personal" ? "auto" : "manual" }) });
     const { id } = await created.json();
-    await fetch(`${BASE}/api/account/links/${id}/clients`, { method: "POST", headers: { Authorization: `Bearer ${cust.json.access_token}`, "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() }, body: JSON.stringify({ name, clientType: "links", subscriptionId: psql(`select s.id from public.subscriptions s join public.account_members m on m.account_id=s.account_id where m.user_id='${custId}' limit 1`) }) });
+    await fetch(`${API_ORIGIN}/api/account/links/${id}/clients`, { method: "POST", headers: { Authorization: `Bearer ${cust.json.access_token}`, "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() }, body: JSON.stringify({ name, clientType: "links", subscriptionId: psql(`select s.id from public.subscriptions s join public.account_members m on m.account_id=s.account_id where m.user_id='${custId}' limit 1`) }) });
   }
 
   // 1. The admin: a real user, an admin_users row, no second factor yet.
@@ -67,7 +68,7 @@ const admin = async (path, token, init = {}) => {
   const custTry = await admin("/overview", cust.json.access_token);
   check("a customer calling the admin API is refused (401)", custTry.status === 401, `status ${custTry.status}`);
   check("a customer cannot list customers either (401)", (await admin("/customers", cust.json.access_token)).status === 401);
-  check("no session at all: 401", (await fetch(`${BASE}/api/admin/overview`)).status === 401);
+  check("no session at all: 401", (await fetch(`${API_ORIGIN}/api/admin/overview`)).status === 401);
 
   // 2. Real TOTP enrolment and step-up to aal2.
   const enrol = await authApi("/factors", aal1, { factor_type: "totp", friendly_name: "e2e", issuer: "Arcana" });

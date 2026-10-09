@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { api, ApiError } from "@/lib/api";
+import { linkHost } from "@/lib/api-base";
 
 export type AccessState = "hidden" | "loading" | "revealed" | "unavailable" | "none" | "error";
 
@@ -105,6 +106,5 @@ export function useAccessLink(session: Session, linkId: string, clientId: string
 
 /** The masked placeholder shown while a link is hidden. */
 export function maskedLink() {
-  const host = typeof window === "undefined" ? "arcana" : window.location.host;
-  return `https://${host}/sub/${"•".repeat(16)}`;
+  return `https://${linkHost()}/sub/${"•".repeat(16)}`;
 }
