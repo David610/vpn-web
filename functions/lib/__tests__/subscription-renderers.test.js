@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { renderers, UnsupportedClientModeError } from "../subscription-renderers.js";
+import { renderers, UnsupportedClientModeError, encodeSubscriptionBase64 } from "../subscription-renderers.js";
 import { clientCapabilities, isSupportedClient, protocolsForMode, supportsMode } from "../client-capabilities.js";
 import { readFileSync } from "node:fs";
 
@@ -22,6 +22,23 @@ describe("subscription renderers", () => {
       if (format === "incy" || format === "xray") expect(first).not.toContain("hysteria2://");
       expect(first).toBe(readFileSync(new URL(`../../../fixtures/subscriptions/${format}-fast.golden`, import.meta.url), "utf8"));
     }
+  });
+
+  it("brackets IPv6 literal authorities in URIs but preserves native sing-box hosts", () => {
+    const ipv6 = { ...route, server: "2001:db8::1" };
+    for (const format of ["hiddify", "shadowrocket", "incy", "links"]) {
+      const text = renderers[format]({ route: ipv6, credential });
+      for (const link of text.trim().split("\n")) {
+        expect(link).toContain("@[2001:db8::1]:443?");
+        expect(new URL(link).hostname).toBe("[2001:db8::1]");
+      }
+    }
+    expect(JSON.parse(renderers.singbox({ route: ipv6, credential })).outbounds[0].server).toBe("2001:db8::1");
+  });
+
+  it("Base64 Shadowrocket output decodes to the unchanged plain-text feed", () => {
+    const plain = renderers.shadowrocket({ route, credential });
+    expect(atob(encodeSubscriptionBase64(plain))).toBe(plain);
   });
 
   it("rejects Privacy+ for every unqualified external client without fallback", () => {
