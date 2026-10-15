@@ -9,7 +9,7 @@ import { configurationDetail, configurationSummary, type VpnLink } from "@/compo
 import { LIVE, monthlyCents, statusLabel } from "@/components/account/types";
 import { ConfirmDialog } from "@/components/Dialog";
 import { api, euro, shortDate } from "@/lib/api";
-import { SUBSCRIPTION_CLIENTS, subscriptionForClient, type SubscriptionClient } from "@/lib/subscription-client-link";
+import { SUBSCRIPTION_CLIENTS, tryClientSubscription, type SubscriptionClient } from "@/lib/subscription-client-link";
 
 function PlanStrip() {
   const { overview } = useAccount();
@@ -102,7 +102,7 @@ function LinkRow({ link, onChanged }: { link: VpnLink; onChanged: () => Promise<
   }
 
   const detailHref = `/account/links/detail/?id=${encodeURIComponent(link.id)}`;
-  const shown = access.state === "revealed" && access.url ? subscriptionForClient(access.url, clientFormat) : maskedLink();
+  const shown = access.state === "revealed" && access.url ? (tryClientSubscription(access.url, clientFormat) ?? access.url) : maskedLink();
 
   return (
     <li className="link-row">

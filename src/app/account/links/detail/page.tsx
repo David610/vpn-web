@@ -20,7 +20,7 @@ import {
 import { ConfirmDialog } from "@/components/Dialog";
 import { api, ApiError, newIdempotencyKey } from "@/lib/api";
 import { firstClientName, subscriptionForFirstClient } from "@/lib/link-first-client";
-import { SUBSCRIPTION_CLIENTS, subscriptionForClient, type SubscriptionClient } from "@/lib/subscription-client-link";
+import { SUBSCRIPTION_CLIENTS, tryClientSubscription, type SubscriptionClient } from "@/lib/subscription-client-link";
 
 type Detail = { link: VpnLink; clients: LinkClient[] };
 type Replacement = { id: string; url: string; oldRevoked: boolean };
@@ -29,7 +29,7 @@ function ReplacementPanel({ replacement }: { replacement: Replacement }) {
   const router = useRouter();
   const [copied, setCopied] = useState(false);
   const [clientFormat, setClientFormat] = useState<SubscriptionClient>("hiddify");
-  const clientUrl = subscriptionForClient(replacement.url, clientFormat);
+  const clientUrl = tryClientSubscription(replacement.url, clientFormat) ?? replacement.url;
   return (
     <section className="created" aria-labelledby="replacement-heading">
       <h2 id="replacement-heading">Your new link is ready</h2>
@@ -241,7 +241,7 @@ function LinkDetailBody() {
     }
   }
 
-  const shown = access.state === "revealed" && access.url ? subscriptionForClient(access.url, clientFormat) : maskedLink();
+  const shown = access.state === "revealed" && access.url ? (tryClientSubscription(access.url, clientFormat) ?? access.url) : maskedLink();
 
   return (
     <>

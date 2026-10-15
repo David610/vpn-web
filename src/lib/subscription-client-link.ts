@@ -13,6 +13,15 @@ export const SUBSCRIPTION_CLIENTS: readonly { value: SubscriptionClient; label: 
   { value: "singbox", label: "sing-box (JSON)" },
 ];
 
+/** For render paths: a link that cannot be converted must never crash the page. */
+export function tryClientSubscription(accessUrl: string, client: SubscriptionClient): string | null {
+  try {
+    return subscriptionForClient(accessUrl, client);
+  } catch {
+    return null;
+  }
+}
+
 export function subscriptionForClient(accessUrl: string, client: SubscriptionClient): string {
   const url = new URL(accessUrl);
   if (url.protocol !== "https:" && !(url.protocol === "http:" && ["localhost", "127.0.0.1"].includes(url.hostname))) {

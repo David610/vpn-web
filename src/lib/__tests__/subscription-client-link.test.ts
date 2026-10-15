@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { subscriptionForClient, SUBSCRIPTION_CLIENTS } from "../subscription-client-link";
+import { subscriptionForClient, SUBSCRIPTION_CLIENTS, tryClientSubscription } from "../subscription-client-link";
 
 const token = "a".repeat(43);
 const generic = `https://account.example/sub/${token}?format=links`;
@@ -36,5 +36,12 @@ describe("client-aware subscription links", () => {
   it("works with local test URLs without weakening remote HTTPS", () => {
     const local = `http://localhost:8788/sub/${token}?format=links`;
     expect(subscriptionForClient(local, "incy")).toBe(`http://localhost:8788/sub/${token}?format=incy`);
+  });
+
+  it("never throws while rendering: an unrecognised URL yields null so the page can fall back", () => {
+    expect(tryClientSubscription("not a url", "hiddify")).toBeNull();
+    expect(tryClientSubscription("https://account.example/sub/short?format=links", "hiddify")).toBeNull();
+    expect(tryClientSubscription(generic, "shadowrocket"))
+      .toBe(`https://account.example/sub/${token}?format=shadowrocket&encoding=base64`);
   });
 });

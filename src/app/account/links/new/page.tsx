@@ -7,7 +7,7 @@ import ChoiceGroup from "@/components/account/ChoiceGroup";
 import { pickAutomaticRoute, type LocationChoice, type RouteOption, type Routing } from "@/components/account/links";
 import { api, ApiError, newIdempotencyKey } from "@/lib/api";
 import { firstClientName, isValidLinkName, subscriptionForFirstClient } from "@/lib/link-first-client";
-import { SUBSCRIPTION_CLIENTS, subscriptionForClient, type SubscriptionClient } from "@/lib/subscription-client-link";
+import { SUBSCRIPTION_CLIENTS, tryClientSubscription, type SubscriptionClient } from "@/lib/subscription-client-link";
 
 const NAME_HINT = "Use letters, numbers, spaces and . _ ' ( ) - (up to 40 characters).";
 
@@ -16,7 +16,7 @@ type Created = { id: string; url: string };
 function CreatedPanel({ created }: { created: Created }) {
   const [copied, setCopied] = useState(false);
   const [client, setClient] = useState<SubscriptionClient>("hiddify");
-  const clientUrl = subscriptionForClient(created.url, client);
+  const clientUrl = tryClientSubscription(created.url, client) ?? created.url;
   async function copy() {
     try {
       await navigator.clipboard.writeText(clientUrl);
