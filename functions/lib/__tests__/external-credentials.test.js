@@ -1,8 +1,20 @@
 import { describe, expect, it } from "vitest";
 import { hmacSha256Hex } from "../crypto.js";
-import { legacySubscriptionTokenHash, mintCompatibilityCredentials, newOpaqueId, newSubscriptionToken, rateLimitIpHash, subscriptionTokenHash } from "../external-credentials.js";
+import { legacySubscriptionTokenHash, mintCompatibilityCredentials, newOpaqueId, newSubscriptionToken, rateLimitIpHash, subscriptionTokenHash, subscriptionUrl } from "../external-credentials.js";
 
 const env = { VPN_SECRETS_ENCRYPTION_KEY: "22".repeat(32) };
+
+describe("client-specific subscription URL generation", () => {
+  const req = { url: "https://account.example/account" };
+  it("opts new Shadowrocket links into Base64 without changing other clients", () => {
+    expect(subscriptionUrl(req, "synthetic-token", "shadowrocket"))
+      .toBe("https://account.example/sub/synthetic-token?format=shadowrocket&encoding=base64");
+    expect(subscriptionUrl(req, "synthetic-token", "incy"))
+      .toBe("https://account.example/sub/synthetic-token?format=incy");
+    expect(subscriptionUrl(req, "synthetic-token", "hiddify"))
+      .toBe("https://account.example/sub/synthetic-token?format=hiddify");
+  });
+});
 
 describe("external credential identifiers", () => {
   it("uses independent high-entropy opaque identifiers", () => {
