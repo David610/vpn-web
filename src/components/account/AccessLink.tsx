@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { api, ApiError } from "@/lib/api";
+import { subscriptionForClient, type SubscriptionClient } from "@/lib/subscription-client-link";
 
 export type AccessState = "hidden" | "loading" | "revealed" | "unavailable" | "none" | "error";
 
@@ -78,11 +79,11 @@ export function useAccessLink(session: Session, linkId: string, clientId: string
     setState(clientId ? "hidden" : "none");
   }, [clientId]);
 
-  const copy = useCallback(async () => {
+  const copy = useCallback(async (client: SubscriptionClient = "links") => {
     const value = url ?? (await fetchUrl());
     if (!value) return;
     try {
-      await navigator.clipboard.writeText(value);
+      await navigator.clipboard.writeText(subscriptionForClient(value, client));
       setCopied(true);
       clearTimeout(copiedTimer.current);
       copiedTimer.current = setTimeout(() => setCopied(false), COPIED_MS);
@@ -93,7 +94,7 @@ export function useAccessLink(session: Session, linkId: string, clientId: string
       }
     } catch {
       show(value);
-      setMessage("Copying was blocked by your browser. Select the link and copy it.");
+      setMessage("Could not copy this client link. Check the selected app and try again.");
     }
   }, [url, fetchUrl, show, state]);
 
