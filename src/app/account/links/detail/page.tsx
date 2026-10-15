@@ -20,6 +20,7 @@ import {
 import { ConfirmDialog } from "@/components/Dialog";
 import { api, ApiError, newIdempotencyKey } from "@/lib/api";
 import { firstClientName, subscriptionForFirstClient } from "@/lib/link-first-client";
+import { SUBSCRIPTION_CLIENTS, subscriptionForClient, type SubscriptionClient } from "@/lib/subscription-client-link";
 
 type Detail = { link: VpnLink; clients: LinkClient[] };
 type Replacement = { id: string; url: string; oldRevoked: boolean };
@@ -27,12 +28,18 @@ type Replacement = { id: string; url: string; oldRevoked: boolean };
 function ReplacementPanel({ replacement }: { replacement: Replacement }) {
   const router = useRouter();
   const [copied, setCopied] = useState(false);
+  const [clientFormat, setClientFormat] = useState<SubscriptionClient>("hiddify");
+  const clientUrl = subscriptionForClient(replacement.url, clientFormat);
   return (
     <section className="created" aria-labelledby="replacement-heading">
       <h2 id="replacement-heading">Your new link is ready</h2>
       <p>Update it in your VPN client. Anyone with this link can connect, so keep it private.</p>
+      <label className="field-label" htmlFor="replacement-client">VPN app</label>
+      <select className="field select" id="replacement-client" value={clientFormat} onChange={(e) => { setClientFormat(e.target.value as SubscriptionClient); setCopied(false); }}>
+        {SUBSCRIPTION_CLIENTS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+      </select>
       <div className="linkfield linkfield--open">
-        <code onClick={(e) => window.getSelection()?.selectAllChildren(e.currentTarget)}>{replacement.url}</code>
+        <code onClick={(e) => window.getSelection()?.selectAllChildren(e.currentTarget)}>{clientUrl}</code>
       </div>
       {replacement.oldRevoked ? (
         <p className="muted">The previous link no longer works.</p>
@@ -47,7 +54,7 @@ function ReplacementPanel({ replacement }: { replacement: Replacement }) {
           className="btn btn-primary btn-lg"
           onClick={async () => {
             try {
-              await navigator.clipboard.writeText(replacement.url);
+              await navigator.clipboard.writeText(clientUrl);
               setCopied(true);
             } catch {
               setCopied(false);
@@ -78,6 +85,7 @@ function LinkDetailBody() {
   const [confirm, setConfirm] = useState<"revoke" | "replace" | "move" | null>(null);
   const [replacement, setReplacement] = useState<Replacement | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [clientFormat, setClientFormat] = useState<SubscriptionClient>("hiddify");
 
   const load = useCallback(async () => {
     if (!id) {
@@ -233,7 +241,7 @@ function LinkDetailBody() {
     }
   }
 
-  const shown = access.state === "revealed" && access.url ? access.url : maskedLink();
+  const shown = access.state === "revealed" && access.url ? subscriptionForClient(access.url, clientFormat) : maskedLink();
 
   return (
     <>
@@ -247,11 +255,15 @@ function LinkDetailBody() {
         <h2 id="access-heading" className="detail-block__title">Your HTTPS access link</h2>
         {primaryClientId ? (
           <>
+            <label className="field-label" htmlFor="detail-client">VPN app</label>
+            <select className="field select" id="detail-client" value={clientFormat} onChange={(e) => setClientFormat(e.target.value as SubscriptionClient)}>
+              {SUBSCRIPTION_CLIENTS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
             <div className="access-row">
               <div className={`linkfield${access.state === "revealed" ? " linkfield--open" : ""}`}>
                 <code aria-label={access.state === "revealed" ? "Your HTTPS access link" : "Access link hidden"}>{shown}</code>
               </div>
-              <button type="button" className="btn btn-primary" onClick={() => void access.copy()} disabled={access.state === "loading"}>
+              <button type="button" className="btn btn-primary" onClick={() => void access.copy(clientFormat)} disabled={access.state === "loading"}>
                 <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                   <path d="M9 9h10v11H9zM5 15V4h10" />
                 </svg>
