@@ -1,12 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
-import { renderers, UnsupportedClientModeError } from "../subscription-renderers.js";
+import { renderers, UnsupportedClientModeError, encodeSubscriptionBase64 } from "../subscription-renderers.js";
 import { clientCapabilities, isSupportedClient, protocolsForMode, supportsMode } from "../client-capabilities.js";
 import { readFileSync } from "node:fs";
 
 const credential = { vless_uuid: "018f4f18-8b5d-7c21-9f2b-0f8a7c6d5e4f", hysteria2_password: "secret-that-is-not-a-subscription-token" };
 const route = { mode: "fast", displayName: "Germany — Fast", server: "edge.example.net", port: 443,
   tlsServerName: "cdn.example.net", realityPublicKey: "public-key", realityShortId: "a1b2c3d4",
-  realityFingerprint: "chrome", vlessFlow: "xtls-rprx-vision" };
+  realityFingerprint: "chrome", vlessFlow: "xtls-rprx-vision",
+  hysteria2: { serverName: "edge.example.net", obfs: { type: "salamander", password: "obfs-secret-value-123" } } };
 
 describe("subscription renderers", () => {
   it("is deterministic and contains only public route/protocol material", () => {
@@ -22,6 +23,58 @@ describe("subscription renderers", () => {
       if (format === "incy" || format === "xray") expect(first).not.toContain("hysteria2://");
       expect(first).toBe(readFileSync(new URL(`../../../fixtures/subscriptions/${format}-fast.golden`, import.meta.url), "utf8"));
     }
+  });
+
+  it("brackets IPv6 literal authorities in URIs but preserves native sing-box hosts", () => {
+    const ipv6 = { ...route, server: "2001:db8::1" };
+    for (const format of ["hiddify", "shadowrocket", "incy", "links"]) {
+      const text = renderers[format]({ route: ipv6, credential });
+      for (const link of text.trim().split("\n")) {
+        expect(link).toContain("@[2001:db8::1]:443?");
+        expect(new URL(link).hostname).toBe("[2001:db8::1]");
+      }
+    }
+    expect(JSON.parse(renderers.singbox({ route: ipv6, credential })).outbounds[0].server).toBe("2001:db8::1");
+  });
+
+  it("Base64 Shadowrocket output decodes to the unchanged plain-text feed", () => {
+    const plain = renderers.shadowrocket({ route, credential });
+    expect(atob(encodeSubscriptionBase64(plain))).toBe(plain);
+  });
+
+  describe("Hysteria2 link material (regression: decoy SNI + missing obfs made every Hysteria2 link unusable)", () => {
+    const withHy2 = route;
+    const withoutHy2 = { ...route, hysteria2: undefined };
+    const hy2Query = (text) => new URL(text.trim().split("\n").find((l) => l.startsWith("hysteria2://"))).searchParams;
+
+    it("verifies the Hysteria2 certificate name, never the REALITY decoy name", () => {
+      for (const format of ["hiddify", "shadowrocket", "links"]) {
+        const text = renderers[format]({ route: withHy2, credential });
+        expect(hy2Query(text).get("sni"), format).toBe("edge.example.net");
+        expect(text.split("\n").find((l) => l.startsWith("vless://"))).toContain("sni=cdn.example.net");
+      }
+    });
+
+    it("carries the node's Salamander obfuscation in the standard URI parameters", () => {
+      const q = hy2Query(renderers.hiddify({ route: withHy2, credential }));
+      expect(q.get("obfs")).toBe("salamander");
+      expect(q.get("obfs-password")).toBe("obfs-secret-value-123");
+    });
+
+    it("omits Hysteria2 instead of publishing a link that cannot connect", () => {
+      for (const format of ["hiddify", "shadowrocket", "links"]) {
+        const text = renderers[format]({ route: withoutHy2, credential });
+        expect(text, format).not.toContain("hysteria2://");
+        expect(text.trim().split("\n")).toHaveLength(1);
+        expect(text).toContain("vless://");
+      }
+    });
+
+    it("allows an unobfuscated Hysteria2 node to be described without invented parameters", () => {
+      const q = hy2Query(renderers.hiddify({ route: { ...route, hysteria2: { serverName: "edge.example.net" } }, credential }));
+      expect(q.has("obfs")).toBe(false);
+      expect(q.has("obfs-password")).toBe(false);
+    });
   });
 
   it("rejects Privacy+ for every unqualified external client without fallback", () => {

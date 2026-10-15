@@ -1,9 +1,10 @@
 import { createClient } from "@supabase/supabase-js";
 import { decryptSecret } from "../lib/crypto.js";
 import { legacySubscriptionTokenHash, rateLimitIpHash, subscriptionTokenHash } from "../lib/external-credentials.js";
-import { renderers, UnsupportedClientModeError } from "../lib/subscription-renderers.js";
+import { renderers, UnsupportedClientModeError, encodeSubscriptionBase64 } from "../lib/subscription-renderers.js";
 import { checkRateLimit, clientIpKey, rateLimitedResponse } from "../lib/rate-limit.js";
 import { selectCompatibilityPublication } from "../lib/compatibility-publication.js";
+import { hysteria2Material } from "../lib/external-hysteria2.js";
 
 const SECURITY_HEADERS = {
   "Cache-Control": "private, no-store, no-cache, max-age=0, must-revalidate",
@@ -21,6 +22,10 @@ export async function onRequestGet({ env, request, params }) {
   }
   const format = url.searchParams.get("format");
   if (!renderers[format]) return reply({ error: "Unsupported or missing format" }, 400);
+  const encoding = url.searchParams.get("encoding");
+  if (encoding !== null && !(format === "shadowrocket" && encoding === "base64")) {
+    return reply({ error: "Unsupported subscription encoding" }, 400);
+  }
   const token = typeof params.token === "string" ? params.token : "";
   if (!/^[A-Za-z0-9_-]{43}$/.test(token)) return reply({ error: "Subscription not found" }, 404);
   const db = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, { auth: { autoRefreshToken: false, persistSession: false } });
@@ -51,7 +56,7 @@ export async function onRequestGet({ env, request, params }) {
   }
   const nodeIds = [...new Set(targets.map((t) => t.node_id))];
   const { data: nodes, error: nodesError } = await db.from("nodes")
-    .select("node_id,hostname,ip_address,transport_port,tls_server_name,reality_public_key,reality_short_id,reality_fingerprint,vless_flow,lifecycle_state")
+    .select("node_id,hostname,ip_address,transport,transport_port,tls_server_name,reality_public_key,reality_short_id,reality_fingerprint,vless_flow,hysteria2_obfs_type,lifecycle_state")
     .in("node_id", nodeIds).in("lifecycle_state", ["READY", "CANARY"]);
   if (nodesError) return reply({ error: "Route temporarily unavailable" }, 503);
   const byId = new Map((nodes ?? []).map((n) => [n.node_id, n]));
@@ -97,13 +102,15 @@ export async function onRequestGet({ env, request, params }) {
     tlsServerName: n.tls_server_name, realityPublicKey: n.reality_public_key,
     realityShortId: n.reality_short_id, realityFingerprint: n.reality_fingerprint, vlessFlow: n.vless_flow });
   const publicRoute = { ...routeMaterial(exitTarget.node), displayName: route.display_name,
+    hysteria2: await hysteria2Material(db, env, exitTarget.node),
     mode: route.privacy_class,
     entry: entryTarget ? { ...routeMaterial(entryTarget.node), vlessUuid: entryMaterial.vless_uuid } : null };
   try {
     const rendered = renderers[format]({ route: publicRoute, credential: exitMaterial });
     await db.from("external_vpn_devices").update({ last_subscription_fetch_at: new Date().toISOString() })
       .eq("device_id", device.device_id).in("subscription_token_hash", [tokenHash, legacyTokenHash]);
-    return reply(rendered, 200, format === "singbox" || format === "xray" ? "application/json; charset=utf-8" : "text/plain; charset=utf-8");
+    const body = encoding === "base64" ? encodeSubscriptionBase64(rendered) : rendered;
+    return reply(body, 200, format === "singbox" || format === "xray" ? "application/json; charset=utf-8" : "text/plain; charset=utf-8");
   } catch (err) {
     if (err instanceof UnsupportedClientModeError) return reply({ error: err.message, code: "unsupported_client_mode" }, 422);
     return reply({ error: "Rendering failed" }, 500);

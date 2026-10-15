@@ -7,6 +7,7 @@ import ChoiceGroup from "@/components/account/ChoiceGroup";
 import { pickAutomaticRoute, type LocationChoice, type RouteOption, type Routing } from "@/components/account/links";
 import { api, ApiError, newIdempotencyKey } from "@/lib/api";
 import { firstClientName, isValidLinkName, subscriptionForFirstClient } from "@/lib/link-first-client";
+import { SUBSCRIPTION_CLIENTS, tryClientSubscription, type SubscriptionClient } from "@/lib/subscription-client-link";
 
 const NAME_HINT = "Use letters, numbers, spaces and . _ ' ( ) - (up to 40 characters).";
 
@@ -14,9 +15,11 @@ type Created = { id: string; url: string };
 
 function CreatedPanel({ created }: { created: Created }) {
   const [copied, setCopied] = useState(false);
+  const [client, setClient] = useState<SubscriptionClient>("hiddify");
+  const clientUrl = tryClientSubscription(created.url, client) ?? created.url;
   async function copy() {
     try {
-      await navigator.clipboard.writeText(created.url);
+      await navigator.clipboard.writeText(clientUrl);
       setCopied(true);
     } catch {
       setCopied(false);
@@ -25,9 +28,13 @@ function CreatedPanel({ created }: { created: Created }) {
   return (
     <section className="created" aria-labelledby="created-heading">
       <h2 id="created-heading">Your VPN link is ready</h2>
-      <p>Paste it into a compatible VPN client. Anyone with this link can connect, so keep it private.</p>
+      <p>Choose your VPN app, then import this HTTPS subscription link. Anyone with the link can connect, so keep it private.</p>
+      <label className="field-label" htmlFor="created-client">VPN app</label>
+      <select className="field select" id="created-client" value={client} onChange={(e) => { setClient(e.target.value as SubscriptionClient); setCopied(false); }}>
+        {SUBSCRIPTION_CLIENTS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+      </select>
       <div className="linkfield linkfield--open">
-        <code onClick={(e) => window.getSelection()?.selectAllChildren(e.currentTarget)}>{created.url}</code>
+        <code onClick={(e) => window.getSelection()?.selectAllChildren(e.currentTarget)}>{clientUrl}</code>
       </div>
       <p className="muted">You can copy this link again at any time from your VPN links.</p>
       <div className="form-actions">

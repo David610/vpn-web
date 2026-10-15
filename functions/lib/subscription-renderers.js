@@ -16,25 +16,41 @@ function safeName(route) {
   return route.displayName.replace(/[\r\n#]/g, " ").trim();
 }
 
+// URI authorities need brackets around IPv6 literals. Native sing-box JSON does not.
+function uriAuthorityHost(host) {
+  return host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+}
+
 function vlessLink(route, credential) {
   const q = new URLSearchParams({
     encryption: "none", security: "reality", sni: route.tlsServerName,
     fp: route.realityFingerprint || "chrome", pbk: route.realityPublicKey,
     sid: route.realityShortId, type: "tcp", flow: route.vlessFlow || "xtls-rprx-vision",
   });
-  return `vless://${encodeURIComponent(credential.vless_uuid)}@${route.server}:${route.port}?${q}#${encodeURIComponent(safeName(route))}`;
+  return `vless://${encodeURIComponent(credential.vless_uuid)}@${uriAuthorityHost(route.server)}:${route.port}?${q}#${encodeURIComponent(safeName(route))}`;
 }
 
+// Hysteria2 verifies the node's real certificate name and, on a node that
+// enables Salamander, needs its obfuscation password. `route.tlsServerName`
+// is the REALITY decoy and must never be used here.
 function hysteriaLink(route, credential) {
-  const q = new URLSearchParams({ sni: route.tlsServerName });
-  if (route.hysteria2ObfsType) q.set("obfs", route.hysteria2ObfsType);
-  if (route.hysteria2ObfsPassword) q.set("obfs-password", route.hysteria2ObfsPassword);
-  return `hysteria2://${encodeURIComponent(credential.hysteria2_password)}@${route.server}:${route.port}?${q}#${encodeURIComponent(safeName(route))}`;
+  const hy2 = route.hysteria2;
+  const q = new URLSearchParams({ sni: hy2.serverName });
+  if (hy2.obfs) {
+    q.set("obfs", hy2.obfs.type);
+    q.set("obfs-password", hy2.obfs.password);
+  }
+  return `hysteria2://${encodeURIComponent(credential.hysteria2_password)}@${uriAuthorityHost(route.server)}:${route.port}?${q}#${encodeURIComponent(safeName(route))}`;
 }
 
+// A Hysteria2 link is published only when the node's Hysteria2 material is
+// known; a link that cannot authenticate would fail the whole import in
+// strict clients, while a VLESS-only subscription still works.
 function linksFor(format, route, credential) {
-  return assertSupported(format, route.mode).map((protocol) =>
-    protocol === "vless" ? vlessLink(route, credential) : hysteriaLink(route, credential));
+  return assertSupported(format, route.mode).flatMap((protocol) => {
+    if (protocol === "vless") return [vlessLink(route, credential)];
+    return route.hysteria2 ? [hysteriaLink(route, credential)] : [];
+  });
 }
 
 export function renderLinks(input) { return linksFor("links", input.route, input.credential).join("\n") + "\n"; }
@@ -82,6 +98,11 @@ export function renderSingBox({ route, credential }) {
     return JSON.stringify({ log: { level: "warn" }, outbounds: [entryOutbound, outbound], route: { final: exitTag } }, null, 2) + "\n";
   }
   return JSON.stringify({ log: { level: "warn" }, outbounds: [outbound], route: { final: exitTag } }, null, 2) + "\n";
+}
+
+// Opt-in Base64 body; share-link renderers produce ASCII-only percent-encoded URIs.
+export function encodeSubscriptionBase64(body) {
+  return btoa(body);
 }
 
 export const renderers = Object.freeze({ hiddify: renderHiddify, shadowrocket: renderShadowrocket, incy: renderIncy, singbox: renderSingBox, xray: renderXray, links: renderLinks });

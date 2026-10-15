@@ -9,6 +9,7 @@ import { configurationDetail, configurationSummary, type VpnLink } from "@/compo
 import { LIVE, monthlyCents, statusLabel } from "@/components/account/types";
 import { ConfirmDialog } from "@/components/Dialog";
 import { api, euro, shortDate } from "@/lib/api";
+import { SUBSCRIPTION_CLIENTS, tryClientSubscription, type SubscriptionClient } from "@/lib/subscription-client-link";
 
 function PlanStrip() {
   const { overview } = useAccount();
@@ -65,6 +66,7 @@ function LinkRow({ link, onChanged }: { link: VpnLink; onChanged: () => Promise<
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [clientFormat, setClientFormat] = useState<SubscriptionClient>("hiddify");
 
   async function replace() {
     if (!link.primaryClientId) return;
@@ -100,7 +102,7 @@ function LinkRow({ link, onChanged }: { link: VpnLink; onChanged: () => Promise<
   }
 
   const detailHref = `/account/links/detail/?id=${encodeURIComponent(link.id)}`;
-  const shown = access.state === "revealed" && access.url ? access.url : maskedLink();
+  const shown = access.state === "revealed" && access.url ? (tryClientSubscription(access.url, clientFormat) ?? access.url) : maskedLink();
 
   return (
     <li className="link-row">
@@ -141,10 +143,20 @@ function LinkRow({ link, onChanged }: { link: VpnLink; onChanged: () => Promise<
         {error ? <p className="link-row__note link-row__note--error" role="alert">{error}</p> : null}
       </div>
       <div className="link-row__actions">
+        {link.primaryClientId ? (
+          <select
+            className="field select"
+            aria-label={`VPN app for ${link.name}`}
+            value={clientFormat}
+            onChange={(e) => setClientFormat(e.target.value as SubscriptionClient)}
+          >
+            {SUBSCRIPTION_CLIENTS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </select>
+        ) : null}
         <button
           type="button"
           className="btn btn-secondary"
-          onClick={() => void access.copy()}
+          onClick={() => void access.copy(clientFormat)}
           disabled={!link.primaryClientId || access.state === "loading"}
         >
           <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">

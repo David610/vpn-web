@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { api, ApiError } from "@/lib/api";
+import { tryClientSubscription, type SubscriptionClient } from "@/lib/subscription-client-link";
 
 export type AccessState = "hidden" | "loading" | "revealed" | "unavailable" | "none" | "error";
 
@@ -78,11 +79,17 @@ export function useAccessLink(session: Session, linkId: string, clientId: string
     setState(clientId ? "hidden" : "none");
   }, [clientId]);
 
-  const copy = useCallback(async () => {
+  const copy = useCallback(async (client: SubscriptionClient = "links") => {
     const value = url ?? (await fetchUrl());
     if (!value) return;
+    const converted = tryClientSubscription(value, client);
+    if (!converted) {
+      show(value);
+      setMessage("This link could not be prepared for the selected app. Choose another app or replace the link.");
+      return;
+    }
     try {
-      await navigator.clipboard.writeText(value);
+      await navigator.clipboard.writeText(converted);
       setCopied(true);
       clearTimeout(copiedTimer.current);
       copiedTimer.current = setTimeout(() => setCopied(false), COPIED_MS);
