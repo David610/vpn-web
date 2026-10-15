@@ -51,5 +51,8 @@ export async function mintCompatibilityCredentials(env, privacyClass) {
 
 export function subscriptionUrl(request, token, format) {
   const origin = new URL(request.url).origin;
-  return `${origin}/sub/${encodeURIComponent(token)}?format=${encodeURIComponent(format)}`;
+  // Newly issued Shadowrocket URLs use opt-in Base64; existing plain URLs still work.
+  const params = new URLSearchParams({ format });
+  if (format === "shadowrocket") params.set("encoding", "base64");
+  return `${origin}/sub/${encodeURIComponent(token)}?${params}`;
 }
