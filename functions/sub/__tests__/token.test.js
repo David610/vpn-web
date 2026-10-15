@@ -67,6 +67,22 @@ describe("GET /sub/:token (external-client subscription)", () => {
     expect(hy2.searchParams.get("obfs-password")).toBe(OBFS);
   });
 
+  it("delivers a REALITY public key containing '-' and '_' byte-for-byte in every share-link format", async () => {
+    // A leading '-' is real: the production exit's own key starts with one. Any layer that strips or
+    // re-encodes base64url characters would hand clients a key that fails the REALITY handshake.
+    const pbk = "-_Ab0-9_zZ-aB_cD-eF_gH-iJ_kL-mN_oP-qR_sT-uV";
+    expect(pbk).toHaveLength(43);
+    await seed({ node: { reality_public_key: pbk } });
+    for (const format of ["hiddify", "shadowrocket", "incy", "links"]) {
+      const first = new URL(lines(await (await get(`format=${format}`)).text())[0]);
+      expect(first.searchParams.get("pbk"), format).toBe(pbk);
+    }
+    const encoded = atob(await (await get("format=shadowrocket&encoding=base64")).text());
+    expect(new URL(lines(encoded)[0]).searchParams.get("pbk")).toBe(pbk);
+    const json = JSON.parse(await (await get("format=singbox")).text());
+    expect(json.outbounds[0].tls.reality.public_key).toBe(pbk);
+  });
+
   it("publishes VLESS only while the node's obfuscation password is unknown", async () => {
     await seed({ obfs: false });
     const body = await (await get("format=hiddify")).text();
