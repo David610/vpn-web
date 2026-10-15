@@ -16,20 +16,25 @@ function safeName(route) {
   return route.displayName.replace(/[\r\n#]/g, " ").trim();
 }
 
+// URI authorities need brackets around IPv6 literals. Native sing-box JSON does not.
+function uriAuthorityHost(host) {
+  return host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+}
+
 function vlessLink(route, credential) {
   const q = new URLSearchParams({
     encryption: "none", security: "reality", sni: route.tlsServerName,
     fp: route.realityFingerprint || "chrome", pbk: route.realityPublicKey,
     sid: route.realityShortId, type: "tcp", flow: route.vlessFlow || "xtls-rprx-vision",
   });
-  return `vless://${encodeURIComponent(credential.vless_uuid)}@${route.server}:${route.port}?${q}#${encodeURIComponent(safeName(route))}`;
+  return `vless://${encodeURIComponent(credential.vless_uuid)}@${uriAuthorityHost(route.server)}:${route.port}?${q}#${encodeURIComponent(safeName(route))}`;
 }
 
 function hysteriaLink(route, credential) {
   const q = new URLSearchParams({ sni: route.tlsServerName });
   if (route.hysteria2ObfsType) q.set("obfs", route.hysteria2ObfsType);
   if (route.hysteria2ObfsPassword) q.set("obfs-password", route.hysteria2ObfsPassword);
-  return `hysteria2://${encodeURIComponent(credential.hysteria2_password)}@${route.server}:${route.port}?${q}#${encodeURIComponent(safeName(route))}`;
+  return `hysteria2://${encodeURIComponent(credential.hysteria2_password)}@${uriAuthorityHost(route.server)}:${route.port}?${q}#${encodeURIComponent(safeName(route))}`;
 }
 
 function linksFor(format, route, credential) {
@@ -82,6 +87,11 @@ export function renderSingBox({ route, credential }) {
     return JSON.stringify({ log: { level: "warn" }, outbounds: [entryOutbound, outbound], route: { final: exitTag } }, null, 2) + "\n";
   }
   return JSON.stringify({ log: { level: "warn" }, outbounds: [outbound], route: { final: exitTag } }, null, 2) + "\n";
+}
+
+// Opt-in Base64 body; share-link renderers produce ASCII-only percent-encoded URIs.
+export function encodeSubscriptionBase64(body) {
+  return btoa(body);
 }
 
 export const renderers = Object.freeze({ hiddify: renderHiddify, shadowrocket: renderShadowrocket, incy: renderIncy, singbox: renderSingBox, xray: renderXray, links: renderLinks });
