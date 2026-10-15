@@ -1,7 +1,7 @@
 import { createClient } from "@supabase/supabase-js";
 import { decryptSecret } from "../lib/crypto.js";
 import { legacySubscriptionTokenHash, rateLimitIpHash, subscriptionTokenHash } from "../lib/external-credentials.js";
-import { renderers, UnsupportedClientModeError } from "../lib/subscription-renderers.js";
+import { renderers, UnsupportedClientModeError, encodeSubscriptionBase64 } from "../lib/subscription-renderers.js";
 import { checkRateLimit, clientIpKey, rateLimitedResponse } from "../lib/rate-limit.js";
 import { selectCompatibilityPublication } from "../lib/compatibility-publication.js";
 
@@ -21,6 +21,10 @@ export async function onRequestGet({ env, request, params }) {
   }
   const format = url.searchParams.get("format");
   if (!renderers[format]) return reply({ error: "Unsupported or missing format" }, 400);
+  const encoding = url.searchParams.get("encoding");
+  if (encoding !== null && !(format === "shadowrocket" && encoding === "base64")) {
+    return reply({ error: "Unsupported subscription encoding" }, 400);
+  }
   const token = typeof params.token === "string" ? params.token : "";
   if (!/^[A-Za-z0-9_-]{43}$/.test(token)) return reply({ error: "Subscription not found" }, 404);
   const db = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, { auth: { autoRefreshToken: false, persistSession: false } });
@@ -103,7 +107,8 @@ export async function onRequestGet({ env, request, params }) {
     const rendered = renderers[format]({ route: publicRoute, credential: exitMaterial });
     await db.from("external_vpn_devices").update({ last_subscription_fetch_at: new Date().toISOString() })
       .eq("device_id", device.device_id).in("subscription_token_hash", [tokenHash, legacyTokenHash]);
-    return reply(rendered, 200, format === "singbox" || format === "xray" ? "application/json; charset=utf-8" : "text/plain; charset=utf-8");
+    const body = encoding === "base64" ? encodeSubscriptionBase64(rendered) : rendered;
+    return reply(body, 200, format === "singbox" || format === "xray" ? "application/json; charset=utf-8" : "text/plain; charset=utf-8");
   } catch (err) {
     if (err instanceof UnsupportedClientModeError) return reply({ error: err.message, code: "unsupported_client_mode" }, 422);
     return reply({ error: "Rendering failed" }, 500);
