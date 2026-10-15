@@ -30,16 +30,27 @@ function vlessLink(route, credential) {
   return `vless://${encodeURIComponent(credential.vless_uuid)}@${uriAuthorityHost(route.server)}:${route.port}?${q}#${encodeURIComponent(safeName(route))}`;
 }
 
+// Hysteria2 verifies the node's real certificate name and, on a node that
+// enables Salamander, needs its obfuscation password. `route.tlsServerName`
+// is the REALITY decoy and must never be used here.
 function hysteriaLink(route, credential) {
-  const q = new URLSearchParams({ sni: route.tlsServerName });
-  if (route.hysteria2ObfsType) q.set("obfs", route.hysteria2ObfsType);
-  if (route.hysteria2ObfsPassword) q.set("obfs-password", route.hysteria2ObfsPassword);
+  const hy2 = route.hysteria2;
+  const q = new URLSearchParams({ sni: hy2.serverName });
+  if (hy2.obfs) {
+    q.set("obfs", hy2.obfs.type);
+    q.set("obfs-password", hy2.obfs.password);
+  }
   return `hysteria2://${encodeURIComponent(credential.hysteria2_password)}@${uriAuthorityHost(route.server)}:${route.port}?${q}#${encodeURIComponent(safeName(route))}`;
 }
 
+// A Hysteria2 link is published only when the node's Hysteria2 material is
+// known; a link that cannot authenticate would fail the whole import in
+// strict clients, while a VLESS-only subscription still works.
 function linksFor(format, route, credential) {
-  return assertSupported(format, route.mode).map((protocol) =>
-    protocol === "vless" ? vlessLink(route, credential) : hysteriaLink(route, credential));
+  return assertSupported(format, route.mode).flatMap((protocol) => {
+    if (protocol === "vless") return [vlessLink(route, credential)];
+    return route.hysteria2 ? [hysteriaLink(route, credential)] : [];
+  });
 }
 
 export function renderLinks(input) { return linksFor("links", input.route, input.credential).join("\n") + "\n"; }

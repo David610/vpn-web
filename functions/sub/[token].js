@@ -4,6 +4,7 @@ import { legacySubscriptionTokenHash, rateLimitIpHash, subscriptionTokenHash } f
 import { renderers, UnsupportedClientModeError, encodeSubscriptionBase64 } from "../lib/subscription-renderers.js";
 import { checkRateLimit, clientIpKey, rateLimitedResponse } from "../lib/rate-limit.js";
 import { selectCompatibilityPublication } from "../lib/compatibility-publication.js";
+import { hysteria2Material } from "../lib/external-hysteria2.js";
 
 const SECURITY_HEADERS = {
   "Cache-Control": "private, no-store, no-cache, max-age=0, must-revalidate",
@@ -55,7 +56,7 @@ export async function onRequestGet({ env, request, params }) {
   }
   const nodeIds = [...new Set(targets.map((t) => t.node_id))];
   const { data: nodes, error: nodesError } = await db.from("nodes")
-    .select("node_id,hostname,ip_address,transport_port,tls_server_name,reality_public_key,reality_short_id,reality_fingerprint,vless_flow,lifecycle_state")
+    .select("node_id,hostname,ip_address,transport,transport_port,tls_server_name,reality_public_key,reality_short_id,reality_fingerprint,vless_flow,hysteria2_obfs_type,lifecycle_state")
     .in("node_id", nodeIds).in("lifecycle_state", ["READY", "CANARY"]);
   if (nodesError) return reply({ error: "Route temporarily unavailable" }, 503);
   const byId = new Map((nodes ?? []).map((n) => [n.node_id, n]));
@@ -101,6 +102,7 @@ export async function onRequestGet({ env, request, params }) {
     tlsServerName: n.tls_server_name, realityPublicKey: n.reality_public_key,
     realityShortId: n.reality_short_id, realityFingerprint: n.reality_fingerprint, vlessFlow: n.vless_flow });
   const publicRoute = { ...routeMaterial(exitTarget.node), displayName: route.display_name,
+    hysteria2: await hysteria2Material(db, env, exitTarget.node),
     mode: route.privacy_class,
     entry: entryTarget ? { ...routeMaterial(entryTarget.node), vlessUuid: entryMaterial.vless_uuid } : null };
   try {
