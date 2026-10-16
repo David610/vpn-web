@@ -23,9 +23,23 @@ function bytesToPgHex(bytes) {
   return `\\x${hex}`;
 }
 
-async function importAesKey(keyHex) {
-  const keyBytes = hexToBytes(keyHex);
-  return crypto.subtle.importKey("raw", keyBytes, "AES-GCM", false, ["encrypt", "decrypt"]);
+// A non-extractable CryptoKey is safe to keep for the life of the isolate;
+// re-importing it per secret was a measurable share of the Workers CPU budget.
+const MAX_CACHED_KEYS = 4;
+const importedKeys = new Map();
+
+function importAesKey(keyHex) {
+  const cached = importedKeys.get(keyHex);
+  if (cached) return cached;
+  const pending = crypto.subtle
+    .importKey("raw", hexToBytes(keyHex), "AES-GCM", false, ["encrypt", "decrypt"])
+    .catch((error) => {
+      importedKeys.delete(keyHex);
+      throw error;
+    });
+  if (importedKeys.size >= MAX_CACHED_KEYS) importedKeys.delete(importedKeys.keys().next().value);
+  importedKeys.set(keyHex, pending);
+  return pending;
 }
 
 /**
