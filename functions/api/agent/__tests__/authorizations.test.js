@@ -28,6 +28,9 @@ beforeEach(() => {
     : query({ data: [{ device_id: "device-1", principal_id: projected.principal_id, revoked_at: null }], error: null }));
   rpc.mockImplementation(async (name) => {
     if (name === "device_entitlement") return { data: [{ entitled: true }], error: null };
+    if (name === "device_entitlements_batch") {
+      return { data: null, error: { code: "PGRST202", message: "Could not find the function public.device_entitlements_batch" } };
+    }
     if (name === "get_compatibility_authorization_snapshot") {
       return { data: [{ snapshot_revision: 5, authorizations: [projected] }], error: null };
     }
