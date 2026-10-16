@@ -1,0 +1,7 @@
+{$API_DOMAIN} {
+	encode zstd gzip
+	header -Server
+	reverse_proxy api:8787 {
+		header_up X-Forwarded-For {remote_host}
+	}
+}

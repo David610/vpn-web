@@ -1,0 +1,33 @@
+# Arcana API on your own server. Run from the repository root:
+#   docker compose -f deploy/api/docker-compose.yml --env-file /etc/arcana/api.env up -d --build
+# api.env holds the secrets (see docs/runbooks/CLOUDFLARE_BLOCK_RECOVERY.md); never commit it.
+services:
+  api:
+    build:
+      context: ../..
+      dockerfile: Dockerfile.api
+    restart: unless-stopped
+    env_file: ${API_ENV_FILE:-/etc/arcana/api.env}
+    environment:
+      TRUSTED_PROXY_HOPS: "1"
+    expose:
+      - "8787"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on: [api]
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      API_DOMAIN: ${API_DOMAIN:?set API_DOMAIN to the API hostname, e.g. api.example.com}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+
+volumes:
+  caddy_data:
