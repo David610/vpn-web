@@ -1,6 +1,9 @@
-# Arcana API on your own server. Run from the repository root:
+# Agent control-plane API on your own server (NOT Cloudflare Pages Functions).
+# Run from the repository root:
 #   docker compose -f deploy/api/docker-compose.yml --env-file /etc/arcana/api.env up -d --build
-# api.env holds the secrets (see docs/runbooks/CLOUDFLARE_BLOCK_RECOVERY.md); never commit it.
+# /etc/arcana/api.env holds the secrets (root:root 0600); never commit it. See
+# docs/cloudflare/CLOUDFLARE_RELIABILITY.md for the full deployment procedure,
+# firewall rules (443 only from Cloudflare ranges) and rollback.
 services:
   api:
     build:
@@ -9,12 +12,23 @@ services:
     restart: unless-stopped
     env_file: ${API_ENV_FILE:-/etc/arcana/api.env}
     environment:
+      # Expose ONLY the agent routes on this hostname; the website keeps its own.
+      API_ROUTE_PREFIXES: "/api/agent"
       TRUSTED_PROXY_HOPS: "1"
+      MAX_IN_FLIGHT: "256"
+      NODE_AUTH_TTL_MS: "5000"
     expose:
       - "8787"
     read_only: true
+    tmpfs:
+      - /tmp
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
+    mem_limit: 512m
+    pids_limit: 256
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "5" }
 
   caddy:
     image: caddy:2
@@ -28,6 +42,9 @@ services:
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "5" }
 
 volumes:
   caddy_data:
