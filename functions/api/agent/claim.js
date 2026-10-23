@@ -1,5 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import { authenticateNode } from "../../lib/node-auth.js";
+import { shouldTouchNode } from "../../lib/node-touch.js";
 
 export async function onRequestPost({ env, request }) {
   const supabaseAdmin = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
@@ -14,18 +15,20 @@ export async function onRequestPost({ env, request }) {
     });
   }
 
-  supabaseAdmin
-    .from("nodes")
-    .update({ last_seen_at: new Date().toISOString() })
-    .eq("node_id", nodeId)
-    .then(
-      ({ error }) => {
-        if (error) console.error("claim: last_seen_at update failed:", error.message);
-      },
-      (err) => {
-        console.error("claim: last_seen_at update failed:", err.message);
-      }
-    );
+  if (shouldTouchNode(nodeId)) {
+    supabaseAdmin
+      .from("nodes")
+      .update({ last_seen_at: new Date().toISOString() })
+      .eq("node_id", nodeId)
+      .then(
+        ({ error }) => {
+          if (error) console.error("claim: last_seen_at update failed:", error.message);
+        },
+        (err) => {
+          console.error("claim: last_seen_at update failed:", err.message);
+        }
+      );
+  }
 
   try {
     const { data, error } = await supabaseAdmin.rpc("claim_next_job", { p_node_id: nodeId });
