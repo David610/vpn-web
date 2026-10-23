@@ -43,6 +43,27 @@ async function entitlementsFor(db, deviceIds) {
   return entitled;
 }
 
+let snapshotSyncUnsupportedUntil = 0;
+
+export function resetSnapshotSyncSupport() {
+  snapshotSyncUnsupportedUntil = 0;
+}
+
+// Prefer the variant that advances snapshot_revision when effective entitlement changed
+// (I-100). A database without migration 20261019000000 falls back to the plain read; any
+// other error is a real fault and must not be papered over.
+async function readSnapshot(db, nodeId) {
+  if (Date.now() >= snapshotSyncUnsupportedUntil) {
+    const { data, error } = await db.rpc("get_compatibility_authorization_snapshot_synced", { p_node_id: nodeId });
+    if (!error) return Array.isArray(data) ? data[0] : data;
+    if (!isMissingFunction(error)) throw new Error("snapshot lookup failed");
+    snapshotSyncUnsupportedUntil = Date.now() + BATCH_RETRY_MS;
+  }
+  const { data, error } = await db.rpc("get_compatibility_authorization_snapshot", { p_node_id: nodeId });
+  if (error) throw new Error("snapshot lookup failed");
+  return Array.isArray(data) ? data[0] : data;
+}
+
 async function sha256Hex(text) {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
   return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
@@ -116,9 +137,7 @@ export async function onRequestGet({ env, request }) {
   if (schema !== null && schema !== "2") return response({ error: "Unsupported authorization schema" }, 400);
   try {
     if (schema === "2") {
-      const { data, error } = await db.rpc("get_compatibility_authorization_snapshot", { p_node_id: nodeId });
-      if (error) throw new Error("snapshot lookup failed");
-      const snapshot = Array.isArray(data) ? data[0] : data;
+      const snapshot = await readSnapshot(db, nodeId);
       const revision = Number(snapshot?.snapshot_revision ?? 0);
       const projected = await projectAuthorizations(snapshot?.authorizations ?? [], db, { legacy: false });
       return await respondConditionally(request, env, {
