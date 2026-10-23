@@ -67,6 +67,8 @@ describe("app", () => {
     writeFileSync(path.join(dir, "api", "things", "[id]", "index.js"),
       "export const onRequestGet=({params})=>Response.json({id:params.id});\n");
     writeFileSync(path.join(dir, "api", "unavailable.js"), "export async function onRequestGet(){const e=new Error('db');e.name='NodeAuthUnavailableError';e.status=503;throw e}\n");
+    mkdirSync(path.join(dir, "api", "leak", "[token]"), { recursive: true });
+    writeFileSync(path.join(dir, "api", "leak", "[token]", "index.js"), "export async function onRequestGet(){throw new Error('x')}\n");
     writeFileSync(path.join(dir, "api", "boom.js"), "export async function onRequestGet(){throw new Error('secret detail')}\n");
     writeFileSync(path.join(dir, "lib", "helper.js"), "export const helper=1;\n");
     app = createApp({
@@ -138,6 +140,15 @@ describe("app", () => {
     expect(res.status).toBe(503);
     expect(res.headers.get("retry-after")).toBe("5");
     expect(await res.text()).not.toContain("db");
+  });
+
+  it("never writes a path parameter (e.g. a subscription bearer token) to the error log", async () => {
+    const before = seen.length;
+    const res = await call({ path: "/api/leak/SECRET-BEARER-TOKEN-123" });
+    expect(res.status).toBe(500);
+    const written = JSON.stringify(seen.slice(before));
+    expect(written).not.toContain("SECRET-BEARER-TOKEN-123");
+    expect(written).toContain("/api/leak/:token");
   });
 
   it("reports health without touching a handler", async () => {

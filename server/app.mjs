@@ -153,7 +153,7 @@ export function createApp({
       const finished = method === "HEAD" ? new Response(null, { status: response.status, headers: response.headers }) : response;
       return finish(browserApi ? withCors(finished, origin, allowedOrigins) : finished);
     } catch (error) {
-      log({ level: "error", route: pathname, error: error?.name ?? "Error" });
+      log({ level: "error", route: template, error: error?.name ?? "Error" });
       if (error?.status === 503) return finish(json(503, { error: "Temporarily unavailable" }, { "Retry-After": "5" }));
       return finish(json(500, { error: "Internal error" }));
     }
