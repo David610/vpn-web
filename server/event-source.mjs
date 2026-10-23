@@ -3,7 +3,13 @@ import { createEventHub } from "../functions/lib/agent-events.js";
 
 async function call(db, name, args) {
   const { data, error } = await db.rpc(name, args);
-  if (error) throw new Error(`${name} failed`);
+  if (error) {
+    // The application may be deployed before migration 20261018000000. That is "no event
+    // channel here", not an outage: answering 503 made agents trip their shared backoff
+    // gate and slow job polling and reconciliation.
+    const missing = error.code === "PGRST202" || error.code === "42883" || /could not find the function/i.test(error.message ?? "");
+    throw Object.assign(new Error(`${name} failed`), missing ? { code: "EVENT_CHANNEL_UNSUPPORTED" } : {});
+  }
   return data ?? [];
 }
 

@@ -45,7 +45,10 @@ export async function onRequestGet({ env, request }) {
       return respond({ error: "Another connection from this node replaced this one" }, 409, { "Retry-After": "5" });
     }
     return respond({ reason: result.reason, changed: result.changed, cursor: result.cursor });
-  } catch {
+  } catch (error) {
+    if (error?.code === "EVENT_CHANNEL_UNSUPPORTED") {
+      return respond({ error: "Event channel unavailable on this deployment", fallback: "poll" }, 501, { "Retry-After": "600" });
+    }
     return respond({ error: "Event channel temporarily unavailable" }, 503, { "Retry-After": "5" });
   }
 }

@@ -67,8 +67,8 @@ describe("node auth cache", () => {
     configureNodeAuthCache({ ttlMs: 5_000, now: () => 0 });
     const maybeSingle = vi.fn(async () => ({ data: null, error: { message: "db down" } }));
     const client = { from: () => ({ select: () => ({ eq: () => ({ maybeSingle }) }) }) };
-    await authenticateNode(req("k"), client);
-    await authenticateNode(req("k"), client);
+    await expect(authenticateNode(req("k"), client)).rejects.toThrow();
+    await expect(authenticateNode(req("k"), client)).rejects.toThrow();
     expect(maybeSingle).toHaveBeenCalledTimes(2);
   });
 

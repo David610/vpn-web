@@ -50,8 +50,8 @@ describe("authenticateNode", () => {
     expect(await authenticateNode(request("secret"), supabase)).toBeNull();
   });
 
-  it("returns null when the lookup errors", async () => {
+  it("throws a retryable 503-class error (never a 401 verdict) when the lookup errors", async () => {
     const supabase = makeSupabase(null, { lookupError: { message: "boom" } });
-    expect(await authenticateNode(request("secret"), supabase)).toBeNull();
+    await expect(authenticateNode(request("secret"), supabase)).rejects.toMatchObject({ name: "NodeAuthUnavailableError", status: 503 });
   });
 });

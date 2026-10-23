@@ -22,6 +22,13 @@ describe("supabase-backed event hub", () => {
     await expect(hub.wait("n1", undefined, { timeoutMs: 5 })).rejects.toThrow(/agent_wake_tokens failed/);
   });
 
+  it("marks a missing wake-token function as an unsupported channel, not a generic failure", async () => {
+    for (const error of [{ code: "PGRST202", message: "x" }, { code: "42883", message: "x" }, { message: "Could not find the function public.agent_wake_tokens" }]) {
+      const hub = createSupabaseEventHub({ db: { rpc: vi.fn(async () => ({ data: null, error })) } });
+      await expect(hub.wait("n1", undefined, { timeoutMs: 5 })).rejects.toMatchObject({ code: "EVENT_CHANNEL_UNSUPPORTED" });
+    }
+  });
+
   it("reports an unknown node as an error rather than as an empty state", async () => {
     const rpc = vi.fn(async () => ({ data: [], error: null }));
     const hub = createSupabaseEventHub({ db: { rpc } });

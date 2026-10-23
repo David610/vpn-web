@@ -139,4 +139,25 @@ describe("agent event hub", () => {
     const h = hub();
     expect((await h.wait("n1", "not-a-cursor", { timeoutMs: 25_000 })).reason).toBe("resync");
   });
+
+  it("a pre-change cursor is not answered from a stale cache when no waiter was active (revocation latency)", async () => {
+    const h = hub();
+    const { cursor } = await h.wait("n1", undefined, { timeoutMs: 25_000 });
+    await settle(7000); // idle: no waiter, so the watcher never refreshes
+    tokens.n1.auth = 2; tokens.n1.ent = "e2"; // revoked / lapsed in the database
+    await settle(7000);
+    const r = await h.wait("n1", cursor, { timeoutMs: 25_000 });
+    expect(r.reason).toBe("change");
+    expect(r.changed).toEqual(["authorizations"]);
+  });
+
+  it("does not re-read the database on every call: a fresh cache is reused", async () => {
+    const h = hub();
+    const { cursor } = await h.wait("n1", undefined, { timeoutMs: 25_000 });
+    const before = fetchWake.mock.calls.length;
+    const p = h.wait("n1", cursor, { timeoutMs: 100 });
+    await settle(200);
+    await p;
+    expect(fetchWake.mock.calls.length - before).toBeLessThanOrEqual(1);
+  });
 });

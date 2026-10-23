@@ -65,6 +65,14 @@ describe("GET /api/agent/events", () => {
     expect(JSON.stringify(await res.json())).not.toContain("db down");
   });
 
+  it("answers 501 + poll fallback (not 503) when the database lacks the wake-token functions", async () => {
+    wait.mockRejectedValueOnce(Object.assign(new Error("x"), { code: "EVENT_CHANNEL_UNSUPPORTED" }));
+    const res = await get("?cursor=c1");
+    expect(res.status).toBe(501);
+    expect(Number(res.headers.get("Retry-After"))).toBeGreaterThanOrEqual(60);
+    expect(await res.json()).toMatchObject({ fallback: "poll" });
+  });
+
   it("hands the request abort signal to the hub so a closed connection frees the slot", async () => {
     await get();
     expect(wait.mock.calls[0][2].signal).toBeInstanceOf(AbortSignal);
