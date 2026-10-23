@@ -66,6 +66,7 @@ describe("app", () => {
       "export async function onRequestPost({request}){return Response.json({body:await request.text()},{status:201})}\n");
     writeFileSync(path.join(dir, "api", "things", "[id]", "index.js"),
       "export const onRequestGet=({params})=>Response.json({id:params.id});\n");
+    writeFileSync(path.join(dir, "api", "unavailable.js"), "export async function onRequestGet(){const e=new Error('db');e.name='NodeAuthUnavailableError';e.status=503;throw e}\n");
     writeFileSync(path.join(dir, "api", "boom.js"), "export async function onRequestGet(){throw new Error('secret detail')}\n");
     writeFileSync(path.join(dir, "lib", "helper.js"), "export const helper=1;\n");
     app = createApp({
@@ -130,6 +131,13 @@ describe("app", () => {
     const text = await res.text();
     expect(text).not.toContain("secret detail");
     expect(seen.find((e) => e.level === "error")).toEqual({ level: "error", route: "/api/boom", error: "Error" });
+  });
+
+  it("maps an infrastructure fault that carries status 503 to a retryable 503 with Retry-After, never a 401/500", async () => {
+    const res = await call({ path: "/api/unavailable" });
+    expect(res.status).toBe(503);
+    expect(res.headers.get("retry-after")).toBe("5");
+    expect(await res.text()).not.toContain("db");
   });
 
   it("reports health without touching a handler", async () => {

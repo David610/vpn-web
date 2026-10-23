@@ -7,6 +7,10 @@ import { sha256Hex } from "./crypto.js";
 // invalidateNodeAuth. Lookup errors are never cached.
 let cache = null;
 
+export class NodeAuthUnavailableError extends Error {
+  constructor() { super("node authentication temporarily unavailable"); this.name = "NodeAuthUnavailableError"; this.status = 503; }
+}
+
 export function configureNodeAuthCache(options) {
   if (!options) { cache = null; return; }
   cache = {
@@ -56,8 +60,12 @@ export async function authenticateNode(request, supabaseAdmin) {
     .eq("api_key_hash", keyHash)
     .maybeSingle();
   if (error) {
+    // An infrastructure fault is not a verdict on the credential. Answering 401
+    // makes the agent drop job reports as terminal (401 => ReportDisposition::
+    // Terminal) and treat a database blip as revoked credentials. Fail closed
+    // (no node id is returned) but let the caller answer a retryable 5xx.
     console.error("authenticateNode: lookup failed:", error.message);
-    return null;
+    throw new NodeAuthUnavailableError();
   }
   if (!data || data.revoked_at) { remember(keyHash, null); return null; }
   // F-05: QUARANTINED/RETIRED must reject even in the (should-be-impossible,

@@ -45,6 +45,7 @@ export function createEventHub({
 }) {
   const waiters = new Map(); // nodeId -> { cursorText, cursor, resolve, timer, cleanup }
   const current = new Map(); // nodeId -> tokens
+  const fetchedAt = new Map(); // nodeId -> when `current` was last read from the database
   let timer = null;
   let failures = 0;
   let lastEntitlementAt = -Infinity;
@@ -57,6 +58,7 @@ export function createEventHub({
       if (!w) continue;
       const previous = current.get(id);
       current.set(id, { ...w, ent: ent ? (ent.get(id) ?? "") : (previous?.ent ?? "") });
+      fetchedAt.set(id, now());
     }
     if (withEntitlement) lastEntitlementAt = now();
   }
@@ -106,7 +108,14 @@ export function createEventHub({
     if (stale) settle(nodeId, { reason: "superseded", changed: [], cursor: stale.cursorText ?? "" });
     if (signal?.aborted) return { reason: "aborted", changed: [], cursor: cursorText ?? "" };
 
-    if (!current.has(nodeId) || !known) await refresh([nodeId], { withEntitlement: true });
+    // The watcher only refreshes nodes that have a waiter, so `current` goes stale
+    // while an agent is between polls. Comparing a pre-change cursor against a stale
+    // cache would answer "nothing changed" for a revocation that is already in the
+    // database and delay it by a whole long poll, so re-read when older than one tick.
+    const stalled = now() - (fetchedAt.get(nodeId) ?? -Infinity) >= intervalMs;
+    if (!current.has(nodeId) || !known || stalled) {
+      await refresh([nodeId], { withEntitlement: !current.has(nodeId) || !known || now() - lastEntitlementAt >= entitlementIntervalMs });
+    }
     const tokens = current.get(nodeId);
     if (!tokens) throw new Error("node not found");
     if (!known) return { reason: "resync", changed: [...ALL_CHANNELS], cursor: encodeCursor(tokens) };
