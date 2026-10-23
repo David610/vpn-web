@@ -25,6 +25,8 @@ function row(n) {
 let rows;
 let entitled;
 let batchAvailable;
+let syncedAvailable;
+let syncedRevision;
 
 function install() {
   from.mockImplementation((table) => {
@@ -34,6 +36,11 @@ function install() {
     return { select: vi.fn().mockReturnThis(), eq: vi.fn().mockResolvedValue(result), in: vi.fn().mockResolvedValue(result) };
   });
   rpc.mockImplementation(async (name, args) => {
+    if (name === "get_compatibility_authorization_snapshot_synced") {
+      if (syncedAvailable === "error") return { data: null, error: { code: "XX000", message: "boom" } };
+      if (!syncedAvailable) return { data: null, error: { code: "PGRST202", message: "Could not find the function public.get_compatibility_authorization_snapshot_synced" } };
+      return { data: [{ snapshot_revision: syncedRevision, authorizations: rows }], error: null };
+    }
     if (name === "get_compatibility_authorization_snapshot") return { data: [{ snapshot_revision: 9, authorizations: rows }], error: null };
     if (name === "device_entitlements_batch") {
       if (!batchAvailable) return { data: null, error: { code: "PGRST202", message: "Could not find the function public.device_entitlements_batch" } };
@@ -55,7 +62,10 @@ beforeEach(() => {
   rows = Array.from({ length: 12 }, (_, i) => row(i));
   entitled = true;
   batchAvailable = true;
+  syncedAvailable = false;
+  syncedRevision = 10;
   mod.resetEntitlementBatchSupport?.();
+  mod.resetSnapshotSyncSupport?.();
   install();
 });
 
@@ -132,5 +142,40 @@ describe("authorization snapshot efficiency", () => {
   it("ignores a malformed If-None-Match header", async () => {
     const res = await get({ "If-None-Match": "garbage, W/\"x\"" });
     expect(res.status).toBe(200);
+  });
+});
+
+describe("entitlement-aware snapshot revision (I-100)", () => {
+  it("uses the synced snapshot function when present and serves its revision", async () => {
+    syncedAvailable = true; syncedRevision = 42;
+    const res = await get();
+    expect(res.status).toBe(200);
+    expect((await res.json()).snapshot_revision).toBe(42);
+    expect(count("get_compatibility_authorization_snapshot_synced")).toBe(1);
+    expect(count("get_compatibility_authorization_snapshot")).toBe(0);
+  });
+
+  it("falls back to the plain snapshot read on a database without the migration, and does not retry every request", async () => {
+    const first = await get();
+    expect((await first.json()).snapshot_revision).toBe(9);
+    await get();
+    expect(count("get_compatibility_authorization_snapshot_synced")).toBe(1);
+    expect(count("get_compatibility_authorization_snapshot")).toBe(2);
+  });
+
+  it("a real database error is a 500, never a silent downgrade to the plain read", async () => {
+    syncedAvailable = "error";
+    const res = await get();
+    expect(res.status).toBe(500);
+    expect(count("get_compatibility_authorization_snapshot")).toBe(0);
+  });
+
+  it("a revision bump changes the ETag so a cached 304 cannot hide a renewal", async () => {
+    syncedAvailable = true; syncedRevision = 5;
+    const etag = (await get()).headers.get("etag");
+    syncedRevision = 6;
+    const res = await get({ "If-None-Match": etag });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("etag")).not.toBe(etag);
   });
 });
